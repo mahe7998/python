@@ -1,0 +1,31 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "cppbuild",
+			"label": "C/C++: clang++ build active file",
+			"command": "/usr/bin/clang++",
+			"args": [
+				"-fcolor-diagnostics",
+				"-fansi-escape-codes",
+			    "-std=c++11",
+				"-g",
+				"-v", 
+				"`python3.10 -m pybind11 --includes`",
+				"${file}",
+				"`python3.10-config --ldflags`",
+				"-lpython3.10d",
+				"-o",
+				"${workspaceFolder}/embed"
+			],
+			"options": {
+				"cwd": "${fileDirname}"
+			},
+			"problemMatcher": [
+				"$gcc"
+			],
+			"group": "build",
+			"detail": "compiler: /usr/bin/clang++"
+		}
+	]
+}
