@@ -1,5 +1,7 @@
 import sys
 from io import StringIO
+# Use pip install parse to install following package
+from parse import *
 
 # Function to run Python code passed in text format
 # code: the code (supports multilines, i.e. 
@@ -8,7 +10,7 @@ from io import StringIO
 # by previously executed code
 # Returns: byte array containing the error (if any) or stdout
 # Error format: __error__("the python error")
-def run_python_code(code, shared_globals):
+def run_python_code(code, shared_globals,id):
     b = bytearray()
     try:
         old_stdout = sys.stdout
@@ -17,7 +19,7 @@ def run_python_code(code, shared_globals):
         exec(code_object, shared_globals)
         sys.stdout = old_stdout
         str = redirected_output.getvalue()
-        str += "\n__done__(1234)\n"
+        str += "\n__done__({:d})\n".format(id)
         b.extend(map(ord, str))
     except Exception:
         e = sys.exc_info()[1]
@@ -28,8 +30,9 @@ def run_python_code(code, shared_globals):
 
 def process_command(socket, shared_globals, cmd, code):
     if cmd[0:7] == '__run__':
-        print("!running code!\n>>>\n{}<<<".format(code))
-        socket.send(run_python_code(code, shared_globals))
+        id = parse("__run__({:d})", cmd)[0]
+        print("!running code ID {}!\n>>>\n{}<<<".format(id,code))
+        socket.send(run_python_code(code, shared_globals, id))
         code = ""
     elif cmd == 'reset':
         shared_globals.clear()
