@@ -22,9 +22,9 @@ def run_python_code(code, shared_globals,id):
         str += "\n__done__({:d})\n".format(id)
         b.extend(map(ord, str))
     except Exception:
-        e = sys.exc_info()[1]
+        e = sys.exc_info(   )[1]
         sys.stdout = old_stdout
-        str = "__error__(\"{}\")\n".format(e)
+        str = "__error__({},\"{}\")\n".format(id,e)
         b.extend(map(ord, str))
     return b
 
