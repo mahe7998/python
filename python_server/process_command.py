@@ -20,25 +20,30 @@ def run_python_code(code, shared_globals,id):
         sys.stdout = old_stdout
         str = redirected_output.getvalue()
         str += "\n__done__({:d})\n".format(id)
+        print("!exec done id {:d}!\n".format(id)) # Display debug output
         b.extend(map(ord, str))
     except Exception:
-        e = sys.exc_info(   )[1]
+        e = sys.exc_info()[1]
         sys.stdout = old_stdout
         str = "__error__({},\"{}\")\n".format(id,e)
         b.extend(map(ord, str))
+        print("!error for code ID {}: \"{}\"!\n<<<".format(id,e))
     return b
 
 def process_command(socket, shared_globals, cmd, code):
     if cmd[0:7] == '__run__':
-        id = parse("__run__({:d})", cmd)[0]
-        print("!running code ID {}!\n>>>\n{}<<<".format(id,code))
+        if cmd.find('(') > -1 and cmd.find(')') > -1: 
+            id = parse("__run__({:d})", cmd)[0]
+        else:
+            id = 0
+        print("!running code ID {}\n>>>\n{}!".format(id,code))
         socket.send(run_python_code(code, shared_globals, id))
         code = ""
     elif cmd == 'reset':
         shared_globals.clear()
-        print("environment resetted\n")
+        print("!environment resetted!\n")
     elif cmd == 'exit' or cmd == 'quit':
-        print("exiting python server\n")
+        print("!exiting python server!\n")
         return False, ""
     else:
         # Echo single line locally
