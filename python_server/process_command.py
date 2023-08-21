@@ -10,7 +10,7 @@ from parse import *
 # by previously executed code
 # Returns: byte array containing the error (if any) or stdout
 # Error format: __error__("the python error")
-def run_python_code(code, shared_globals,id):
+def run_python_code(code, shared_globals, id):
     b = bytearray()
     try:
         old_stdout = sys.stdout

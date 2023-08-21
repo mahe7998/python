@@ -1,37 +1,93 @@
 import socket
 import sys
+import pygame
+
 from process_command import process_command
+from Framework.ServerFramework import *
+
+table_x = -1
+table_z = -0.5
+framework = None
 
 def on_connect(new_socket, address):
+    global framework
     print("Connected from", address)
     # loop serving the new client
-    shared_globals = dict()
     full_str = ""
     code = ""
     terminate = False
     running = True
-    # Loop exists when client disconnects
+    framework = ServerFramework(650, 200, 1000, 800)
+    framework.initialize()
+    framework.add_object(
+        LoadMesh("models/floor.obj", "images/tiles.png",
+            location=pygame.Vector3(0, 0, 0),
+            scale=pygame.Vector3(10, 0, 10),
+            move_rotation=pygame.Vector3(0, 0, 0)),
+        'textured')
+    framework.add_object(
+        LoadMesh("models/tabletop.obj", "images/timber.png",
+            location=pygame.Vector3(table_x, 1, table_z),
+            scale=pygame.Vector3(1.2, 1, 1.2),
+            move_rotation=pygame.Vector3(0, 0, 0)),
+        'textured')
+    framework.add_object(
+        LoadMesh("models/tableleg.obj", "images/timber.png",
+            location=pygame.Vector3(table_x-0.5, 0.5, table_z-0.5),
+            scale=pygame.Vector3(1, 1, 1),
+            move_rotation=pygame.Vector3(0, 0, 0)),
+        'textured')
+    framework.add_object(
+        LoadMesh("models/tableleg.obj", "images/timber.png",
+            location=pygame.Vector3(table_x-0.5, 0.5, table_z+0.5),
+            scale=pygame.Vector3(1, 1, 1),
+            move_rotation=pygame.Vector3(0, 0, 0)),
+        'textured')
+    framework.add_object(
+        LoadMesh("models/tableleg.obj", "images/timber.png",
+            location=pygame.Vector3(table_x+0.5, 0.5, table_z-0.5),
+            scale=pygame.Vector3(1, 1, 1),
+            move_rotation=pygame.Vector3(0, 0, 0)),
+        'textured')
+    framework.add_object(
+        LoadMesh("models/tableleg.obj", "images/timber.png",
+            location=pygame.Vector3(table_x+0.5, 0.5, table_z+0.5),
+            scale=pygame.Vector3(1, 1, 1),
+            move_rotation=pygame.Vector3(0, 0, 0)),
+        'textured')
+    
     while running:
-        receivedData = new_socket.recv(1024)
-        if not receivedData: 
-            break
-        full_str += receivedData.decode()
-        end = full_str.index('\n')
-        # Split buffer into single line with no \n
-        while end >= 0 and running:
-            if end > 0:
-                str = full_str[0:end-1]
+        try:
+            receivedData = new_socket.recv(1024)
+            if not receivedData: 
+                break
+        except socket.error as e:
+            if e.errno == socket.errno.EWOULDBLOCK:
+                if framework.main_loop(): # returns done
+                    running = False
             else:
-                str = ''
-            #print("{a}:{b}".format(a=end, b=str))
-            terminate, running, code = process_command(new_socket, shared_globals, str, code)
-            full_str = full_str[end+1:len(full_str)]
-            try:
-                end = full_str.index('\n')
-            except:
-                end = -1
+                # Handle other socket errors
+                print("Server socket error: " + str(e))
+        else:
+
+            full_str += receivedData.decode()
+            end = full_str.index('\n')
+            # Split buffer into single line with no \n
+            while end >= 0 and running:
+                if end > 0:
+                    str = full_str[0:end-1]
+                else:
+                    str = ''
+                #print("{a}:{b}".format(a=end, b=str))
+                terminate, running, code = process_command(new_socket, globals(), str, code)
+                full_str = full_str[end+1:len(full_str)]
+                try:
+                    end = full_str.index('\n')
+                except:
+                    end = -1
     new_socket.close()
     print("!Disconnected from", address, "!")
+    framework.terminate()
     return terminate
 
 # Create a socket
@@ -47,9 +103,19 @@ terminate = False
 
 # loop waiting for connections (terminate with Ctrl-C)
 try:
+    
     while not terminate:
-        new_socket, address = sock.accept()
-        terminate = on_connect(new_socket, address)
+        try:
+            new_socket, address = sock.accept()
+        except socket.error as e:
+            if e.errno == socket.errno.EWOULDBLOCK:
+                pass
+            else:
+                # Handle other socket errors
+                print("Server socket error: " + str(e))
+        else:
+            new_socket.setblocking(False)
+            terminate = on_connect(new_socket, address)
 
 finally:
     sock.close()
