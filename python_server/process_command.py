@@ -43,10 +43,13 @@ def process_command(socket, shared_globals, cmd, code):
         shared_globals.clear()
         print("!environment resetted!\n")
     elif cmd == 'exit' or cmd == 'quit':
+        print("!closing python server connection!\n")
+        return False, False, ""
+    elif cmd == 'terminate':
         print("!exiting python server!\n")
-        return False, ""
+        return True, False, ""
     else:
         # Echo single line locally
         print(cmd)
         code += cmd + '\n'
-    return True, code
+    return False, True, code

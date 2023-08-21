@@ -1,7 +1,11 @@
 import socket
 import sys
-import _thread
+import threading
+
 from process_command import process_command
+
+threads = []
+terminate = False
 
 # Function to run Python code passed in text format
 # code: the code (supports multtlines, i.e. 
@@ -27,6 +31,7 @@ def run_python_code(code, shared_globals):
     return b
 
 def on_connect(new_socket, address):
+    global terminate
     print("Connected from", address)
     # loop serving the new client
     shared_globals = dict()
@@ -41,36 +46,50 @@ def on_connect(new_socket, address):
         full_str += receivedData.decode()
         end = full_str.index('\n')
         # Split buffer into single line with no \n
-        while end >= 0:
+        while end >= 0 and running:
             if end > 0:
                 str = full_str[0:end-1]
             else:
                 str = ''
             #print("{a}:{b}".format(a=end, b=str))
-            running, code = process_command(new_socket, shared_globals, str, code)
+            terminate, running, code = process_command(new_socket, shared_globals, str, code)
             full_str = full_str[end+1:len(full_str)]
             try:
                 end = full_str.index('\n')
             except:
                 end = -1
     new_socket.close()
-    print("Disconnected from", address)
+    print("!Disconnected from", address, "!")
 
 # Create a socket
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 # Ensure that you can restart your server quickly when it terminates
 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+# Set the timeout to 5 seconds for sock.accept()
+sock.settimeout(5)
 # Set the client socket's TCP "well-known port" number
 well_known_port = 5001
 sock.bind(('', well_known_port))
 # Set the number of clients waiting for connection that can be queued
-sock.listen(5)
+sock.listen(10)
 
 # loop waiting for connections (terminate with Ctrl-C)
 try:
-    while True:
-        new_socket, address = sock.accept()
-        _thread.start_new_thread(on_connect,(new_socket, address))
+    while not terminate:
+        try:
+            new_socket, address = sock.accept()
+        except socket.timeout:
+            continue
+        else:
+            thread = threading.Thread(target=on_connect,args=(new_socket, address))
+            thread.start()
+            threads.append(thread)
+
+    print("!Python server waiting for threads to complete...!")
+    if terminate:
+        for thread in threads:
+            thread.join()
+    print("!Python server exiting!")
 
 finally:
     sock.close()
