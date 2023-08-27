@@ -185,6 +185,3 @@ class ServerFramework(PyOGLApp):
             self.display_selection_cubes(self.selection_cubes[5], object, "z", False)
             if self.selection_axis != None:
                 self.selection_axis.draw(self.camera, self.lights)
-
-    def terminate(self):
-        pygame.quit()

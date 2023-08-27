@@ -9,52 +9,61 @@ table_x = -1
 table_z = -0.5
 framework = None
 
+def open_window(screen_posX, screen_posY, screen_width, screen_heigh):
+    global framework
+    if framework == None:
+        framework = ServerFramework(screen_posX, screen_posY, screen_width, screen_heigh)
+        framework.initialize()
+        framework.add_object(
+            LoadMesh("models/floor.obj", "images/tiles.png",
+                location=pygame.Vector3(0, 0, 0),
+                scale=pygame.Vector3(10, 0, 10),
+                move_rotation=pygame.Vector3(0, 0, 0)),
+            'textured')
+        framework.add_object(
+            LoadMesh("models/tabletop.obj", "images/timber.png",
+                location=pygame.Vector3(table_x, 1, table_z),
+                scale=pygame.Vector3(1.2, 1, 1.2),
+                move_rotation=pygame.Vector3(0, 0, 0)),
+            'textured')
+        framework.add_object(
+            LoadMesh("models/tableleg.obj", "images/timber.png",
+                location=pygame.Vector3(table_x-0.5, 0.5, table_z-0.5),
+                scale=pygame.Vector3(1, 1, 1),
+                move_rotation=pygame.Vector3(0, 0, 0)),
+            'textured')
+        framework.add_object(
+            LoadMesh("models/tableleg.obj", "images/timber.png",
+                location=pygame.Vector3(table_x-0.5, 0.5, table_z+0.5),
+                scale=pygame.Vector3(1, 1, 1),
+                move_rotation=pygame.Vector3(0, 0, 0)),
+            'textured')
+        framework.add_object(
+            LoadMesh("models/tableleg.obj", "images/timber.png",
+                location=pygame.Vector3(table_x+0.5, 0.5, table_z-0.5),
+                scale=pygame.Vector3(1, 1, 1),
+                move_rotation=pygame.Vector3(0, 0, 0)),
+            'textured')
+        framework.add_object(
+            LoadMesh("models/tableleg.obj", "images/timber.png",
+                location=pygame.Vector3(table_x+0.5, 0.5, table_z+0.5),
+                scale=pygame.Vector3(1, 1, 1),
+                move_rotation=pygame.Vector3(0, 0, 0)),
+            'textured')
+        
+def close_window():
+    global framework
+    if framework != None:
+        framework.terminate()
+        framework = None
+
 def on_connect(new_socket, address):
     global framework
     print("Connected from", address)
-    # loop serving the new client
     full_str = ""
     code = ""
     terminate = False
     running = True
-    framework = ServerFramework(650, 200, 1000, 800)
-    framework.initialize()
-    framework.add_object(
-        LoadMesh("models/floor.obj", "images/tiles.png",
-            location=pygame.Vector3(0, 0, 0),
-            scale=pygame.Vector3(10, 0, 10),
-            move_rotation=pygame.Vector3(0, 0, 0)),
-        'textured')
-    framework.add_object(
-        LoadMesh("models/tabletop.obj", "images/timber.png",
-            location=pygame.Vector3(table_x, 1, table_z),
-            scale=pygame.Vector3(1.2, 1, 1.2),
-            move_rotation=pygame.Vector3(0, 0, 0)),
-        'textured')
-    framework.add_object(
-        LoadMesh("models/tableleg.obj", "images/timber.png",
-            location=pygame.Vector3(table_x-0.5, 0.5, table_z-0.5),
-            scale=pygame.Vector3(1, 1, 1),
-            move_rotation=pygame.Vector3(0, 0, 0)),
-        'textured')
-    framework.add_object(
-        LoadMesh("models/tableleg.obj", "images/timber.png",
-            location=pygame.Vector3(table_x-0.5, 0.5, table_z+0.5),
-            scale=pygame.Vector3(1, 1, 1),
-            move_rotation=pygame.Vector3(0, 0, 0)),
-        'textured')
-    framework.add_object(
-        LoadMesh("models/tableleg.obj", "images/timber.png",
-            location=pygame.Vector3(table_x+0.5, 0.5, table_z-0.5),
-            scale=pygame.Vector3(1, 1, 1),
-            move_rotation=pygame.Vector3(0, 0, 0)),
-        'textured')
-    framework.add_object(
-        LoadMesh("models/tableleg.obj", "images/timber.png",
-            location=pygame.Vector3(table_x+0.5, 0.5, table_z+0.5),
-            scale=pygame.Vector3(1, 1, 1),
-            move_rotation=pygame.Vector3(0, 0, 0)),
-        'textured')
     
     while running:
         try:
@@ -63,13 +72,14 @@ def on_connect(new_socket, address):
                 break
         except socket.error as e:
             if e.errno == socket.errno.EWOULDBLOCK:
-                if framework.main_loop(): # returns done
-                    running = False
+                if framework != None:
+                    if framework.main_loop(): # returns done
+                        framework.terminate()
+                        framework = None
             else:
                 # Handle other socket errors
                 print("Server socket error: " + str(e))
         else:
-
             full_str += receivedData.decode()
             end = full_str.index('\n')
             # Split buffer into single line with no \n
@@ -85,9 +95,13 @@ def on_connect(new_socket, address):
                     end = full_str.index('\n')
                 except:
                     end = -1
+
     new_socket.close()
     print("!Disconnected from", address, "!")
-    framework.terminate()
+    # Enable below if closing window when client disconnects
+    #if framework != None:
+    #    framework.terminate()
+    #    framework = None
     return terminate
 
 # Create a socket
@@ -99,6 +113,8 @@ well_known_port = 5001
 sock.bind(('', well_known_port))
 # Set the number of clients waiting for connection that can be queued
 sock.listen(5)
+# Don't block to process window events when waiting for connections
+sock.setblocking(False)
 terminate = False
 
 # loop waiting for connections (terminate with Ctrl-C)
@@ -109,7 +125,10 @@ try:
             new_socket, address = sock.accept()
         except socket.error as e:
             if e.errno == socket.errno.EWOULDBLOCK:
-                pass
+                if framework != None:
+                    if framework.main_loop(): # returns done
+                        framework.terminate()
+                        framework = None
             else:
                 # Handle other socket errors
                 print("Server socket error: " + str(e))

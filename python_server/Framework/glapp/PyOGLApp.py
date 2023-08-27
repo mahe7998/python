@@ -59,6 +59,11 @@ class PyOGLApp():
                 self.screen = pygame.display.set_mode(
                     (self.display_width, self.display_height), self.screen_mode | RESIZABLE)
 
+    def terminate(self):
+        screen = pygame.display.set_mode((self.display_width, self.display_height), flags=pygame.HIDDEN)
+        pygame.display.quit()
+        pygame.quit()
+
     def update(self):
         pass
 

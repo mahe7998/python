@@ -33,7 +33,15 @@ def run_python_code(code, shared_globals, id):
 def process_command(socket, shared_globals, cmd, code):
     if cmd[0:7] == '__run__':
         if cmd.find('(') > -1 and cmd.find(')') > -1: 
-            id = parse("__run__({:d})", cmd)[0]
+            try:
+                id = parse("__run__({:d})", cmd)[0]
+            except Exception:
+                e = sys.exc_info()[1]
+                print("!invalid __run__ command {}!\n".format(cmd)) # Display debug output
+                str = "__error__(0,\"__run__ command: {} returned error {}\")\n".format(cmd, e)
+                socket.send(str.encode())
+                code = ""
+                return False, True, code
         else:
             id = 0
         print("!running code ID {}\n>>>\n{}!".format(id,code))
