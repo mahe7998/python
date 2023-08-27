@@ -9,11 +9,11 @@ table_x = -1
 table_z = -0.5
 framework = None
 
-def open_window(screen_posX, screen_posY, screen_width, screen_heigh):
+def open_window(screen_posX, screen_posY, screen_width, screen_heigh, fullscreen=False, display_num=0):
     global framework
     if framework == None:
-        framework = ServerFramework(screen_posX, screen_posY, screen_width, screen_heigh)
-        framework.initialize()
+        framework = ServerFramework(screen_posX, screen_posY, screen_width, screen_heigh, fullscreen, display_num)
+        framework.initialize(fullscreen)
         framework.add_object(
             LoadMesh("models/floor.obj", "images/tiles.png",
                 location=pygame.Vector3(0, 0, 0),

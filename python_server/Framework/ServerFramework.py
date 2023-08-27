@@ -9,12 +9,12 @@ from .glapp.Material import *
 from .glapp.PickingTexture import *
 from .glapp.Utils import *
 
-boundaries_offset = 0.2 # % of object size (0.1 = 10%)
+boundaries_offset = 0.2 # % of object size (0.1 = 10%) for selection cubes
 
 class ServerFramework(PyOGLApp):
 
-    def __init__(self, screen_posX, screen_posY, screen_width, screen_height):
-        super().__init__(screen_posX, screen_posY, screen_width, screen_height)
+    def __init__(self, screen_posX, screen_posY, screen_width, screen_height, fullscreen=False, display_num=0):
+        super().__init__(screen_posX, screen_posY, screen_width, screen_height,fullscreen, display_num)
         self.camera = None
         self.lights = []
         self.picking_object = None
@@ -45,11 +45,14 @@ class ServerFramework(PyOGLApp):
             cube.load(self.materials['colored'])
             self.selection_cubes.append(cube)
                 
-    def initialize(self):
+    def initialize(self, fullscreen):
         self.materials = {
             'textured': Material("shaders/textured_vertices.vs", "shaders/textured_frags.vs"),
             'colored' : Material("shaders/color_vertices.vs", "shaders/color_frags.vs") }
-        self.camera = Camera(self.display_width, self.display_height)
+        if fullscreen:
+            self.camera = Camera(self.desktop_size[0], self.desktop_size[1])
+        else:
+            self.camera = Camera(self.display_width, self.display_height)
         self.camera.relative_move(5.0, 0.0, 2.0) # Initial camera position to see Axis
         self.lights.append(Light(0, pygame.Vector3(0, 5, 0), pygame.Vector3(1, 1, 1)))
         self.picking_object = PickingObject(Material("shaders/picking_vertices.vs", "shaders/picking_frags.vs"))
@@ -67,7 +70,7 @@ class ServerFramework(PyOGLApp):
     def update_display(self, fullscreen, event=None):
         super().update_display(fullscreen, event)
         if event != None and event.type == pygame.VIDEORESIZE and not fullscreen:
-            if event.w != self.desktop_size.current_w and event.h != self.desktop_size.current_h:
+            if event.w != self.desktop_size[0] and event.h != self.desktop_size[1]:
                 print("camera.update_perspective (resize event): " + str(event.w) + ", " + str(event.h))
                 self.camera.update_perspective(event.w, event.h)
             else:
@@ -75,14 +78,14 @@ class ServerFramework(PyOGLApp):
                 self.camera.update_perspective(self.display_width, self.display_height)
         elif event == None:
             if fullscreen:
-                print("camera.update_perspective (full screen): " + str(self.desktop_size.current_w) + ", " + str(self.desktop_size.current_h))
-                self.camera.update_perspective(self.desktop_size.current_w, self.desktop_size.current_h)
+                print("camera.update_perspective (full screen): " + str(self.desktop_size[0]) + ", " + str(self.desktop_size[1]))
+                self.camera.update_perspective(self.desktop_size[0], self.desktop_size[1])
             else:
                 print("camera.update_perspective (resume window display): " + str(self.display_width) + ", " + str(self.display_height))
                 self.camera.update_perspective(self.display_width, self.display_height)
         elif event != None and fullscreen:
             print("camera.update_perspective (full screen buttom): " + str(event.w) + ", " + str(event.h))
-            self.camera.update_perspective(event.w, event.h)
+            self.camera.update_perspective( self.desktop_size[0],  self.desktop_size[1])
 
     def update(self):
         self.camera.update_mouse_and_keyboard(
@@ -94,7 +97,7 @@ class ServerFramework(PyOGLApp):
     def pick_object(self, fullscreen, location):
         if fullscreen:
             selection = self.picking_object.MousePick(
-                self.desktop_size.current_w, self.desktop_size.current_h,
+                self.desktop_size[0], self.desktop_size[1],
                 location[0], location[1],
                 self.objects, self.selection_cubes,
                 self.camera, self.selected_object)
