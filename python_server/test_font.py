@@ -114,7 +114,7 @@ def initialize():
     #problem
     
     shader_projection = glGetUniformLocation(shaderProgram, "projection")
-    projection = ortho_matrix(0, 300, 300, 0, 1 , -1)
+    projection = ortho_matrix(0, 640, 640, 0, 1 , -1)
     #projection = glm.ortho(0, 640, 640, 0)
     glUniformMatrix4fv(shader_projection, 1, GL_TRUE, projection)
     
@@ -122,7 +122,7 @@ def initialize():
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
 
     face = freetype.Face(fontfile)
-    face.set_char_size( 48*64 )
+    face.set_char_size(28*64, 20*64)
 
     #load first 128 characters of ASCII set
     for i in range(0,128):
@@ -163,7 +163,7 @@ def render_text(window,text,x,y,scale,color):
     global VAO
     
     face = freetype.Face(fontfile)
-    face.set_char_size(48*64)
+    face.set_char_size(28*64,20*64)
     glUniform3f(glGetUniformLocation(shaderProgram, "textColor"),
                 color[0]/255,color[1]/255,color[2]/255)
                
@@ -215,7 +215,7 @@ def main():
         glfw.poll_events()
         glClearColor(0,0,0,1)
         glClear(GL_COLOR_BUFFER_BIT)
-        render_text(window, 'Hello World', 20, 40, 1, (255, 0, 0))
+        render_text(window, 'Hello World - This is a text you need to read', 20, 40, 1, (255, 0, 0))
 
     glfw.terminate()
 
