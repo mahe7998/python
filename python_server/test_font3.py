@@ -21,25 +21,34 @@ squeeze_y = 14*64
 first_char = 32 # space
 last_char = 127
 
-def _get_rendering_vertices(vertices, xpos, ypos, w, h, top, tex_l=0.0, tex_r=1.0, tex_t=1.0, tex_b=0.0):
-    vertices.append((xpos,     ypos + (h-top) - h, tex_l, tex_b)) # 0, 0
-    vertices.append((xpos,     ypos + (h-top),     tex_l, tex_t)) # 0, 1
-    vertices.append((xpos + w, ypos + (h-top),     tex_r, tex_t)) # 1, 1
-    vertices.append((xpos,     ypos + (h-top) - h, tex_l, tex_b)) # 0, 0
-    vertices.append((xpos + w, ypos + (h-top),     tex_r, tex_t)) # 1, 1
-    vertices.append((xpos + w, ypos + (h-top) - h, tex_r, tex_b)) # 1, 0
+def _get_rendering_vertices(vertices, xpos, ypos, w, h, top):
+    vertices.append((xpos,     ypos + (h-top) - h)) # 0, 0
+    vertices.append((xpos,     ypos + (h-top)    )) # 0, 1
+    vertices.append((xpos + w, ypos + (h-top),   )) # 1, 1
+    vertices.append((xpos,     ypos + (h-top) - h)) # 0, 0
+    vertices.append((xpos + w, ypos + (h-top),   )) # 1, 1
+    vertices.append((xpos + w, ypos + (h-top) - h)) # 1, 0
+
+def _get_rendering_texes(texes, tex_l=0.0, tex_r=1.0, tex_t=1.0, tex_b=0.0):
+    texes.append((tex_l, tex_b)) # 0, 0
+    texes.append((tex_l, tex_t)) # 0, 1
+    texes.append((tex_r, tex_t)) # 1, 1
+    texes.append((tex_l, tex_b)) # 0, 0
+    texes.append((tex_r, tex_t)) # 1, 1
+    texes.append((tex_r, tex_b)) # 1, 0
 
 VERTEX_SHADER = """
         #version 330 core
-        layout (location = 0) in vec4 vertex; // <vec2 pos, vec2 tex>
+        in vec2 vertex; // <vec2 pos, vec2 tex>
+        in vec2 texCoords;
         out vec2 TexCoords;
 
         uniform mat4 projection;
 
         void main()
         {
-            gl_Position = projection * vec4(vertex.xy, 0.0, 1.0);
-            TexCoords = vertex.zw;
+            gl_Position = projection * vec4(vertex, 0.0, 1.0);
+            TexCoords = texCoords;
         }
        """
 
@@ -60,8 +69,6 @@ FRAGMENT_SHADER = """
 
 shaderProgram = None
 font_texture = None
-VBO = None
-VAO = None
 
 def ortho_matrix(left, right, bottom, top, near, far):
     """
@@ -85,7 +92,6 @@ def initialize():
     global font_texture
     global squeeze_x
     global squeeze_y
-    global VBO
     global VAO
     global CHAR_SIZE_W
     global CHAR_SIZE_H
@@ -141,11 +147,7 @@ def initialize():
 
     #configure VAO/VBO for texture quads    
     VBO = glGenBuffers(1)
-    glBindBuffer(GL_ARRAY_BUFFER, VBO)
-    glBufferData(GL_ARRAY_BUFFER, 6 * 4 * 4, None, GL_DYNAMIC_DRAW)
-    glEnableVertexAttribArray(0)
-    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, None)
-    glBindBuffer(GL_ARRAY_BUFFER, 0)
+    TEX = glGenBuffers(1)
     glBindVertexArray(0)
 
     glUniform3f(glGetUniformLocation(
@@ -188,16 +190,30 @@ def initialize():
             glyph.bitmap.width, glyph.bitmap.rows, glyph.bitmap_top)
         final_vertices = np.array(vertices, dtype=np.float32)
         glBufferData(GL_ARRAY_BUFFER, final_vertices.nbytes, final_vertices, GL_DYNAMIC_DRAW)
+        location_id = glGetAttribLocation(shaderProgram, "vertex")
+        glVertexAttribPointer(location_id, 2, GL_FLOAT, GL_FALSE, 0, None)
+        glEnableVertexAttribArray(location_id)
         glBindBuffer(GL_ARRAY_BUFFER, 0)
+
+        glBindBuffer(GL_ARRAY_BUFFER, TEX)
+        texes = []
+        _get_rendering_texes(texes)
+        final_texes = np.array(texes, dtype=np.float32)
+        glBufferData(GL_ARRAY_BUFFER, final_texes.nbytes, final_texes, GL_STATIC_DRAW)
+        location_id = glGetAttribLocation(shaderProgram, "texCoords")
+        glVertexAttribPointer(location_id, 2, GL_FLOAT, GL_FALSE, 0, None)
+        glEnableVertexAttribArray(location_id)
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
+
         #render quad
         glDrawArrays(GL_TRIANGLES, 0, len(vertices))
 
     # Code below works and is used to verify the font above works correctly
-    #glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo)
-    #data = glReadPixels(0, 0, font_texture_width, font_texture_height, GL_RGBA, GL_UNSIGNED_BYTE)
-    #image = Image.frombytes("RGBA", (font_texture_width, font_texture_height), data)
-    #image = ImageOps.flip(image) # in my case image is flipped top-bottom for some reason
-    #image.save('font.png', 'PNG')
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo)
+    data = glReadPixels(0, 0, font_texture_width, font_texture_height, GL_RGBA, GL_UNSIGNED_BYTE)
+    image = Image.frombytes("RGBA", (font_texture_width, font_texture_height), data)
+    image = ImageOps.flip(image) # in my case image is flipped top-bottom for some reason
+    image.save('font.png', 'PNG')
 
     glBindTexture(GL_TEXTURE_2D, 0)
     glBindFramebuffer(GL_FRAMEBUFFER, 0)
@@ -220,6 +236,7 @@ def udpate_text(text, n_rows, m_cols, x, y):
     global squeeze_y
    
     vertices = []
+    texes = []
     window_height = (n_rows*(CHAR_SIZE_H-squeeze_y)) // 64
     for n in range(0, n_rows):
         for m in range(0, m_cols):
@@ -228,15 +245,16 @@ def udpate_text(text, n_rows, m_cols, x, y):
                 (squeeze_x//2+(m*(CHAR_SIZE_W-squeeze_x)))//64, 
                 window_height - (n*(CHAR_SIZE_H-squeeze_y))//64, 
                 (CHAR_SIZE_W-squeeze_x)//64, (CHAR_SIZE_H-squeeze_y)//64,
-                (CHAR_SIZE_H-squeeze_y)//64, # all characters have the same height
+                (CHAR_SIZE_H-squeeze_y)//64) # all characters have the same height
+            _get_rendering_texes(
+                texes,
                 ((ord(text[n][m])-first_char+0))/(last_char-first_char), # texture left
                 ((ord(text[n][m])-first_char+1))/(last_char-first_char)) # texture right
-    return np.array(vertices, dtype=np.float32)
+    return np.array(vertices, dtype=np.float32), np.array(texes, dtype=np.float32),
     
-def render_text(window, vertices, n_rows, m_cols, color):
+def render_text(window, vertices, texes, n_rows, m_cols, color):
     global shaderProgram
     global font_texture
-    global VBO
     global VAO
     global CHAR_SIZE_W
     global CHAR_SIZE_H
@@ -278,17 +296,23 @@ def render_text(window, vertices, n_rows, m_cols, color):
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
 
-    vertex_buffer_size = vertices.size * 4
-
     #update content of VBO memory
-    VBO2 = glGenBuffers(1)
-    glBindBuffer(GL_ARRAY_BUFFER, VBO2)
-    glBufferData(GL_ARRAY_BUFFER, vertex_buffer_size, None, GL_DYNAMIC_DRAW) # or GL_STATIC_DRAW?
-    glEnableVertexAttribArray(0)
-    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, None) # or GL_TRUE?
-    glBufferData(GL_ARRAY_BUFFER, vertex_buffer_size, vertices, GL_DYNAMIC_DRAW)
+    VBO = glGenBuffers(1)
+    glBindBuffer(GL_ARRAY_BUFFER, VBO)
+    glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_DYNAMIC_DRAW) # or GL_STATIC_DRAW?
+    location_id = glGetAttribLocation(shaderProgram, "vertex")
+    glVertexAttribPointer(location_id, 2, GL_FLOAT, GL_FALSE, 0, None)
+    glEnableVertexAttribArray(location_id)
     glBindBuffer(GL_ARRAY_BUFFER, 0)
-                 
+
+    TEX = glGenBuffers(1)
+    glBindBuffer(GL_ARRAY_BUFFER, TEX)
+    glBufferData(GL_ARRAY_BUFFER, texes.nbytes, texes, GL_DYNAMIC_DRAW) # or GL_STATIC_DRAW?
+    location_id = glGetAttribLocation(shaderProgram, "texCoords")
+    glVertexAttribPointer(location_id, 2, GL_FLOAT, GL_FALSE, 0, None)
+    glEnableVertexAttribArray(location_id)
+    glBindBuffer(GL_ARRAY_BUFFER, 0)
+
     #render quad
     glDrawArrays(GL_TRIANGLES, 0, len(vertices))
 
@@ -321,14 +345,14 @@ def main():
     glfw.make_context_current(window)
 
     print_text(text, 4, 4, "This is a nice test!", m_char_rows, n_char_cols)
-    vertices = udpate_text(text, m_char_rows, n_char_cols, 0, 0)
+    vertices, texes = udpate_text(text, m_char_rows, n_char_cols, 0, 0)
 
     initialize()
     while not glfw.window_should_close(window):
         glfw.poll_events()
         glClearColor(0, 0, 0, 1)
         glClear(GL_COLOR_BUFFER_BIT)     
-        render_text(window, vertices, m_char_rows, n_char_cols, (255, 0, 0))
+        render_text(window, vertices, texes, m_char_rows, n_char_cols, (255, 0, 0))
 
     glfw.terminate()
 
