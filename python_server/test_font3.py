@@ -39,7 +39,7 @@ def _get_rendering_texes(texes, tex_l=0.0, tex_r=1.0, tex_t=1.0, tex_b=0.0):
 
 VERTEX_SHADER = """
         #version 330 core
-        in vec2 vertex; // <vec2 pos, vec2 tex>
+        in vec2 vertex;
         in vec2 texCoords;
         out vec2 TexCoords;
 
@@ -261,8 +261,6 @@ def render_text(window, vertices, texes, n_rows, m_cols, color):
     global squeeze_x
     global squeeze_y
     
-    face = freetype.Face(fontfile)
-    face.set_char_size((CHAR_SIZE_W-squeeze_x), CHAR_SIZE_H)
     glUniform3f(glGetUniformLocation(
         shaderProgram, "textColor"),
         color[0]/255,color[1]/255,color[2]/255)             
