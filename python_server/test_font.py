@@ -32,16 +32,13 @@ class CharacterSlot:
         else:
             raise RuntimeError('unknown glyph type')
 
-def _get_rendering_buffer(xpos, ypos, w, h, top, zfix=0.0):
-    return np.asarray([
-        xpos,     ypos + (h-top) - h, 0, 0,
-        xpos,     ypos + (h-top),     0, 1,
-        xpos + w, ypos + (h-top),     1, 1,
-        xpos,     ypos + (h-top) - h, 0, 0,
-        xpos + w, ypos + (h-top),     1, 1,
-        xpos + w, ypos + (h-top) - h, 1, 0
-    ], np.float32)
-
+def _get_rendering_buffer(vertices, xpos, ypos, w, h, top):
+    vertices.append((xpos,     ypos + (h-top) - h, 0, 0))
+    vertices.append((xpos,     ypos + (h-top),     0, 1))
+    vertices.append((xpos + w, ypos + (h-top),     1, 1))
+    vertices.append((xpos,     ypos + (h-top) - h, 0, 0))
+    vertices.append((xpos + w, ypos + (h-top),     1, 1))
+    vertices.append((xpos + w, ypos + (h-top) - h, 1, 0))
 
 VERTEX_SHADER = """
         #version 330 core
@@ -62,12 +59,12 @@ FRAGMENT_SHADER = """
         in vec2 TexCoords;
         out vec4 color;
 
-        uniform sampler2D text;
+        uniform sampler2D tex;
         uniform vec3 textColor;
 
         void main()
         {    
-            vec4 sampled = vec4(1.0, 1.0, 1.0, texture(text, TexCoords).r);
+            vec4 sampled = vec4(1.0, 1.0, 1.0, texture(tex, TexCoords).r);
             color = vec4(textColor, 1.0) * sampled;
         }
         """
@@ -192,13 +189,15 @@ def render_text(window, text, x, y, scale, color):
         w, h = ch.textureSize
         w = w * scale
         h = h * scale
-        vertices = _get_rendering_buffer(x, y, w, h, ch.top * scale)
+        vertices = []
+        _get_rendering_buffer(vertices, x, y, w, h, ch.top * scale)
+        final_vertices = np.array(vertices, dtype=np.float32)
 
         #render glyph texture over quad
         glBindTexture(GL_TEXTURE_2D, ch.texture)
         #update content of VBO memory
         glBindBuffer(GL_ARRAY_BUFFER, VBO)
-        glBufferSubData(GL_ARRAY_BUFFER, 0, vertices.nbytes, vertices)
+        glBufferSubData(GL_ARRAY_BUFFER, 0, final_vertices.nbytes, final_vertices)
 
         glBindBuffer(GL_ARRAY_BUFFER, 0)
         #render quad

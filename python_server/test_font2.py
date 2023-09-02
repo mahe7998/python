@@ -1,6 +1,5 @@
 from OpenGL.GL import *
 from OpenGL.GLU import *
-
 from OpenGL.GL import shaders
 
 import glfw
@@ -17,28 +16,13 @@ import time
 fontfile = "FreeMono.ttf"
 #fontfile = r'C:\source\resource\fonts\gnu-freefont_freesans\freesans.ttf'
 
-class CharacterSlot:
-    def __init__(self, texture, glyph):
-        self.texture = texture
-        self.textureSize = (glyph.bitmap.width, glyph.bitmap.rows)
-        self.top = glyph.bitmap_top
-
-        if isinstance(glyph, freetype.GlyphSlot):
-            self.bearing = (glyph.bitmap_left, glyph.bitmap_top)
-            self.advance = glyph.advance.x
-        elif isinstance(glyph, freetype.BitmapGlyph):
-            self.bearing = (glyph.left, glyph.top)
-            self.advance = None
-        else:
-            raise RuntimeError('unknown glyph type')
-
-def _get_rendering_buffer(vertices, xpos, ypos, w, h, top):
-    vertices.append((xpos,     ypos + (h-top) - h, 0, 0))
-    vertices.append((xpos,     ypos + (h-top),     0, 1))
-    vertices.append((xpos + w, ypos + (h-top),     1, 1))
-    vertices.append((xpos,     ypos + (h-top) - h, 0, 0))
-    vertices.append((xpos + w, ypos + (h-top),     1, 1))
-    vertices.append((xpos + w, ypos + (h-top) - h, 1, 0))
+def _get_rendering_vertices(vertices, xpos, ypos, w, h, top, tex_l=0.0, tex_r=1.0, tex_t=1.0, tex_b=0.0):
+    vertices.append((xpos,     ypos + (h-top) - h, tex_l, tex_b)) # 0, 0
+    vertices.append((xpos,     ypos + (h-top),     tex_l, tex_t)) # 0, 1
+    vertices.append((xpos + w, ypos + (h-top),     tex_r, tex_t)) # 1, 1
+    vertices.append((xpos,     ypos + (h-top) - h, tex_l, tex_b)) # 0, 0
+    vertices.append((xpos + w, ypos + (h-top),     tex_r, tex_t)) # 1, 1
+    vertices.append((xpos + w, ypos + (h-top) - h, tex_r, tex_b)) # 1, 0
 
 VERTEX_SHADER = """
         #version 330 core
@@ -59,18 +43,18 @@ FRAGMENT_SHADER = """
         in vec2 TexCoords;
         out vec4 color;
 
-        uniform sampler2D text;
+        uniform sampler2D tex;
         uniform vec3 textColor;
 
         void main()
         {    
-            vec4 sampled = vec4(1.0, 1.0, 1.0, texture(text, TexCoords).r);
+            vec4 sampled = vec4(1.0, 1.0, 1.0, texture(tex, TexCoords).r);
             color = vec4(textColor, 1.0) * sampled;
         }
         """
 
 shaderProgram = None
-Characters = dict()
+font_texture = None
 VBO = None
 VAO = None
 
@@ -96,7 +80,7 @@ def initialize():
     global VERTEXT_SHADER
     global FRAGMENT_SHADER
     global shaderProgram
-    global Characters
+    global font_texture
     global VBO
     global VAO
     global CHAR_SIZE_W
@@ -128,7 +112,39 @@ def initialize():
     face = freetype.Face(fontfile)
     face.set_char_size(CHAR_SIZE_W, CHAR_SIZE_H)
 
-    #load first 128 characters of ASCII set
+    # Configure VAO/VBO to load all glyphs into font_texture
+    fbo = glGenFramebuffers(1)
+    font_texture = glGenTextures(1)
+    
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo)
+    glBindTexture(GL_TEXTURE_2D, font_texture)
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, (CHAR_SIZE_W*(128-30+1))//64, 2*(CHAR_SIZE_H//64), 0, GL_RGB, GL_UNSIGNED_BYTE, None)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, font_texture, 0)
+    # Set the list of draw buffers.
+    DrawBuffers = [GL_COLOR_ATTACHMENT0];
+    glDrawBuffers(1, DrawBuffers); # "1" is the size of DrawBuffers
+    fb_status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
+    if fb_status != GL_FRAMEBUFFER_COMPLETE:
+        raise Exception("Frame buffer error, status: " + str(fb_status))
+    glViewport(0,0,(CHAR_SIZE_W*(128-30+1))//64, 2*(CHAR_SIZE_H//64))
+ 
+    #configure VAO/VBO for texture quads    
+    VBO = glGenBuffers(1)
+    glBindBuffer(GL_ARRAY_BUFFER, VBO)
+    glBufferData(GL_ARRAY_BUFFER, 6 * 4 * 4, None, GL_DYNAMIC_DRAW)
+    glEnableVertexAttribArray(0)
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, None)
+    glBindBuffer(GL_ARRAY_BUFFER, 0)
+    glBindVertexArray(0)
+
+    glUniform3f(glGetUniformLocation(
+        shaderProgram, "textColor"),
+        1.0, 1.0, 1.0)        
+    glActiveTexture(GL_TEXTURE0)
+
+    glBindVertexArray(VAO)
     for i in range(30, 128):
         face.load_char(chr(i))
         glyph = face.glyph
@@ -149,24 +165,27 @@ def initialize():
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
 
-        #now store character for later use
-        Characters[chr(i)] = CharacterSlot(texture, glyph)
-        
-    glBindTexture(GL_TEXTURE_2D, 0)
+        #draw vertices
+        glBindBuffer(GL_ARRAY_BUFFER, VBO)
+        vertices = []
+        _get_rendering_vertices(
+            vertices,
+            ((i-30)*CHAR_SIZE_W)//64, 
+            CHAR_SIZE_H//64, 
+            glyph.bitmap.width, glyph.bitmap.rows, glyph.bitmap_top)
+        final_vertices = np.array(vertices, dtype=np.float32)
+        glBufferSubData(GL_ARRAY_BUFFER, 0, final_vertices.nbytes, final_vertices)
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
+        #render quad
+        glDrawArrays(GL_TRIANGLES, 0, len(vertices))
 
-    #configure VAO/VBO for texture quads
+    glBindTexture(GL_TEXTURE_2D, 0)
+    glBindFramebuffer(GL_FRAMEBUFFER, 0)
+ 
     
-    VBO = glGenBuffers(1)
-    glBindBuffer(GL_ARRAY_BUFFER, VBO)
-    glBufferData(GL_ARRAY_BUFFER, 6 * 4 * 4, None, GL_DYNAMIC_DRAW)
-    glEnableVertexAttribArray(0)
-    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, None)
-    glBindBuffer(GL_ARRAY_BUFFER, 0)
-    glBindVertexArray(0)
-    
-def render_text(window, text, x, y, scale, color):
+def render_text(window, text, n_rows, m_cols, x, y, scale, color):
     global shaderProgram
-    global Characters
+    global font_texture
     global VBO
     global VAO
     global CHAR_SIZE_W
@@ -176,40 +195,59 @@ def render_text(window, text, x, y, scale, color):
     face.set_char_size(CHAR_SIZE_W, CHAR_SIZE_H)
     glUniform3f(glGetUniformLocation(
         shaderProgram, "textColor"),
-        color[0]/255,color[1]/255,color[2]/255)
-               
+        color[0]/255,color[1]/255,color[2]/255)             
     glActiveTexture(GL_TEXTURE0)
     
     glEnable(GL_BLEND)
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
     glBindVertexArray(VAO)
-    for c in text:
-        ch = Characters[c]
-        w, h = ch.textureSize
-        w = w * scale
-        h = h * scale
-        vertices = []
-        _get_rendering_buffer(vertices, x, y, w, h, ch.top * scale)
-        final_vertices = np.array(vertices, dtype=np.float32)
+    vertices = []
+    for n in range(0, n_rows-1):
+        for m in range(0, m_cols-1):
+            _get_rendering_vertices(
+                vertices,
+                (n*CHAR_SIZE_W)//64, 
+                ((m+1)*CHAR_SIZE_H)//64, 
+                CHAR_SIZE_W//64, CHAR_SIZE_H//64,
+                CHAR_SIZE_H//64, # all characters have the same height
+                ((ord(text[n][m])-30))/(128-30+1), # texture left
+                ((ord(text[n][m])-29))/(128-30+1)) # texture right
 
-        #render glyph texture over quad
-        glBindTexture(GL_TEXTURE_2D, ch.texture)
-        #update content of VBO memory
-        glBindBuffer(GL_ARRAY_BUFFER, VBO)
-        glBufferSubData(GL_ARRAY_BUFFER, 0, final_vertices.nbytes, final_vertices)
+    final_vertices = np.array(vertices, dtype=np.float32)
 
-        glBindBuffer(GL_ARRAY_BUFFER, 0)
-        #render quad
-        glDrawArrays(GL_TRIANGLES, 0, 6)
-        #now advance cursors for next glyph (note that advance is number of 1/64 pixels)
-        x += (ch.advance >> 6) * scale
+    #render glyph texture over quad
+    glBindTexture(GL_TEXTURE_2D, font_texture)
+    #texture options
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+
+    #update content of VBO memory
+    VBO2 = glGenBuffers(1)
+    glBindBuffer(GL_ARRAY_BUFFER, VBO2)
+    glBufferData(GL_ARRAY_BUFFER, final_vertices.size, final_vertices, GL_DYNAMIC_DRAW) # or GL_STATIC_DRAW?
+    glEnableVertexAttribArray(0)
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, None) # or GL_TRUE?
+    glBindVertexArray(0)
+    glBindBuffer(GL_ARRAY_BUFFER, 0)
+
+    #render quad
+    glBindFramebuffer(GL_FRAMEBUFFER, 0)
+    glViewport(0, 0, m_cols * CHAR_SIZE_W // 64, n_rows * CHAR_SIZE_H // 64)
+    glDrawArrays(GL_TRIANGLES, 0, len(vertices))
 
     glBindVertexArray(0)
     glBindTexture(GL_TEXTURE_2D, 0)
 
     glfw.swap_buffers(window)
     glfw.poll_events()
+
+def print_text(x, y, text, text_array):
+    for c in text:
+        text_array[y][x] = c
+        x += 1
     
 def main():
     glfw.init()
@@ -220,7 +258,12 @@ def main():
     glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
     glfw.window_hint(glfw.SAMPLES, 4)
 
-    window = glfw.create_window(640, 640,"EXAMPLE PROGRAM",None,None)    
+    n_char_cols = 20
+    m_char_rows = 10
+    text = [[' ' for i in range(n_char_cols)] for j in range(m_char_rows)]
+    window = glfw.create_window(
+        n_char_cols*CHAR_SIZE_W // 64, 
+        m_char_rows*CHAR_SIZE_H // 64,"EXAMPLE PROGRAM",None,None)    
     glfw.make_context_current(window)
     
     initialize()
@@ -228,7 +271,8 @@ def main():
         glfw.poll_events()
         glClearColor(0,0,0,1)
         glClear(GL_COLOR_BUFFER_BIT)
-        render_text(window, 'Hello World -_.^', 20, 40, 1, (255, 255, 255))
+        print_text(0, 0, "Hello World!", text)
+        render_text(window, text, m_char_rows, n_char_cols, 20, 40, 1, (255, 255, 255))
 
     glfw.terminate()
 
