@@ -57,8 +57,9 @@ class PickingObject:
         glBindTexture(GL_TEXTURE_2D, self.depth_texture_id)
         glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, screen_width, screen_height, 
                      0, GL_DEPTH_COMPONENT, GL_FLOAT, None)
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 
-                               self.depth_texture_id, 0)
+        glFramebufferTexture2D(
+            GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, 
+            self.depth_texture_id, 0)
 
         fb_status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
         if fb_status != GL_FRAMEBUFFER_COMPLETE:

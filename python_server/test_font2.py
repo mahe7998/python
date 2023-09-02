@@ -160,8 +160,8 @@ def initialize():
     for i in range(first_char, last_char):
         face.load_char(chr(i))
         glyph = face.glyph
-        if chr(i) > ' ':
-            print ("Loading character '%c': width: %d, height: %d, left: %d, top: %d" % (chr(i), glyph.bitmap.width, glyph.bitmap.rows, glyph.bitmap_left, glyph.bitmap_top))
+        #if chr(i) > ' ':
+        #    print ("Loading character '%c': width: %d, height: %d, left: %d, top: %d" % (chr(i), glyph.bitmap.width, glyph.bitmap.rows, glyph.bitmap_left, glyph.bitmap_top))
 
         #generate texture
         texture = glGenTextures(1)
@@ -193,15 +193,14 @@ def initialize():
         glDrawArrays(GL_TRIANGLES, 0, len(vertices))
 
     # Code below works and is used to verify the font above works correctly
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo)
-    data = glReadPixels(0, 0, font_texture_width, font_texture_height, GL_RGBA, GL_UNSIGNED_BYTE)
-    image = Image.frombytes("RGBA", (font_texture_width, font_texture_height), data)
-    image = ImageOps.flip(image) # in my case image is flipped top-bottom for some reason
-    image.save('font.png', 'PNG')
+    #glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo)
+    #data = glReadPixels(0, 0, font_texture_width, font_texture_height, GL_RGBA, GL_UNSIGNED_BYTE)
+    #image = Image.frombytes("RGBA", (font_texture_width, font_texture_height), data)
+    #image = ImageOps.flip(image) # in my case image is flipped top-bottom for some reason
+    #image.save('font.png', 'PNG')
 
     glBindTexture(GL_TEXTURE_2D, 0)
     glBindFramebuffer(GL_FRAMEBUFFER, 0)
- 
     
 def render_text(window, text, n_rows, m_cols, x, y, scale, color):
     global shaderProgram
@@ -254,8 +253,7 @@ def render_text(window, text, n_rows, m_cols, x, y, scale, color):
 
     #render glyph texture over quad
     glBindTexture(GL_TEXTURE_2D, font_texture)
-    #glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, font_texture_width, font_texture_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, None)
- 
+    
     #texture options
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
@@ -298,10 +296,11 @@ def main():
 
     n_char_cols = 30
     m_char_rows = 10
+    text = [[' ' for i in range(n_char_cols)] for j in range(m_char_rows)]
+
     window_width = (n_char_cols*(CHAR_SIZE_W-squeeze_x)) // 64   
     window_height = (m_char_rows*(CHAR_SIZE_H-squeeze_y)) // 64
 
-    text = [[' ' for i in range(n_char_cols)] for j in range(m_char_rows)]
     window = glfw.create_window(
         window_width//2, 
         window_height//2,
@@ -313,7 +312,7 @@ def main():
         glfw.poll_events()
         glClearColor(0, 0, 0, 1)
         glClear(GL_COLOR_BUFFER_BIT)
-        print_text(0, 0, "This is a nice test!", text)
+        print_text(4, 4, "This is a nice test!", text)
         render_text(window, text, m_char_rows, n_char_cols, 20, 40, 1, (255, 0, 0))
 
     glfw.terminate()

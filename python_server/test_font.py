@@ -11,6 +11,7 @@ import numpy as np
 from math import *
 
 from PIL import Image
+from PIL import ImageOps
 import time
 
 
@@ -127,13 +128,16 @@ def initialize():
 
     face = freetype.Face(fontfile)
     face.set_char_size(CHAR_SIZE_W, CHAR_SIZE_H)
+  
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
     #load first 128 characters of ASCII set
     for i in range(30, 128):
         face.load_char(chr(i))
         glyph = face.glyph
-        if chr(i) > ' ':
-            print ("Loading character '%c': width: %d, height: %d, left: %d, top: %d" % (chr(i), glyph.bitmap.width, glyph.bitmap.rows, glyph.bitmap_left, glyph.bitmap_top))
+        #if chr(i) > ' ':
+        #    print ("Loading character '%c': width: %d, height: %d, left: %d, top: %d" % (chr(i), glyph.bitmap.width, glyph.bitmap.rows, glyph.bitmap_left, glyph.bitmap_top))
 
         #generate texture
         texture = glGenTextures(1)
@@ -209,6 +213,13 @@ def render_text(window, text, x, y, scale, color):
     glBindTexture(GL_TEXTURE_2D, 0)
 
     glfw.swap_buffers(window)
+
+    #glReadBuffer(GL_BACK)
+    #data = glReadPixels(0, 0, 640, 640, GL_RGBA, GL_UNSIGNED_BYTE)
+    #image = Image.frombytes("RGBA", (640, 640), data)
+    #image = ImageOps.flip(image) # in my case image is flipped top-bottom for some reason
+    #image.save('font.png', 'PNG')
+
     glfw.poll_events()
     
 def main():
@@ -224,6 +235,7 @@ def main():
     glfw.make_context_current(window)
     
     initialize()
+    
     while not glfw.window_should_close(window):
         glfw.poll_events()
         glClearColor(0,0,0,1)
