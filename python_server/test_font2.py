@@ -13,9 +13,13 @@ from PIL import Image
 from PIL import ImageOps
 import time
 
-
 fontfile = "FreeMono.ttf"
-#fontfile = r'C:\source\resource\fonts\gnu-freefont_freesans\freesans.ttf'
+CHAR_SIZE_W = 30*64
+CHAR_SIZE_H = 45*64
+squeeze_x = 10*64
+squeeze_y = 14*64
+first_char = 32 # space
+last_char = 127
 
 def _get_rendering_vertices(vertices, xpos, ypos, w, h, top, tex_l=0.0, tex_r=1.0, tex_t=1.0, tex_b=0.0):
     vertices.append((xpos,     ypos + (h-top) - h, tex_l, tex_b)) # 0, 0
@@ -59,11 +63,6 @@ font_texture = None
 VBO = None
 VAO = None
 
-CHAR_SIZE_W = 48*64
-CHAR_SIZE_H = 60*64
-first_char = 32 # space
-last_char = 127
-
 def ortho_matrix(left, right, bottom, top, near, far):
     """
     Returns an orthographic projection matrix.
@@ -84,6 +83,8 @@ def initialize():
     global FRAGMENT_SHADER
     global shaderProgram
     global font_texture
+    global squeeze_x
+    global squeeze_y
     global VBO
     global VAO
     global CHAR_SIZE_W
@@ -102,8 +103,8 @@ def initialize():
     glUseProgram(shaderProgram)
 
     #font texture size
-    font_texture_width = (CHAR_SIZE_W*(last_char-first_char))//64    
-    font_texture_height = (CHAR_SIZE_H//64) * 2
+    font_texture_width = ((CHAR_SIZE_W-squeeze_x)*(last_char-first_char))//64    
+    font_texture_height = int(((CHAR_SIZE_H-squeeze_y)//64) * 1.5)
 
     #get projection
     shader_projection = glGetUniformLocation(shaderProgram, "projection")
@@ -179,8 +180,8 @@ def initialize():
         #draw vertices
         glBindBuffer(GL_ARRAY_BUFFER, VBO)
         vertices = []
-        pos_x = ((i-first_char)*CHAR_SIZE_W)//64
-        pos_y = CHAR_SIZE_H//64
+        pos_x = ((i-first_char)*(CHAR_SIZE_W-squeeze_x))//64
+        pos_y = (CHAR_SIZE_H-int(squeeze_y/1.5))//64
         _get_rendering_vertices(
             vertices,
             pos_x, pos_y,
@@ -209,21 +210,24 @@ def render_text(window, text, n_rows, m_cols, x, y, scale, color):
     global VAO
     global CHAR_SIZE_W
     global CHAR_SIZE_H
+    global squeeze_x
+    global squeeze_y
     
     face = freetype.Face(fontfile)
-    face.set_char_size(CHAR_SIZE_W, CHAR_SIZE_H)
+    face.set_char_size((CHAR_SIZE_W-squeeze_x), CHAR_SIZE_H)
     glUniform3f(glGetUniformLocation(
         shaderProgram, "textColor"),
         color[0]/255,color[1]/255,color[2]/255)             
     glActiveTexture(GL_TEXTURE0)
 
-    #font texture size
-    font_texture_width = (CHAR_SIZE_W*(last_char-first_char))//64    
-    font_texture_height = (CHAR_SIZE_H//64) * 2
-
     # Window size
-    window_width = m_cols*CHAR_SIZE_W // 64   
-    window_height = n_rows*CHAR_SIZE_H // 64
+    window_width = (m_cols*(CHAR_SIZE_W-squeeze_x)) // 64
+    window_height = (n_rows*(CHAR_SIZE_H-squeeze_y)) // 64
+
+    glUseProgram(shaderProgram)
+    shader_projection = glGetUniformLocation(shaderProgram, "projection")
+    projection = ortho_matrix(0, window_width, 0, window_height, 1 , -1)
+    glUniformMatrix4fv(shader_projection, 1, GL_TRUE, projection)
 
     glEnable(GL_BLEND)
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -231,17 +235,16 @@ def render_text(window, text, n_rows, m_cols, x, y, scale, color):
     glBindVertexArray(VAO)
     glViewport(0, 0, window_width, window_height)
     vertices = []
-    n = 0
-    #for n in range(0, n_rows-1):
-    for m in range(0, m_cols-1):
-        _get_rendering_vertices(
-            vertices,
-            (m*CHAR_SIZE_W)//64, 
-            ((n+1)*CHAR_SIZE_H)//64, 
-            (m*CHAR_SIZE_W)//64, CHAR_SIZE_H//64,
-            CHAR_SIZE_H//64, # all characters have the same height
-            ((ord(text[n][m])-first_char+0))/(last_char-first_char), # texture left
-            ((ord(text[n][m])-first_char+1))/(last_char-first_char)) # texture right
+    for n in range(0, n_rows):
+        for m in range(0, m_cols):
+            _get_rendering_vertices(
+                vertices,
+                (squeeze_x//2+(m*(CHAR_SIZE_W-squeeze_x)))//64, 
+                window_height - (n*(CHAR_SIZE_H-squeeze_y))//64, 
+                (CHAR_SIZE_W-squeeze_x)//64, (CHAR_SIZE_H-squeeze_y)//64,
+                (CHAR_SIZE_H-squeeze_y)//64, # all characters have the same height
+                ((ord(text[n][m])-first_char+0))/(last_char-first_char), # texture left
+                ((ord(text[n][m])-first_char+1))/(last_char-first_char)) # texture right
 
     final_vertices = np.array(vertices, dtype=np.float32)
 
@@ -259,13 +262,15 @@ def render_text(window, text, n_rows, m_cols, x, y, scale, color):
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
 
+    vertex_buffer_size = final_vertices.size * 4
+
     #update content of VBO memory
     VBO2 = glGenBuffers(1)
     glBindBuffer(GL_ARRAY_BUFFER, VBO2)
-    glBufferData(GL_ARRAY_BUFFER, final_vertices.size, None, GL_DYNAMIC_DRAW) # or GL_STATIC_DRAW?
+    glBufferData(GL_ARRAY_BUFFER, vertex_buffer_size, None, GL_DYNAMIC_DRAW) # or GL_STATIC_DRAW?
     glEnableVertexAttribArray(0)
     glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 0, None) # or GL_TRUE?
-    glBufferData(GL_ARRAY_BUFFER, final_vertices.size, final_vertices, GL_DYNAMIC_DRAW)
+    glBufferData(GL_ARRAY_BUFFER, vertex_buffer_size, final_vertices, GL_DYNAMIC_DRAW)
     glBindBuffer(GL_ARRAY_BUFFER, 0)
                  
     #render quad
@@ -291,13 +296,16 @@ def main():
     glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
     glfw.window_hint(glfw.SAMPLES, 4)
 
-    n_char_cols = 20
+    n_char_cols = 30
     m_char_rows = 10
-    text = [['8' for i in range(n_char_cols)] for j in range(m_char_rows)]
+    window_width = (n_char_cols*(CHAR_SIZE_W-squeeze_x)) // 64   
+    window_height = (m_char_rows*(CHAR_SIZE_H-squeeze_y)) // 64
+
+    text = [[' ' for i in range(n_char_cols)] for j in range(m_char_rows)]
     window = glfw.create_window(
-        n_char_cols*CHAR_SIZE_W // 64, 
-        m_char_rows*CHAR_SIZE_H // 64,
-        "EXAMPLE PROGRAM", None, None)    
+        window_width//2, 
+        window_height//2,
+        "Font Test", None, None)    
     glfw.make_context_current(window)
     
     initialize()
@@ -305,7 +313,7 @@ def main():
         glfw.poll_events()
         glClearColor(0, 0, 0, 1)
         glClear(GL_COLOR_BUFFER_BIT)
-        #print_text(0, 0, "Hello World!", text)
+        print_text(0, 0, "This is a nice test!", text)
         render_text(window, text, m_char_rows, n_char_cols, 20, 40, 1, (255, 0, 0))
 
     glfw.terminate()
