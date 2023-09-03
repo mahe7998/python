@@ -5,7 +5,7 @@ from .glapp.Light import *
 from .glapp.Camera import *
 from .glapp.Axis import *
 from .glapp.XZgrid import *
-from .glapp.Material import *
+from .glapp.Shader import *
 from .glapp.PickingTexture import *
 from .glapp.Utils import *
 
@@ -47,15 +47,15 @@ class ServerFramework(PyOGLApp):
                 
     def initialize(self, fullscreen):
         self.materials = {
-            'textured': Material("shaders/textured_vertices.vs", "shaders/textured_frags.vs"),
-            'colored' : Material("shaders/color_vertices.vs", "shaders/color_frags.vs") }
+            'textured': Shader("shaders/textured_vertices.vs", "shaders/textured_frags.vs"),
+            'colored' : Shader("shaders/color_vertices.vs", "shaders/color_frags.vs") }
         if fullscreen:
             self.camera = Camera(self.desktop_size[0], self.desktop_size[1])
         else:
             self.camera = Camera(self.display_width, self.display_height)
         self.camera.relative_move(5.0, 0.0, 2.0) # Initial camera position to see Axis
         self.lights.append(Light(0, pygame.Vector3(0, 5, 0), pygame.Vector3(1, 1, 1)))
-        self.picking_object = PickingObject(Material("shaders/picking_vertices.vs", "shaders/picking_frags.vs"))
+        self.picking_object = PickingObject(Shader("shaders/picking_vertices.vs", "shaders/picking_frags.vs"))
         self.axis = Axis(pygame.Vector3(0, 0, 0), [-100.0, -100.0, -100.0, 100.0, 100.0, 100.0])
         self.axis.load(self.materials['colored'])
         self.grid = XZGrid(pygame.Vector3(0, 0, 0), 100.0)
