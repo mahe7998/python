@@ -21,22 +21,6 @@ squeeze_y = 14*64
 first_char = 32 # space
 last_char = 127
 
-def _get_rendering_vertices(vertices, xpos, ypos, w, h, top):
-    vertices.append((xpos,     ypos + (h-top) - h)) # 0, 0
-    vertices.append((xpos,     ypos + (h-top)    )) # 0, 1
-    vertices.append((xpos + w, ypos + (h-top),   )) # 1, 1
-    vertices.append((xpos,     ypos + (h-top) - h)) # 0, 0
-    vertices.append((xpos + w, ypos + (h-top),   )) # 1, 1
-    vertices.append((xpos + w, ypos + (h-top) - h)) # 1, 0
-
-def _get_rendering_texes(texes, tex_l=0.0, tex_r=1.0, tex_t=1.0, tex_b=0.0):
-    texes.append((tex_l, tex_b)) # 0, 0
-    texes.append((tex_l, tex_t)) # 0, 1
-    texes.append((tex_r, tex_t)) # 1, 1
-    texes.append((tex_l, tex_b)) # 0, 0
-    texes.append((tex_r, tex_t)) # 1, 1
-    texes.append((tex_r, tex_b)) # 1, 0
-
 VERTEX_SHADER = """
         #version 330 core
         in vec2 vertex;
@@ -218,7 +202,39 @@ def initialize():
     glBindTexture(GL_TEXTURE_2D, 0)
     glBindFramebuffer(GL_FRAMEBUFFER, 0)
 
-def print_text(text_array, x, y, text, n_rows, m_cols):
+def get_texes(texes, pos_in_tex, c):
+    global first_char
+    global last_char
+    tex_l = ((ord(c)-first_char+0))/(last_char-first_char)
+    tex_r =((ord(c)-first_char+1))/(last_char-first_char)
+
+    texes[pos_in_tex][0] = tex_l  # 0, 0
+    pos_in_tex += 1
+    texes[pos_in_tex][0] = tex_l # 0, 1
+    pos_in_tex += 1
+    texes[pos_in_tex][0] = tex_r # 1, 1
+    pos_in_tex += 1
+    texes[pos_in_tex][0] = tex_l # 0, 0
+    pos_in_tex += 1
+    texes[pos_in_tex][0] = tex_r # 1, 1
+    pos_in_tex += 1
+    texes[pos_in_tex][0] = tex_r # 1, 0
+
+def print_text(text_array, texes, x, y, text, n_rows, m_cols):
+    pos_in_tex = (y * m_cols + x) * 6
+    if y < n_rows and x < m_cols:
+        for c in text:
+            text_array[y][x] = c
+            get_texes(texes, pos_in_tex, text_array[y][x])
+            pos_in_tex += 6
+            x += 1
+            if x >= m_cols:
+                x = 0
+                y += 1
+                if y >= n_rows:
+                    break
+
+def print_text_into_array(text_array, x, y, text, n_rows, m_cols):
     if y < n_rows and x < m_cols:
         for c in text:
             text_array[y][x] = c
@@ -229,7 +245,31 @@ def print_text(text_array, x, y, text, n_rows, m_cols):
                 if y >= n_rows:
                     break
 
-def udpate_text(text, n_rows, m_cols, x, y):
+# Call after changing text_array directly
+def update_complete_text(text_array, texes, n_rows, m_cols):
+    pos_in_tex = 0
+    for n in range(0, n_rows):
+        for m in range(0, m_cols):
+            get_texes(texes, pos_in_tex, text_array[n][m])
+            pos_in_tex += 6
+
+def _get_rendering_vertices(vertices, xpos, ypos, w, h, top):
+    vertices.append((xpos,     ypos + (h-top) - h)) # 0, 0
+    vertices.append((xpos,     ypos + (h-top)    )) # 0, 1
+    vertices.append((xpos + w, ypos + (h-top),   )) # 1, 1
+    vertices.append((xpos,     ypos + (h-top) - h)) # 0, 0
+    vertices.append((xpos + w, ypos + (h-top),   )) # 1, 1
+    vertices.append((xpos + w, ypos + (h-top) - h)) # 1, 0
+
+def _get_rendering_texes(texes, tex_l=0.0, tex_r=1.0, tex_t=1.0, tex_b=0.0):
+    texes.append((tex_l, tex_b)) # 0, 0
+    texes.append((tex_l, tex_t)) # 0, 1
+    texes.append((tex_r, tex_t)) # 1, 1
+    texes.append((tex_l, tex_b)) # 0, 0
+    texes.append((tex_r, tex_t)) # 1, 1
+    texes.append((tex_r, tex_b)) # 1, 0
+
+def init_text(n_rows, m_cols, x, y):
     global CHAR_SIZE_W
     global CHAR_SIZE_H
     global squeeze_x
@@ -248,11 +288,11 @@ def udpate_text(text, n_rows, m_cols, x, y):
                 (CHAR_SIZE_H-squeeze_y)//64) # all characters have the same height
             _get_rendering_texes(
                 texes,
-                ((ord(text[n][m])-first_char+0))/(last_char-first_char), # texture left
-                ((ord(text[n][m])-first_char+1))/(last_char-first_char)) # texture right
+                ((ord(' ')-first_char+0))/(last_char-first_char), # texture left
+                ((ord(' ')-first_char+1))/(last_char-first_char)) # texture right
     return np.array(vertices, dtype=np.float32), np.array(texes, dtype=np.float32),
     
-def render_text(window, vertices, texes, n_rows, m_cols, color):
+def render_text(vertices, texes, n_rows, m_cols, color):
     global shaderProgram
     global font_texture
     global VAO
@@ -311,15 +351,12 @@ def render_text(window, vertices, texes, n_rows, m_cols, color):
     glEnableVertexAttribArray(location_id)
     glBindBuffer(GL_ARRAY_BUFFER, 0)
 
-    #render quad
+    #render vertices
     glDrawArrays(GL_TRIANGLES, 0, len(vertices))
 
     glBindVertexArray(0)
     glBindTexture(GL_TEXTURE_2D, 0)
 
-    glfw.swap_buffers(window)
-    glfw.poll_events()
-    
 def main():
     glfw.init()
 
@@ -331,7 +368,7 @@ def main():
 
     n_char_cols = 30
     m_char_rows = 10
-    text = [[' ' for i in range(n_char_cols)] for j in range(m_char_rows)]
+    text_array = [[' ' for i in range(n_char_cols)] for j in range(m_char_rows)]
 
     window_width = (n_char_cols*(CHAR_SIZE_W-squeeze_x)) // 64   
     window_height = (m_char_rows*(CHAR_SIZE_H-squeeze_y)) // 64
@@ -342,15 +379,22 @@ def main():
         "Font Test", None, None)    
     glfw.make_context_current(window)
 
-    print_text(text, 4, 4, "This is a nice test!", m_char_rows, n_char_cols)
-    vertices, texes = udpate_text(text, m_char_rows, n_char_cols, 0, 0)
+    vertices, texes = init_text(m_char_rows, n_char_cols, 0, 0)
+
+    print_text(text_array, texes, 4, 4, "This is a nice test!", m_char_rows, n_char_cols)
+    
+    #You can also do this (slower):
+    #print_text_into_array(text_array, 4, 4, "This is a nice test!", m_char_rows, n_char_cols)
+    #update_complete_text(text_array, texes, m_char_rows, n_char_cols)
 
     initialize()
     while not glfw.window_should_close(window):
         glfw.poll_events()
         glClearColor(0, 0, 0, 1)
         glClear(GL_COLOR_BUFFER_BIT)     
-        render_text(window, vertices, texes, m_char_rows, n_char_cols, (255, 0, 0))
+        render_text(vertices, texes, m_char_rows, n_char_cols, (255, 0, 0))
+        glfw.swap_buffers(window)
+        glfw.poll_events()
 
     glfw.terminate()
 
