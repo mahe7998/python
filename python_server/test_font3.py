@@ -10,7 +10,6 @@ from math import *
 
 from PIL import Image
 from PIL import ImageOps
-import time
 
 fontfile = "FreeMono.ttf"
 CHAR_SIZE_W = 30*64

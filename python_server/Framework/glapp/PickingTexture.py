@@ -14,8 +14,8 @@ class Selection:
 
 class PickingObject:
 
-    def __init__(self, picking_mat):
-        self.picking_mat = picking_mat
+    def __init__(self, picking_shader):
+        self.picking_shader = picking_shader
         self.fbo = glGenFramebuffers(1)
         self.pick_texture_id = glGenTextures(1)
         self.depth_texture_id = glGenTextures(1)
@@ -27,15 +27,15 @@ class PickingObject:
         vao_ref = glGenVertexArrays(1)
         glBindVertexArray(vao_ref)
         # Send vertices and indices
-        GraphicsData("vec3").load(self.picking_mat.program_id, "position", object.vertices)
-        GraphicsData("vec2").load(self.picking_mat.program_id, "vertex_index", object.vertex_indices)
+        GraphicsData("vec3").load(self.picking_shader.program_id, "position", object.vertices)
+        GraphicsData("vec2").load(self.picking_shader.program_id, "vertex_index", object.vertex_indices)
 
         # Set transformation matrix for each object
         transformation_mat = object.get_transformation_matrix()
-        Uniform("mat4").load(self.picking_mat.program_id, "model_mat", transformation_mat)
+        Uniform("mat4").load(self.picking_shader.program_id, "model_mat", transformation_mat)
 
         # Set object index in fragment shader
-        self.SetObjectIndex(self.picking_mat.program_id, object_index)
+        self.SetObjectIndex(self.picking_shader.program_id, object_index)
 
         # Draw vertices (always use triangles)
         glDrawArrays(GL_TRIANGLES, 0, object.length)
@@ -66,10 +66,10 @@ class PickingObject:
             raise Exception("Frame buffer error, status: " + str(fb_status))
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        glUseProgram(self.picking_mat.program_id)
+        glUseProgram(self.picking_shader.program_id)
 
-        camera.update_projection(self.picking_mat.program_id)
-        camera.update_view(self.picking_mat.program_id)
+        camera.update_projection(self.picking_shader.program_id)
+        camera.update_view(self.picking_shader.program_id)
 
         object_index = 1
         for object in objects:

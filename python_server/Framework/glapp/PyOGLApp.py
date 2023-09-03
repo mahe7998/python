@@ -43,6 +43,9 @@ class PyOGLApp():
     def initialize(self, fullscreen):
         pass
 
+    def update_view_port(self):
+        self.update_display(self.screen.get_flags() & pygame.FULLSCREEN)
+
     def update_display(self, fullscreen, event=None):
         print("Update display fullscreen is %s" % ("True" if fullscreen else "False"))
         if event != None and event.type == pygame.VIDEORESIZE:

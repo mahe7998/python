@@ -53,16 +53,20 @@ def open_window(screen_posX, screen_posY, screen_width, screen_heigh, fullscreen
                 rotation=pygame.Vector3(0, 45, 0),
                 move_rotation=pygame.Vector3(0, 0, 0)),
             'textured')
-        
+        framework.load_font("FreeMono", "fonts/FreeMono.ttf", 
+            32, 127, 30*64, 45*64, 10*64, 14*64, "FreeMono.png")
+        # Required after loading any font as it changes the OpenGL viewport
+        framework.update_view_port()
+       
 def close_window():
     global framework
     if framework != None:
         framework.terminate()
         framework = None
 
-
-open_window(200, 200, 800, 600)
-done = False
-while not done:
-    done = framework.main_loop()
-close_window()
+if __name__ == '__main__':
+    open_window(200, 200, 800, 600)
+    done = False
+    while not done:
+        done = framework.main_loop()
+    close_window()

@@ -8,6 +8,7 @@ from .glapp.XZgrid import *
 from .glapp.Shader import *
 from .glapp.PickingTexture import *
 from .glapp.Utils import *
+from .glapp.Font import *
 
 boundaries_offset = 0.2 # % of object size (0.1 = 10%) for selection cubes
 
@@ -21,6 +22,7 @@ class ServerFramework(PyOGLApp):
         self.axis = None
         self.grid = None
         self.objects = []
+        self.fonts = dict()
         self.edit_mode = EditMode.NOT_SELECTED
         self.selected_object = Selection(-1, -1)
         self.selection_cubes = []
@@ -66,6 +68,13 @@ class ServerFramework(PyOGLApp):
         # First load, then append
         object.load(self.materials[material])
         self.objects.append(object)
+
+    def load_font(self, font_name, font_file_name, first_char, last_char, char_width, char_height,
+            squeeze_width, squeeze_height, save_png_filename=None):
+        font = Font(Shader("shaders/font_vertices.vs", "shaders/font_frags.vs"), 
+            font_file_name, first_char, last_char, char_width, char_height,
+            squeeze_width, squeeze_height, save_png_filename)
+        self.fonts[font_name] = font
         
     def update_display(self, fullscreen, event=None):
         super().update_display(fullscreen, event)
