@@ -2,7 +2,6 @@ from OpenGL.GL import *
 from OpenGL.GLU import *
 from OpenGL.GL import shaders
 
-
 import glfw
 import freetype
 
@@ -52,7 +51,6 @@ FRAGMENT_SHADER = """
         """
 
 shaderProgram = None
-font_texture = None
 
 def ortho_matrix(left, right, bottom, top, near, far):
     """
@@ -69,32 +67,14 @@ def ortho_matrix(left, right, bottom, top, near, far):
         [0, 0, 0, 1]
     ], dtype=np.float32)
 
-def initialize():
-    global VERTEXT_SHADER
-    global FRAGMENT_SHADER
-    global shaderProgram
-    global font_texture
-    global squeeze_x
-    global squeeze_y
-    global VAO
-    global CHAR_SIZE_W
-    global CHAR_SIZE_H
-
-    VAO = glGenVertexArrays(1)
-    glBindVertexArray(VAO)
-    glEnable(GL_MULTISAMPLE)
-
-    #compiling shaders
-    vertexshader = shaders.compileShader(VERTEX_SHADER, GL_VERTEX_SHADER)
-    fragmentshader = shaders.compileShader(FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
-
-    #creating shaderProgram
-    shaderProgram = shaders.compileProgram(vertexshader, fragmentshader)
-    glUseProgram(shaderProgram)
-
+def load_font_texture(
+        font_file_name, first_char, last_char,
+        char_width, char_height, squeeze_width, squeeze_height,
+        save_png_filename=None):
+    
     #font texture size
-    font_texture_width = ((CHAR_SIZE_W-squeeze_x)*(last_char-first_char))//64    
-    font_texture_height = int(((CHAR_SIZE_H-squeeze_y)//64) * 1.5)
+    font_texture_width = ((char_width-squeeze_width)*(last_char-first_char))//64    
+    font_texture_height = int(((char_height-squeeze_height)//64) * 1.5)
 
     #get projection
     shader_projection = glGetUniformLocation(shaderProgram, "projection")
@@ -104,16 +84,18 @@ def initialize():
     #disable byte-alignment restriction
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
 
-    face = freetype.Face(fontfile)
-    face.set_char_size(CHAR_SIZE_W, CHAR_SIZE_H)
+    face = freetype.Face(font_file_name)
+    face.set_char_size(char_width, char_height)
 
-    # Configure VAO/VBO to load all glyphs into font_texture
-    fbo = glGenFramebuffers(1)
+    # Configure VBO to load all glyphs into font_texture
+    FBO = glGenFramebuffers(1)
     font_texture = glGenTextures(1)
     
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo)
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, FBO)
     glBindTexture(GL_TEXTURE_2D, font_texture)
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, font_texture_width, font_texture_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, None)
+    glTexImage2D(
+        GL_TEXTURE_2D, 0, GL_RGBA, font_texture_width, font_texture_height, 
+        0, GL_RGBA, GL_UNSIGNED_BYTE, None)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
     glBindTexture(GL_TEXTURE_2D, 0)
@@ -129,7 +111,8 @@ def initialize():
     glClearColor(0.0,0.0,0.0,1)
     glClear(GL_COLOR_BUFFER_BIT)
 
-    #configure VAO/VBO for texture quads    
+    # Create 2 buffers that will be used for all 6 vertices and 6 UVs 
+    # of each character of the font
     VBO = glGenBuffers(1)
     TEX = glGenBuffers(1)
     glBindVertexArray(0)
@@ -143,13 +126,26 @@ def initialize():
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
     glBindVertexArray(VAO)
+
+    # Font offset in font texture
+    pos_y = (char_height-int(squeeze_height/1.5))//64
+    
+    # Generate source texture coordinates (same for all characters)
+    glBindBuffer(GL_ARRAY_BUFFER, TEX)
+    texes = []
+    _get_rendering_texes(texes)
+    final_texes = np.array(texes, dtype=np.float32)
+    glBufferData(GL_ARRAY_BUFFER, final_texes.nbytes, final_texes, GL_STATIC_DRAW)
+    location_id = glGetAttribLocation(shaderProgram, "texCoords")
+    glVertexAttribPointer(location_id, 2, GL_FLOAT, GL_FALSE, 0, None)
+    glEnableVertexAttribArray(location_id)
+    glBindBuffer(GL_ARRAY_BUFFER, 0)
+
     for i in range(first_char, last_char):
         face.load_char(chr(i))
         glyph = face.glyph
-        #if chr(i) > ' ':
-        #    print ("Loading character '%c': width: %d, height: %d, left: %d, top: %d" % (chr(i), glyph.bitmap.width, glyph.bitmap.rows, glyph.bitmap_left, glyph.bitmap_top))
 
-        #generate texture
+        # Create texture for each character of the font
         texture = glGenTextures(1)
         glBindTexture(GL_TEXTURE_2D, texture)
         glTexImage2D(
@@ -157,17 +153,15 @@ def initialize():
             glyph.bitmap.width, glyph.bitmap.rows, 0,
             GL_RED, GL_UNSIGNED_BYTE, glyph.bitmap.buffer)
 
-        #texture options
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
 
-        #draw vertices
+        # Create 6 vertices (2 triangles) for each character of the font
         glBindBuffer(GL_ARRAY_BUFFER, VBO)
         vertices = []
-        pos_x = ((i-first_char)*(CHAR_SIZE_W-squeeze_x))//64
-        pos_y = (CHAR_SIZE_H-int(squeeze_y/1.5))//64
+        pos_x = ((i-first_char)*(char_width-squeeze_width))//64
         _get_rendering_vertices(
             vertices,
             pos_x, pos_y,
@@ -179,29 +173,37 @@ def initialize():
         glEnableVertexAttribArray(location_id)
         glBindBuffer(GL_ARRAY_BUFFER, 0)
 
-        glBindBuffer(GL_ARRAY_BUFFER, TEX)
-        texes = []
-        _get_rendering_texes(texes)
-        final_texes = np.array(texes, dtype=np.float32)
-        glBufferData(GL_ARRAY_BUFFER, final_texes.nbytes, final_texes, GL_STATIC_DRAW)
-        location_id = glGetAttribLocation(shaderProgram, "texCoords")
-        glVertexAttribPointer(location_id, 2, GL_FLOAT, GL_FALSE, 0, None)
-        glEnableVertexAttribArray(location_id)
-        glBindBuffer(GL_ARRAY_BUFFER, 0)
-
-        #render quad
+        # Render both triangles for top left and bottom right of each character
         glDrawArrays(GL_TRIANGLES, 0, len(vertices))
 
     # Code below works and is used to verify the font above works correctly
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo)
-    data = glReadPixels(0, 0, font_texture_width, font_texture_height, GL_RGBA, GL_UNSIGNED_BYTE)
-    image = Image.frombytes("RGBA", (font_texture_width, font_texture_height), data)
-    image = ImageOps.flip(image) # in my case image is flipped top-bottom for some reason
-    image.save('font.png', 'PNG')
+    if save_png_filename != None:
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, FBO)
+        data = glReadPixels(0, 0, font_texture_width, font_texture_height, GL_RGBA, GL_UNSIGNED_BYTE)
+        image = Image.frombytes("RGBA", (font_texture_width, font_texture_height), data)
+        image = ImageOps.flip(image) # in my case image is flipped top-bottom for some reason
+        image.save(save_png_filename, 'PNG')
 
     glBindTexture(GL_TEXTURE_2D, 0)
     glBindFramebuffer(GL_FRAMEBUFFER, 0)
+    return font_texture
 
+def initialize_gl():
+    global shaderProgram
+    global VAO
+
+    VAO = glGenVertexArrays(1)
+    glBindVertexArray(VAO)
+    glEnable(GL_MULTISAMPLE)
+
+    #compiling shaders
+    vertexshader = shaders.compileShader(VERTEX_SHADER, GL_VERTEX_SHADER)
+    fragmentshader = shaders.compileShader(FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
+
+    #creating shaderProgram
+    shaderProgram = shaders.compileProgram(vertexshader, fragmentshader)
+    glUseProgram(shaderProgram)
+    
 def get_texes(texes, pos_in_tex, c):
     global first_char
     global last_char
@@ -269,32 +271,26 @@ def _get_rendering_texes(texes, tex_l=0.0, tex_r=1.0, tex_t=1.0, tex_b=0.0):
     texes.append((tex_r, tex_t)) # 1, 1
     texes.append((tex_r, tex_b)) # 1, 0
 
-def init_text(n_rows, m_cols, x, y):
-    global CHAR_SIZE_W
-    global CHAR_SIZE_H
-    global squeeze_x
-    global squeeze_y
-   
+def init_text(char_width, char_height, n_rows, m_cols, squeeze_width, squeeze_height):
     vertices = []
     texes = []
-    window_height = (n_rows*(CHAR_SIZE_H-squeeze_y)) // 64
+    window_height = (n_rows*(char_height-squeeze_height)) // 64
     for n in range(0, n_rows):
         for m in range(0, m_cols):
             _get_rendering_vertices(
                 vertices,
-                (squeeze_x//2+(m*(CHAR_SIZE_W-squeeze_x)))//64, 
-                window_height - (n*(CHAR_SIZE_H-squeeze_y))//64, 
-                (CHAR_SIZE_W-squeeze_x)//64, (CHAR_SIZE_H-squeeze_y)//64,
-                (CHAR_SIZE_H-squeeze_y)//64) # all characters have the same height
+                (squeeze_width//2+(m*(char_width-squeeze_width)))//64, 
+                window_height - (n*(char_height-squeeze_height))//64, 
+                (char_width-squeeze_width)//64, (char_height-squeeze_height)//64,
+                (char_height-squeeze_height)//64) # all characters have the same height
             _get_rendering_texes(
                 texes,
                 ((ord(' ')-first_char+0))/(last_char-first_char), # texture left
                 ((ord(' ')-first_char+1))/(last_char-first_char)) # texture right
     return np.array(vertices, dtype=np.float32), np.array(texes, dtype=np.float32),
     
-def render_text(vertices, texes, n_rows, m_cols, color):
+def render_text(font_texture, vertices, texes, n_rows, m_cols, color):
     global shaderProgram
-    global font_texture
     global VAO
     global CHAR_SIZE_W
     global CHAR_SIZE_H
@@ -379,20 +375,25 @@ def main():
         "Font Test", None, None)    
     glfw.make_context_current(window)
 
-    vertices, texes = init_text(m_char_rows, n_char_cols, 0, 0)
-
+    initialize_gl()
+    font_texture = load_font_texture(
+        fontfile, first_char, last_char, 
+        CHAR_SIZE_W, CHAR_SIZE_H, squeeze_x, squeeze_y,
+        "font_texture.png")
+    vertices, texes = init_text(
+        CHAR_SIZE_W, CHAR_SIZE_H, m_char_rows, n_char_cols, 
+        squeeze_x, squeeze_y)
     print_text(text_array, texes, 4, 4, "This is a nice test!", m_char_rows, n_char_cols)
     
     #You can also do this (slower):
     #print_text_into_array(text_array, 4, 4, "This is a nice test!", m_char_rows, n_char_cols)
     #update_complete_text(text_array, texes, m_char_rows, n_char_cols)
 
-    initialize()
     while not glfw.window_should_close(window):
         glfw.poll_events()
         glClearColor(0, 0, 0, 1)
         glClear(GL_COLOR_BUFFER_BIT)     
-        render_text(vertices, texes, m_char_rows, n_char_cols, (255, 0, 0))
+        render_text(font_texture, vertices, texes, m_char_rows, n_char_cols, (255, 0, 0))
         glfw.swap_buffers(window)
         glfw.poll_events()
 
