@@ -4,6 +4,7 @@ import numpy as np
 from PIL import Image
 from PIL import ImageOps
 from .Uniform import *
+from .Utils import *
 
 class Font:
 
@@ -18,6 +19,8 @@ class Font:
         self.last_char = last_char
         self.char_width = char_width
         self.char_height = char_height
+        self.squeeze_width = squeeze_width
+        self.squeeze_height = squeeze_height
 
         glBindVertexArray(self.vao_ref)
         self.shader_program.use()
@@ -37,17 +40,17 @@ class Font:
 
         # Configure VBO to load all glyphs into font_texture
         FBO = glGenFramebuffers(1)
-        font_texture = glGenTextures(1)
+        self.font_texture = glGenTextures(1)
         
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, FBO)
-        glBindTexture(GL_TEXTURE_2D, font_texture)
+        glBindTexture(GL_TEXTURE_2D, self.font_texture)
         glTexImage2D(
             GL_TEXTURE_2D, 0, GL_RGBA, font_texture_width, font_texture_height, 
             0, GL_RGBA, GL_UNSIGNED_BYTE, None)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
         glBindTexture(GL_TEXTURE_2D, 0)
-        glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, font_texture, 0)
+        glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, self.font_texture, 0)
         
         DrawBuffers = [GL_COLOR_ATTACHMENT0]
         glDrawBuffers(1, DrawBuffers); # "1" is the size of DrawBuffers
@@ -79,7 +82,7 @@ class Font:
         # Generate source texture coordinates (same for all characters)
         glBindBuffer(GL_ARRAY_BUFFER, TEX)
         texes = []
-        self.get_rendering_texes(texes)
+        get_rendering_texes(texes)
         final_texes = np.array(texes, dtype=np.float32)
         glBufferData(GL_ARRAY_BUFFER, final_texes.nbytes, final_texes, GL_STATIC_DRAW)
         location_id = glGetAttribLocation(self.shader_program.program_id, "texCoords")
@@ -108,7 +111,7 @@ class Font:
             glBindBuffer(GL_ARRAY_BUFFER, VBO)
             vertices = []
             pos_x = ((i-first_char)*(char_width-squeeze_width))//64
-            self.get_rendering_vertices(
+            get_rendering_vertices(
                 vertices,
                 pos_x, pos_y,
                 glyph.bitmap.width, glyph.bitmap.rows, glyph.bitmap_top)
@@ -147,18 +150,4 @@ class Font:
                          [0,              0,              -2/(far-near), tz],
                          [0,              0,              0,              1]], dtype=np.float32)
 
-    def get_rendering_vertices(self, vertices, xpos, ypos, w, h, top):
-        vertices.append((xpos,     ypos + (h-top) - h)) # 0, 0
-        vertices.append((xpos,     ypos + (h-top)    )) # 0, 1
-        vertices.append((xpos + w, ypos + (h-top),   )) # 1, 1
-        vertices.append((xpos,     ypos + (h-top) - h)) # 0, 0
-        vertices.append((xpos + w, ypos + (h-top),   )) # 1, 1
-        vertices.append((xpos + w, ypos + (h-top) - h)) # 1, 0
 
-    def get_rendering_texes(self, texes, tex_l=0.0, tex_r=1.0, tex_t=1.0, tex_b=0.0):
-        texes.append((tex_l, tex_b)) # 0, 0
-        texes.append((tex_l, tex_t)) # 0, 1
-        texes.append((tex_r, tex_t)) # 1, 1
-        texes.append((tex_l, tex_b)) # 0, 0
-        texes.append((tex_r, tex_t)) # 1, 1
-        texes.append((tex_r, tex_b)) # 1, 0

@@ -44,7 +44,10 @@ class PyOGLApp():
         pass
 
     def update_view_port(self):
-        self.update_display(self.screen.get_flags() & pygame.FULLSCREEN)
+        if self.screen.get_flags() & pygame.FULLSCREEN:
+            glViewport(0, 0, self.desktop_size[0], self.desktop_size[1])
+        else:
+            glViewport(0, 0, self.display_width, self.display_height)
 
     def update_display(self, fullscreen, event=None):
         print("Update display fullscreen is %s" % ("True" if fullscreen else "False"))

@@ -9,6 +9,7 @@ from .glapp.Shader import *
 from .glapp.PickingTexture import *
 from .glapp.Utils import *
 from .glapp.Font import *
+from .glapp.TextWindow import *
 
 boundaries_offset = 0.2 # % of object size (0.1 = 10%) for selection cubes
 
@@ -18,16 +19,17 @@ class ServerFramework(PyOGLApp):
         super().__init__(screen_posX, screen_posY, screen_width, screen_height,fullscreen, display_num)
         self.camera = None
         self.lights = []
-        self.picking_object = None
+        self.picking_object = None  
         self.axis = None
         self.grid = None
         self.objects = []
-        self.fonts = dict()
         self.edit_mode = EditMode.NOT_SELECTED
         self.selected_object = Selection(-1, -1)
         self.selection_cubes = []
         self.selection_axis = []
-        glEnable(GL_CULL_FACE) # Get rid of back side
+        self.fonts = dict()
+        self.text_windows = dict()
+        glEnable(GL_CULL_FACE) # Get rid of back side       
         glEnable(GL_BLEND) # Also need to set glBlendFunc below and draw object below first!
         glEnable(GL_DEPTH_TEST)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -75,6 +77,12 @@ class ServerFramework(PyOGLApp):
             font_file_name, first_char, last_char, char_width, char_height,
             squeeze_width, squeeze_height, save_png_filename)
         self.fonts[font_name] = font
+
+    def add_text_window(self, window_name, font_name, m_cols, n_rows):
+        self.text_windows[window_name] = TextWindow(self.fonts[font_name], m_cols, n_rows)
+
+    def get_text_window(self, window_name):
+        return self.text_windows[window_name]
         
     def update_display(self, fullscreen, event=None):
         super().update_display(fullscreen, event)
@@ -197,3 +205,6 @@ class ServerFramework(PyOGLApp):
             self.display_selection_cubes(self.selection_cubes[5], object, "z", False)
             if self.selection_axis != None:
                 self.selection_axis.draw(self.camera, self.lights)
+        for _, text_window in self.text_windows.items():
+            text_window.draw((255, 0, 0))
+        self.update_view_port()
