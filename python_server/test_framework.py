@@ -54,9 +54,9 @@ def open_window(screen_posX, screen_posY, screen_width, screen_heigh, fullscreen
                 move_rotation=pygame.Vector3(0, 0, 0)),
             'textured')
         framework.load_font("FreeMono", "fonts/FreeMono.ttf", 
-            32, 127, 20*64, 30*64, 6*64, 10*64, "FreeMono.png")
+            32, 127, 20*64, 30*64, "FreeMono.png")
         framework.add_text_window("text", "FreeMono", 30, 20)
-        framework.get_text_window("text").print_text(4, 4, "This is our 1st window!")
+        framework.get_text_window("text").print_text(2, 4, "_/Jacques is good!/_")
         # Required after loading any font as it changes the OpenGL viewport
         framework.update_view_port()
        

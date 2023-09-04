@@ -73,3 +73,17 @@ def get_rendering_texes(texes, tex_l=0.0, tex_r=1.0, tex_t=1.0, tex_b=0.0):
     texes.append((tex_l, tex_b)) # 0, 0
     texes.append((tex_r, tex_t)) # 1, 1
     texes.append((tex_r, tex_b)) # 1, 0
+
+def get_ortho_matrix(left, right, bottom, top, near, far):
+    """
+    Returns an orthographic projection matrix.
+    """
+    tx = -(right + left) / (right - left)
+    ty = -(top + bottom) / (top - bottom)
+    tz = -(far + near) / (far - near)
+
+    return np.array([[2/(right-left), 0,              0,             tx],
+                        [0,              2/(top-bottom), 0,             ty],
+                        [0,              0,              -2/(far-near), tz],
+                        [0,              0,              0,              1]], dtype=np.float32)
+

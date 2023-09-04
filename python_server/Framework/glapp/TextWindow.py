@@ -7,9 +7,7 @@ class TextWindow:
     def __init__(self, font, n_cols, m_rows):
         vertices = []
         texes = []
-        char_width = font.char_width
         char_height = font.char_height
-        squeeze_width = font.squeeze_width
         squeeze_height = font.squeeze_height
         first_char = font.first_char
         last_char = font.last_char
@@ -19,13 +17,13 @@ class TextWindow:
             for m in range(0, n_cols):
                 get_rendering_vertices(
                     vertices,   
-                    (squeeze_width//2+(m*(char_width-squeeze_width)))//64, 
+                    ((m*(font.font_width)))//64, 
                     window_height - (n*(char_height-squeeze_height))//64, 
-                    (char_width-squeeze_width)//64, (char_height-squeeze_height)//64,
+                    (font.font_width)//64, (char_height-squeeze_height)//64,
                     (char_height-squeeze_height)//64) # all characters have the same height
                 get_rendering_texes(
                     texes,
-                    ((ord('X')-first_char+0))/(last_char-first_char), # texture left
+                    ((ord('X')-first_char))/(last_char-first_char), # texture left
                     ((ord('X')-first_char+1))/(last_char-first_char)) # texture right
         self.vertices = np.array(vertices, dtype=np.float32)
         self.texes = np.array(texes, dtype=np.float32)
@@ -71,7 +69,6 @@ class TextWindow:
     def draw(self, color):
         char_width = self.font.char_width
         char_height = self.font.char_height
-        squeeze_width = self.font.squeeze_width
         squeeze_height = self.font.squeeze_height
 
         glBindVertexArray(self.vao_ref)
@@ -83,11 +80,11 @@ class TextWindow:
         glActiveTexture(GL_TEXTURE0)
 
         # Window size
-        window_width = (self.n_cols*(char_width-squeeze_width)) // 64
+        window_width = (self.n_cols*(self.font.font_width)) // 64
         window_height = (self.m_rows*(char_height-squeeze_height)) // 64
 
         shader_projection = glGetUniformLocation(self.font.shader_program.program_id, "projection")
-        projection = self.font.get_ortho_matrix(0, window_width, 0, window_height, 1 , -1)
+        projection = get_ortho_matrix(0, window_width, 0, window_height, 1 , -1)
         glUniformMatrix4fv(shader_projection, 1, GL_TRUE, projection)
 
         glViewport(100, 100, window_width, window_height)

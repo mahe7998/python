@@ -72,10 +72,10 @@ class ServerFramework(PyOGLApp):
         self.objects.append(object)
 
     def load_font(self, font_name, font_file_name, first_char, last_char, char_width, char_height,
-            squeeze_width, squeeze_height, save_png_filename=None):
+            save_png_filename=None):
         font = Font(Shader("shaders/font_vertices.vs", "shaders/font_frags.vs"), 
             font_file_name, first_char, last_char, char_width, char_height,
-            squeeze_width, squeeze_height, save_png_filename)
+            save_png_filename)
         self.fonts[font_name] = font
 
     def add_text_window(self, window_name, font_name, m_cols, n_rows):

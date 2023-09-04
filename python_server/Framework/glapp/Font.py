@@ -10,7 +10,7 @@ class Font:
 
     def __init__(self, shader_program, 
             font_file_name, first_char, last_char, char_width, char_height,
-            squeeze_width, squeeze_height, save_png_filename=None):
+            save_png_filename=None):
  
         self.shader_program = shader_program
         self.vao_ref = glGenVertexArrays(1)
@@ -19,24 +19,25 @@ class Font:
         self.last_char = last_char
         self.char_width = char_width
         self.char_height = char_height
-        self.squeeze_width = squeeze_width
-        self.squeeze_height = squeeze_height
 
         glBindVertexArray(self.vao_ref)
         self.shader_program.use()
 
-        font_texture_width = ((char_width-squeeze_width)*(last_char-first_char))//64    
-        font_texture_height = int(((char_height-squeeze_height)//64) * 1.5)
+        face = freetype.Face(font_file_name)
+        face.set_char_size(char_width, char_height)
+        self.font_width = face.size.max_advance
+        self.font_height = face.height
+        self.squeeze_height = char_height - face.height
+
+        font_texture_width = ((face.size.max_advance)*(last_char-first_char))//64    
+        font_texture_height = int(((self.font_height)//64) * 1.5)
 
         # set ortho projection matrix in shader
-        projection_mat = self.get_ortho_matrix(0, font_texture_width, font_texture_height, 0, 1 , -1)
+        projection_mat = get_ortho_matrix(0, font_texture_width, font_texture_height, 0, 1 , -1)
         Uniform("mat4").load(self.shader_program.program_id, "projection", projection_mat)
    
         #disable byte-alignment restriction
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
-
-        face = freetype.Face(font_file_name)
-        face.set_char_size(char_width, char_height)
 
         # Configure VBO to load all glyphs into font_texture
         FBO = glGenFramebuffers(1)
@@ -77,7 +78,15 @@ class Font:
         glBindVertexArray(self.vao_ref)
 
         # Font offset in font texture
-        pos_y = (char_height-int(squeeze_height/1.5))//64
+        max_bitmap_top = 0
+        for i in range(first_char, last_char):
+            face.load_char(chr(i))
+            glyph = face.glyph
+            print("char '%c' : glyph.bitmap_top = %d, glyph.bitmap.rows = %d, pos = %d, top+rows = %d" % 
+                  (chr(i), glyph.bitmap_top, glyph.bitmap.rows, (char_height-int(self.squeeze_height/1.5))//64, glyph.bitmap_top + glyph.bitmap.rows))
+            if glyph.bitmap_top > max_bitmap_top:
+                max_bitmap_top = glyph.bitmap_top
+        pos_y = max_bitmap_top - 1
         
         # Generate source texture coordinates (same for all characters)
         glBindBuffer(GL_ARRAY_BUFFER, TEX)
@@ -88,7 +97,7 @@ class Font:
         location_id = glGetAttribLocation(self.shader_program.program_id, "texCoords")
         glVertexAttribPointer(location_id, 2, GL_FLOAT, GL_FALSE, 0, None)
         glEnableVertexAttribArray(location_id)
-        glBindBuffer(GL_ARRAY_BUFFER, 0)    
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
 
         for i in range(first_char, last_char):
             face.load_char(chr(i))
@@ -110,10 +119,10 @@ class Font:
             # Create 6 vertices (2 triangles) for each character of the font
             glBindBuffer(GL_ARRAY_BUFFER, VBO)
             vertices = []
-            pos_x = ((i-first_char)*(char_width-squeeze_width))//64
+            pos_x = ((i-first_char)*(self.font_width))//64
             get_rendering_vertices(
                 vertices,
-                pos_x, pos_y,
+                pos_x + glyph.bitmap_left, pos_y,
                 glyph.bitmap.width, glyph.bitmap.rows, glyph.bitmap_top)
             final_vertices = np.array(vertices, dtype=np.float32)
             glBufferData(GL_ARRAY_BUFFER, final_vertices.nbytes, final_vertices, GL_DYNAMIC_DRAW)
@@ -136,18 +145,4 @@ class Font:
         glBindTexture(GL_TEXTURE_2D, 0)
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
         glBindVertexArray(0)
-
-    def get_ortho_matrix(self, left, right, bottom, top, near, far):
-        """
-        Returns an orthographic projection matrix.
-        """
-        tx = -(right + left) / (right - left)
-        ty = -(top + bottom) / (top - bottom)
-        tz = -(far + near) / (far - near)
-
-        return np.array([[2/(right-left), 0,              0,             tx],
-                         [0,              2/(top-bottom), 0,             ty],
-                         [0,              0,              -2/(far-near), tz],
-                         [0,              0,              0,              1]], dtype=np.float32)
-
 
