@@ -9,7 +9,7 @@
             "type": "python",
             "request": "launch",
             "cwd":"${workspaceFolder}",
-            "program": "server3D.py",
+            "program": "test_framework.py",
             "console": "integratedTerminal",
             "justMyCode": true
         },
