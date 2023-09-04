@@ -78,31 +78,41 @@ class ServerFramework(PyOGLApp):
             save_png_filename)
         self.fonts[font_name] = font
 
-    def add_text_window(self, window_name, font_name, m_cols, n_rows):
-        self.text_windows[window_name] = TextWindow(self.fonts[font_name], m_cols, n_rows)
+    def add_text_window(self, window_name, font_name, pos_x, pos_y, alignment, m_cols, n_rows):
+        if self.screen.get_flags() & pygame.FULLSCREEN:
+            self.text_windows[window_name] = TextWindow(self.fonts[font_name], pos_x, pos_y, alignment, 
+                m_cols, n_rows, self.desktop_size[0], self.desktop_size[1])
+        else:
+            self.text_windows[window_name] = TextWindow(self.fonts[font_name], pos_x, pos_y, alignment, 
+                m_cols, n_rows, self.display_width, self.display_height)
 
     def get_text_window(self, window_name):
         return self.text_windows[window_name]
-        
+    
+    def update_display_size(self, display_width, display_height):
+        self.camera.update_perspective(display_width, display_height)
+        for _, text_window in self.text_windows.items():
+            text_window.update_display_size(display_width, display_height)
+
     def update_display(self, fullscreen, event=None):
         super().update_display(fullscreen, event)
         if event != None and event.type == pygame.VIDEORESIZE and not fullscreen:
             if event.w != self.desktop_size[0] and event.h != self.desktop_size[1]:
                 print("camera.update_perspective (resize event): " + str(event.w) + ", " + str(event.h))
-                self.camera.update_perspective(event.w, event.h)
+                self.update_display_size(event.w, event.h)
             else:
                 print("camera.update_perspective (resize event after full screen): " + str(self.display_width) + ", " + str(self.display_height))
-                self.camera.update_perspective(self.display_width, self.display_height)
+                self.update_display_size(self.display_width, self.display_height)
         elif event == None:
             if fullscreen:
                 print("camera.update_perspective (full screen): " + str(self.desktop_size[0]) + ", " + str(self.desktop_size[1]))
-                self.camera.update_perspective(self.desktop_size[0], self.desktop_size[1])
+                self.update_display_size(self.desktop_size[0], self.desktop_size[1])
             else:
                 print("camera.update_perspective (resume window display): " + str(self.display_width) + ", " + str(self.display_height))
-                self.camera.update_perspective(self.display_width, self.display_height)
+                self.update_display_size(self.display_width, self.display_height)
         elif event != None and fullscreen:
             print("camera.update_perspective (full screen buttom): " + str(event.w) + ", " + str(event.h))
-            self.camera.update_perspective( self.desktop_size[0],  self.desktop_size[1])
+            self.update_display_size( elf.desktop_size[0],  self.desktop_size[1])
 
     def update(self):
         self.camera.update_mouse_and_keyboard(
@@ -207,4 +217,5 @@ class ServerFramework(PyOGLApp):
                 self.selection_axis.draw(self.camera, self.lights)
         for _, text_window in self.text_windows.items():
             text_window.draw((255, 0, 0))
-        self.update_view_port()
+
+

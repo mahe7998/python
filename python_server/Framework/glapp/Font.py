@@ -16,24 +16,36 @@ class Font:
         self.vao_ref = glGenVertexArrays(1)
         self.font_file_name = font_file_name
         self.first_char = first_char
-        self.last_char = last_char
-        self.char_width = char_width
-        self.char_height = char_height
+        self.last_char = last_char + 1
+        self.char_width = char_width * 64 # Internally, all font sizes are in 64ths of a pixel
+        self.char_height = char_height * 64
 
         glBindVertexArray(self.vao_ref)
         self.shader_program.use()
 
         face = freetype.Face(font_file_name)
-        face.set_char_size(char_width, char_height)
+        face.set_char_size(self.char_width, self.char_height)
         self.font_width = face.size.max_advance
         self.font_height = face.height
-        self.squeeze_height = char_height - face.height
 
-        font_texture_width = ((face.size.max_advance)*(last_char-first_char))//64    
-        font_texture_height = int(((self.font_height)//64) * 1.5)
+        # Font offset in font texture
+        max_bitmap_top = 0
+        min_bitmap_bottom = 0
+        for i in range(self.first_char, self.last_char):
+            face.load_char(chr(i))
+            glyph = face.glyph
+            #print("char '" + chr(i) + "', bitmap top: " + str(glyph.bitmap_top) + ", bitmap rows: " + str(glyph.bitmap.rows))
+            if glyph.bitmap_top > max_bitmap_top:
+                max_bitmap_top = glyph.bitmap_top
+            if glyph.bitmap_top - glyph.bitmap.rows < min_bitmap_bottom:
+                min_bitmap_bottom = glyph.bitmap_top - glyph.bitmap.rows
+        pos_y = max_bitmap_top
+
+        self.font_texture_width = (self.font_width*(self.last_char-self.first_char))//64    
+        self.font_texture_height = max_bitmap_top - min_bitmap_bottom
 
         # set ortho projection matrix in shader
-        projection_mat = get_ortho_matrix(0, font_texture_width, font_texture_height, 0, 1 , -1)
+        projection_mat = get_ortho_matrix(0, self.font_texture_width, self.font_texture_height, 0, 1 , -1)
         Uniform("mat4").load(self.shader_program.program_id, "projection", projection_mat)
    
         #disable byte-alignment restriction
@@ -46,7 +58,7 @@ class Font:
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, FBO)
         glBindTexture(GL_TEXTURE_2D, self.font_texture)
         glTexImage2D(
-            GL_TEXTURE_2D, 0, GL_RGBA, font_texture_width, font_texture_height, 
+            GL_TEXTURE_2D, 0, GL_RGBA, self.font_texture_width, self.font_texture_height, 
             0, GL_RGBA, GL_UNSIGNED_BYTE, None)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
@@ -59,7 +71,7 @@ class Font:
         if fb_status != GL_FRAMEBUFFER_COMPLETE:
             raise Exception("Frame buffer error, status: " + str(fb_status))
 
-        glViewport(0, 0, font_texture_width, font_texture_height)
+        glViewport(0, 0, self.font_texture_width, self.font_texture_height)
         glClearColor(0.0, 0.0, 0.0, 1.0)
         glClear(GL_COLOR_BUFFER_BIT)
 
@@ -76,17 +88,6 @@ class Font:
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
         glBindVertexArray(self.vao_ref)
-
-        # Font offset in font texture
-        max_bitmap_top = 0
-        for i in range(first_char, last_char):
-            face.load_char(chr(i))
-            glyph = face.glyph
-            print("char '%c' : glyph.bitmap_top = %d, glyph.bitmap.rows = %d, pos = %d, top+rows = %d" % 
-                  (chr(i), glyph.bitmap_top, glyph.bitmap.rows, (char_height-int(self.squeeze_height/1.5))//64, glyph.bitmap_top + glyph.bitmap.rows))
-            if glyph.bitmap_top > max_bitmap_top:
-                max_bitmap_top = glyph.bitmap_top
-        pos_y = max_bitmap_top - 1
         
         # Generate source texture coordinates (same for all characters)
         glBindBuffer(GL_ARRAY_BUFFER, TEX)
@@ -99,7 +100,7 @@ class Font:
         glEnableVertexAttribArray(location_id)
         glBindBuffer(GL_ARRAY_BUFFER, 0)
 
-        for i in range(first_char, last_char):
+        for i in range(self.first_char, self.last_char):
             face.load_char(chr(i))
             glyph = face.glyph
 
@@ -119,7 +120,7 @@ class Font:
             # Create 6 vertices (2 triangles) for each character of the font
             glBindBuffer(GL_ARRAY_BUFFER, VBO)
             vertices = []
-            pos_x = ((i-first_char)*(self.font_width))//64
+            pos_x = ((i-self.first_char)*(self.font_width))//64
             get_rendering_vertices(
                 vertices,
                 pos_x + glyph.bitmap_left, pos_y,
@@ -137,8 +138,8 @@ class Font:
         # Code below works and is used to verify the font above works correctly
         if save_png_filename != None:
             glBindFramebuffer(GL_READ_FRAMEBUFFER, FBO)
-            data = glReadPixels(0, 0, font_texture_width, font_texture_height, GL_RGBA, GL_UNSIGNED_BYTE)
-            image = Image.frombytes("RGBA", (font_texture_width, font_texture_height), data)
+            data = glReadPixels(0, 0, self.font_texture_width, self.font_texture_height, GL_RGBA, GL_UNSIGNED_BYTE)
+            image = Image.frombytes("RGBA", (self.font_texture_width, self.font_texture_height), data)
             image = ImageOps.flip(image) # in my case image is flipped top-bottom for some reason
             image.save(save_png_filename, 'PNG')
 

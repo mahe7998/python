@@ -9,6 +9,13 @@ class EditMode(Enum):
     # See https://bugs.python.org/issue30545 for explanations
     def __eq__(self, other):
         return self.value == other.value
+    
+class Alignments(Enum):
+    TOP_LEFT, TOP_CENTER, TOP_RIGHT, CENTER_LEFT, CENTER, CENTER_RIGHT, BOTTOM_LEFT, BOTTOM_CENTER, BOTTOM_RIGHT = range(0, 9)
+
+    # See https://bugs.python.org/issue30545 for explanations
+    def __eq__(self, other):
+        return self.value == other.value
 
 def format_vertices(vertices, triangles):
     all_triangles = []
@@ -81,9 +88,8 @@ def get_ortho_matrix(left, right, bottom, top, near, far):
     tx = -(right + left) / (right - left)
     ty = -(top + bottom) / (top - bottom)
     tz = -(far + near) / (far - near)
-
-    return np.array([[2/(right-left), 0,              0,             tx],
-                        [0,              2/(top-bottom), 0,             ty],
-                        [0,              0,              -2/(far-near), tz],
-                        [0,              0,              0,              1]], dtype=np.float32)
+    return np.array([[2/(right-left), 0, 0, tx],
+                     [0, 2/(top-bottom), 0, ty],
+                     [0, 0, -2/(far-near), tz],
+                     [0, 0, 0, 1]], dtype=np.float32)
 

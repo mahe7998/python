@@ -4,34 +4,79 @@ from .Utils import *
 
 class TextWindow:
 
-    def __init__(self, font, n_cols, m_rows):
-        vertices = []
-        texes = []
-        char_height = font.char_height
-        squeeze_height = font.squeeze_height
+    def __init__(self, font, pos_x, pos_y, alignment, n_cols, m_rows, display_width, display_height):
+        self.font = font
+        self.pos_x = pos_x
+        self.pos_y = pos_y
+        self.m_rows = m_rows
+        self.n_cols = n_cols
+        self.alignment = alignment
+
+        self.vao_ref = glGenVertexArrays(1) 
+        self.text_array = [['X' for n in range(n_cols)] for m in range(m_rows)]
+        self.projection = get_ortho_matrix(0, display_width, 0, display_height, 1 , -1)
+
+        self.vertices = self.update_vertices(display_width, display_height)
         first_char = font.first_char
         last_char = font.last_char
-
-        window_height = (m_rows*(char_height-squeeze_height)) // 64
+        texes = []
         for n in range(0, m_rows):
             for m in range(0, n_cols):
-                get_rendering_vertices(
-                    vertices,   
-                    ((m*(font.font_width)))//64, 
-                    window_height - (n*(char_height-squeeze_height))//64, 
-                    (font.font_width)//64, (char_height-squeeze_height)//64,
-                    (char_height-squeeze_height)//64) # all characters have the same height
                 get_rendering_texes(
                     texes,
                     ((ord('X')-first_char))/(last_char-first_char), # texture left
                     ((ord('X')-first_char+1))/(last_char-first_char)) # texture right
-        self.vertices = np.array(vertices, dtype=np.float32)
         self.texes = np.array(texes, dtype=np.float32)
-        self.font = font
-        self.text_array = [['X' for n in range(n_cols)] for m in range(m_rows)]
-        self.m_rows = m_rows
-        self.n_cols = n_cols
-        self.vao_ref = glGenVertexArrays(1)
+        
+    def update_vertices(self, display_width, display_height):
+        vertices = []
+        char_width = self.font.font_width // 64
+        char_height = self.font.font_texture_height
+        window_width = self.n_cols * char_width
+        window_height = self.m_rows * char_height
+
+        if self.alignment == Alignments.TOP_RIGHT:
+            pos_x = display_width - window_width - self.pos_x
+            pos_y = display_height  + char_height - window_height - self.pos_y
+        elif self.alignment == Alignments.BOTTOM_RIGHT:
+            pos_x = display_width - window_width - self.pos_x
+            pos_y = self.pos_y + char_height
+        if self.alignment == Alignments.CENTER_RIGHT:
+            pos_x = display_width - window_width - self.pos_x
+            pos_y = display_height//2 + char_height - window_height//2 - self.pos_y
+        elif self.alignment == Alignments.TOP_LEFT:
+            pos_x = self.pos_x
+            pos_y = display_height + char_height - window_height - self.pos_y
+        elif self.alignment == Alignments.BOTTOM_LEFT:
+            pos_x = self.pos_x
+            pos_y = self.pos_y + char_height
+        elif self.alignment == Alignments.CENTER_LEFT:
+            pos_x = self.pos_x
+            pos_y = display_height//2 + char_height - window_height//2 - self.pos_y
+        elif self.alignment == Alignments.TOP_CENTER:
+            pos_x = display_width//2 - window_width//2 - self.pos_x
+            pos_y = display_height + char_height - window_height - self.pos_y
+        elif self.alignment == Alignments.BOTTOM_CENTER:
+            pos_x = display_width//2 - window_width//2 - self.pos_x
+            pos_y = self.pos_y + char_height
+        elif self.alignment == Alignments.CENTER:
+            pos_x = display_width//2 - window_width//2 - self.pos_x
+            pos_y = display_height//2 + char_height - window_height//2 - self.pos_y
+        else:
+            raise Exception("Alignment not implemented yet")
+        
+        for n in range(0, self.m_rows):
+            for m in range(0, self.n_cols):
+                get_rendering_vertices(
+                    vertices,   
+                    pos_x + m * char_width, 
+                    pos_y + n * char_height, 
+                    char_width, char_height, char_height)
+        return np.array(vertices, dtype=np.float32)
+    
+    def update_display_size(self, display_width, display_height):
+        self.vertices = self.update_vertices(display_width, display_height)
+        self.projection = get_ortho_matrix(0, display_width, 0, display_height, 1 , -1)
 
     def set_texes(self, pos_in_tex, c):
         first_char = self.font.first_char
@@ -67,9 +112,6 @@ class TextWindow:
                         break
 
     def draw(self, color):
-        char_width = self.font.char_width
-        char_height = self.font.char_height
-        squeeze_height = self.font.squeeze_height
 
         glBindVertexArray(self.vao_ref)
         self.font.shader_program.use()
@@ -79,15 +121,8 @@ class TextWindow:
             color[0]/255,color[1]/255,color[2]/255)             
         glActiveTexture(GL_TEXTURE0)
 
-        # Window size
-        window_width = (self.n_cols*(self.font.font_width)) // 64
-        window_height = (self.m_rows*(char_height-squeeze_height)) // 64
-
         shader_projection = glGetUniformLocation(self.font.shader_program.program_id, "projection")
-        projection = get_ortho_matrix(0, window_width, 0, window_height, 1 , -1)
-        glUniformMatrix4fv(shader_projection, 1, GL_TRUE, projection)
-
-        glViewport(100, 100, window_width, window_height)
+        glUniformMatrix4fv(shader_projection, 1, GL_TRUE, self.projection)
 
         fb_status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
         if fb_status != GL_FRAMEBUFFER_COMPLETE:
