@@ -82,6 +82,8 @@ class Font:
         glBindVertexArray(0)
 
         Uniform("vec3").load(self.shader_program.program_id, "textColor", [1.0, 1.0, 1.0])
+        #Uniform("vec4").load(self.shader_program.program_id, "backgroundColor", [1.0, 1.0, 1.0, 1.0])
+        Uniform("int").load(self.shader_program.program_id, "transparent", 1)
         glActiveTexture(GL_TEXTURE0)
 
         glEnable(GL_BLEND)

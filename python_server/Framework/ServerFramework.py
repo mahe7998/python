@@ -78,13 +78,13 @@ class ServerFramework(PyOGLApp):
             save_png_filename)
         self.fonts[font_name] = font
 
-    def add_text_window(self, window_name, font_name, pos_x, pos_y, alignment, m_cols, n_rows):
+    def add_text_window(self, window_name, font_name, pos_x, pos_y, alignment, m_cols, n_rows, text_color, background_color):
         if self.screen.get_flags() & pygame.FULLSCREEN:
             self.text_windows[window_name] = TextWindow(self.fonts[font_name], pos_x, pos_y, alignment, 
-                m_cols, n_rows, self.desktop_size[0], self.desktop_size[1])
+                m_cols, n_rows, text_color, background_color, self.desktop_size[0], self.desktop_size[1])
         else:
             self.text_windows[window_name] = TextWindow(self.fonts[font_name], pos_x, pos_y, alignment, 
-                m_cols, n_rows, self.display_width, self.display_height)
+                m_cols, n_rows, text_color, background_color, self.display_width, self.display_height)
 
     def get_text_window(self, window_name):
         return self.text_windows[window_name]
@@ -216,6 +216,6 @@ class ServerFramework(PyOGLApp):
             if self.selection_axis != None:
                 self.selection_axis.draw(self.camera, self.lights)
         for _, text_window in self.text_windows.items():
-            text_window.draw((255, 0, 0))
+            text_window.draw()
 
 

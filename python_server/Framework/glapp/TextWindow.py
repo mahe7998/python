@@ -1,16 +1,20 @@
 from OpenGL.GL import *
 from .Font import Font
 from .Utils import *
+from .Uniform import *
 
 class TextWindow:
 
-    def __init__(self, font, pos_x, pos_y, alignment, n_cols, m_rows, display_width, display_height):
+    def __init__(self, font, pos_x, pos_y, alignment, n_cols, m_rows, 
+                 text_color, background_color, display_width, display_height):
         self.font = font
         self.pos_x = pos_x
         self.pos_y = pos_y
+        self.alignment = alignment
         self.m_rows = m_rows
         self.n_cols = n_cols
-        self.alignment = alignment
+        self.text_color = text_color
+        self.background_color = background_color
 
         self.vao_ref = glGenVertexArrays(1) 
         self.text_array = [['X' for n in range(n_cols)] for m in range(m_rows)]
@@ -111,14 +115,14 @@ class TextWindow:
                     if y >= self.m_rows:
                         break
 
-    def draw(self, color):
+    def draw(self):
 
         glBindVertexArray(self.vao_ref)
         self.font.shader_program.use()
-
-        glUniform3f(glGetUniformLocation(
-            self.font.shader_program.program_id , "textColor"),
-            color[0]/255,color[1]/255,color[2]/255)             
+           
+        Uniform("vec3").load(self.font.shader_program.program_id, "textColor", self.text_color)
+        Uniform("vec4").load(self.font.shader_program.program_id, "backgroundColor", self.background_color)
+        Uniform("int").load(self.font.shader_program.program_id, "transparent", 0)
         glActiveTexture(GL_TEXTURE0)
 
         shader_projection = glGetUniformLocation(self.font.shader_program.program_id, "projection")

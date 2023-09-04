@@ -18,6 +18,8 @@ class Uniform():
             glUniformMatrix4fv(self.variable_id, 1, GL_TRUE, self.data)
         elif self.data_type == "uint":
             glUniform1ui(self.variable_id, self.data)
+        elif self.data_type == "int":
+            glUniform1i(self.variable_id, self.data)
         elif self.data_type == "sample2D":
             texture_obj, texture_unit = self.data
             glActiveTexture(GL_TEXTURE0 + texture_unit)
