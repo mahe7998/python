@@ -112,7 +112,7 @@ class ServerFramework(PyOGLApp):
                 self.update_display_size(self.display_width, self.display_height)
         elif event != None and fullscreen:
             print("camera.update_perspective (full screen buttom): " + str(event.w) + ", " + str(event.h))
-            self.update_display_size( elf.desktop_size[0],  self.desktop_size[1])
+            self.update_display_size(self.desktop_size[0], self.desktop_size[1])
 
     def update(self):
         self.camera.update_mouse_and_keyboard(
