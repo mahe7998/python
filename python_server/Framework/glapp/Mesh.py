@@ -37,7 +37,7 @@ class Mesh:
         self.selected = False
         self.selection_color_mask = [0.5, 0.5, 1.0, 1.0]
         self.boundaries = boundaries
-        self.last_mouse_pos = pygame.math.Vector2(0, 0)
+        self.last_mouse_pos = (0, 0)
         self.mouse_sensitivity = 0.01
         self.vao_ref = glGenVertexArrays(1)
         self.vertex_indices = [] # Only used for selection in 3D space
@@ -63,7 +63,7 @@ class Mesh:
         # Mouse
         mouse_pos = pygame.mouse.get_pos()
         if track_mouse and selected_object.cube_index != -1:
-            mouse_change = self.last_mouse_pos - pygame.math.Vector2(mouse_pos)
+            mouse_change = self.last_mouse_pos - mouse_pos
             format_to_modify = None
             if edit_mode == EditMode.POSITION:
                 format_to_modify = self.location

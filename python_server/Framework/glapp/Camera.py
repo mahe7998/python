@@ -8,11 +8,12 @@ import numpy as np
 from .Transformations import *
 from .Uniform import *
 from .PickingTexture import *
+from .Utils import *
 
 class Camera:
     def __init__(self, width, height):
         self.transformation = identity_mat()
-        self.last_mouse_pos = pygame.math.Vector2(0, 0)
+        self.last_mouse_pos = (0, 0)
         self.mouse_sensitivity = 0.1
         self.key_sensitivity = 0.01
         self.update_perspective(width, height)
@@ -33,9 +34,9 @@ class Camera:
              [0,   0, -1,  0]], np.float32)
 
     def rotate(self, yaw, pitch):
-        forward = pygame.Vector3(self.transformation[0,2], self.transformation[1,2], self.transformation[2,2])
-        up = pygame.Vector3(0, 1, 0)
-        angle = forward.angle_to(up)
+        forward = (self.transformation[0,2], self.transformation[1,2], self.transformation[2,2])
+        up = (0, 1, 0)
+        angle = degrees(angle_to(forward, up))
         self.transformation = rotate(self.transformation, yaw, "Y", False)
         if (angle < 170 and pitch > 0) or (angle > 30.0 and pitch < 0):
             self.transformation = rotate(self.transformation, pitch, "X")
