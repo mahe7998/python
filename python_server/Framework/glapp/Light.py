@@ -1,12 +1,11 @@
-import pygame
 from .Transformations import *
 from .Uniform import *
 
 class Light:
     def __init__(
             self, light_number, 
-            position=pygame.Vector3(0, 0, 0),
-            color=pygame.Vector3(1, 1, 1)):
+            position=(0, 0, 0),
+            color=(1, 1, 1)):
         
         self.transformation = identity_mat()
         self.position = position

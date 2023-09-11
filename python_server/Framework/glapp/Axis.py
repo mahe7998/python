@@ -2,10 +2,10 @@ from .Mesh import *
 
 class Axis(Mesh):
     def __init__(self,
-            location=pygame.Vector3(0, 0, 0),
+            location=(0, 0, 0),
             boundaries=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-            scale=pygame.Vector3(1.0, 1.0, 1.0),
-            rotation=pygame.Vector3(0, 0, 0),):
+            scale=(1.0, 1.0, 1.0),
+            rotation=(0, 0, 0),):
         
         self.vertices = [[ boundaries[0],           0.0,           0.0],
                          [ boundaries[3],           0.0,           0.0],
@@ -32,6 +32,6 @@ class Axis(Mesh):
             location=location,
             scale=scale,
             rotation=rotation,
-            move_rotation=pygame.Vector3(0, 0, 0),
-            move_location=pygame.Vector3(0, 0, 0),
+            move_rotation=(0, 0, 0),
+            move_location=(0, 0, 0),
             boundaries=boundaries)

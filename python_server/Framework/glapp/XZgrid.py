@@ -33,10 +33,10 @@ class XZGrid(Mesh):
             vertex_colors=colors,
             gl_draw_type=GL_LINES,
             location=location,
-            scale=pygame.Vector3(1.0, 1.0, 1.0),
-            rotation=pygame.Vector3(0, 0, 0),
-            move_rotation=pygame.Vector3(0, 0, 0),
-            move_location=pygame.Vector3(0, 0, 0))
+            scale=(1.0, 1.0, 1.0),
+            rotation=(0, 0, 0),
+            move_rotation=(0, 0, 0),
+            move_location=(0, 0, 0))
 
     def get_transformation_matrix(self):
         return identity_mat()

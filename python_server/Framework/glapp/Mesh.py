@@ -1,5 +1,4 @@
 from OpenGL import *
-import pygame
 from .GraphicsData import *
 from .Uniform import *
 from .Transformations import *
@@ -16,11 +15,11 @@ class Mesh:
             vertex_uvs=None,
             vertex_colors=None,
             gl_draw_type=GL_TRIANGLES,
-            location=pygame.Vector3(0, 0, 0),
-            scale=pygame.Vector3(1.0, 1.0, 1.0),
-            rotation=pygame.Vector3(0, 0, 0),
-            move_rotation=pygame.Vector3(0, 0, 0),
-            move_location=pygame.Vector3(0, 0, 0),
+            location=(0, 0, 0),
+            scale=(1.0, 1.0, 1.0),
+            rotation=(0, 0, 0),
+            move_rotation=(0, 0, 0),
+            move_location=(0, 0, 0),
             boundaries=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]):
 
         self.vertices = vertices
@@ -42,7 +41,7 @@ class Mesh:
         self.vao_ref = glGenVertexArrays(1)
         self.vertex_indices = [] # Only used for selection in 3D space
         for i in range(len(vertices)):
-            self.vertex_indices.append([i // 3, 0])
+            self.vertex_indices.append([i//3, 0])
         self.image = None
         if image_filename is not None:
             self.image = Texture(image_filename)
@@ -63,20 +62,27 @@ class Mesh:
         # Mouse
         mouse_pos = pygame.mouse.get_pos()
         if track_mouse and selected_object.cube_index != -1:
-            mouse_change = self.last_mouse_pos - mouse_pos
-            format_to_modify = None
+            mouse_change = (self.last_mouse_pos[0]-mouse_pos[0],
+                            self.last_mouse_pos[1]-mouse_pos[1])
+            value_to_modify = None
             if edit_mode == EditMode.POSITION:
-                format_to_modify = self.location
+                value_to_modify = self.location
             elif edit_mode == EditMode.SCALE:
-                format_to_modify = self.scale
+                value_to_modify = self.scale
             else:
                 raise Exception("Not a valid editing mode!")
+            delta_pos = (mouse_change[0] + mouse_change[1]) * self.mouse_sensitivity
             if selected_object.cube_index == 0 or selected_object.cube_index == 3:
-                format_to_modify[0] -= (mouse_change.x + mouse_change.y) * self.mouse_sensitivity
+                value_to_modify = (value_to_modify[0] + delta_pos, value_to_modify[1], value_to_modify[2])
             elif selected_object.cube_index == 1 or selected_object.cube_index == 4:
-                format_to_modify[1] += (mouse_change.x + mouse_change.y) * self.mouse_sensitivity
+                value_to_modify = (value_to_modify[0], value_to_modify[1] + delta_pos, value_to_modify[2])
             elif selected_object.cube_index == 2 or selected_object.cube_index == 5:
-                format_to_modify[2] -= (mouse_change.x + mouse_change.y) * self.mouse_sensitivity
+                value_to_modify = (value_to_modify[0], value_to_modify[1], value_to_modify[2] + delta_pos)
+            self.last_mouse_pos = mouse_pos
+            if edit_mode == EditMode.POSITION:
+                self.location = value_to_modify
+            elif edit_mode == EditMode.SCALE:
+                self.scale = value_to_modify
         self.last_mouse_pos = mouse_pos
 
     def set_transfornation(self, location, scale, rotation):
@@ -86,11 +92,11 @@ class Mesh:
 
     def get_transformation_matrix(self):
         transformation_mat = identity_mat()
-        transformation_mat = translate(transformation_mat, self.location.x, self.location.y, self.location.z)
-        transformation_mat = rotateA(transformation_mat, self.rotation[0], pygame.Vector3(1, 0, 0))
-        transformation_mat = rotateA(transformation_mat, self.rotation[1], pygame.Vector3(0, 1, 0))
-        transformation_mat = rotateA(transformation_mat, self.rotation[2], pygame.Vector3(0, 0, 1))
-        transformation_mat = scale3(transformation_mat, self.scale.x, self.scale.y, self.scale.z)
+        transformation_mat = translate(transformation_mat, self.location[0], self.location[1], self.location[2])
+        transformation_mat = rotateA(transformation_mat, self.rotation[0], (1, 0, 0))
+        transformation_mat = rotateA(transformation_mat, self.rotation[1], (0, 1, 0))
+        transformation_mat = rotateA(transformation_mat, self.rotation[2], (0, 0, 1))
+        transformation_mat = scale3(transformation_mat, self.scale[0], self.scale[1], self.scale[2])
         return transformation_mat
 
     def update_transformation(self):
@@ -117,5 +123,9 @@ class Mesh:
         glBindVertexArray(self.vao_ref)
         glDrawArrays(self.gl_draw_type, 0, self.length)
         # Animation needs to be done after to match related object (axis) location
-        self.rotation += self.move_rotation
-        self.location += self.move_location
+        self.rotation = (self.rotation[0]+self.move_rotation[0], 
+                         self.rotation[1]+self.move_rotation[1], 
+                         self.rotation[2]+self.move_rotation[2])
+        self.location = (self.location[0]+self.move_location[0], 
+                         self.location[1]+self.move_location[1], 
+                         self.location[2]+self.move_location[2])

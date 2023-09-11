@@ -16,39 +16,39 @@ def open_window(screen_posX, screen_posY, screen_width, screen_heigh, fullscreen
         framework.initialize(fullscreen)
         framework.add_object(
             LoadMesh("models/floor.obj", "images/tiles.png",
-                location=pygame.Vector3(0, 0, 0),
-                scale=pygame.Vector3(10, 0, 10),
-                move_rotation=pygame.Vector3(0, 0, 0)),
+                location=(0, 0, 0),
+                scale=(10, 0, 10),
+                move_rotation=(0, 0, 0)),
             'textured')
         framework.add_object(
             LoadMesh("models/tabletop.obj", "images/timber.png",
-                location=pygame.Vector3(table_x, 1, table_z),
-                scale=pygame.Vector3(1.2, 1, 1.2),
-                move_rotation=pygame.Vector3(0, 0, 0)),
+                location=(table_x, 1, table_z),
+                scale=(1.2, 1, 1.2),
+                move_rotation=(0, 0, 0)),
             'textured')
         framework.add_object(
             LoadMesh("models/tableleg.obj", "images/timber.png",
-                location=pygame.Vector3(table_x-0.5, 0.5, table_z-0.5),
-                scale=pygame.Vector3(1, 1, 1),
-                move_rotation=pygame.Vector3(0, 0, 0)),
+                location=(table_x-0.5, 0.5, table_z-0.5),
+                scale=(1, 1, 1),
+                move_rotation=(0, 0, 0)),
             'textured')
         framework.add_object(
             LoadMesh("models/tableleg.obj", "images/timber.png",
-                location=pygame.Vector3(table_x-0.5, 0.5, table_z+0.5),
-                scale=pygame.Vector3(1, 1, 1),
-                move_rotation=pygame.Vector3(0, 0, 0)),
+                location=(table_x-0.5, 0.5, table_z+0.5),
+                scale=(1, 1, 1),
+                move_rotation=(0, 0, 0)),
             'textured')
         framework.add_object(
             LoadMesh("models/tableleg.obj", "images/timber.png",
-                location=pygame.Vector3(table_x+0.5, 0.5, table_z-0.5),
-                scale=pygame.Vector3(1, 1, 1),
-                move_rotation=pygame.Vector3(0, 0, 0)),
+                location=(table_x+0.5, 0.5, table_z-0.5),
+                scale=(1, 1, 1),
+                move_rotation=(0, 0, 0)),
             'textured')
         framework.add_object(
             LoadMesh("models/tableleg.obj", "images/timber.png",
-                location=pygame.Vector3(table_x+0.5, 0.5, table_z+0.5),
-                scale=pygame.Vector3(1, 1, 1),
-                move_rotation=pygame.Vector3(0, 0, 0)),
+                location=(table_x+0.5, 0.5, table_z+0.5),
+                scale=(1, 1, 1),
+                move_rotation=(0, 0, 0)),
             'textured')
         
 def close_window():

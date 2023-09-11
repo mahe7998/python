@@ -2,7 +2,6 @@
 import random
 
 from OpenGL.GL import *
-import pygame
 from .Mesh import *
 from .Utils import *
 
@@ -12,11 +11,11 @@ class LoadMesh(Mesh):
             filename,
             image_filename,
             gl_draw_type=GL_TRIANGLES,
-            location=pygame.Vector3(0, 0, 0),
-            scale=pygame.Vector3(1.0, 1.0, 1.0),
-            rotation=pygame.Vector3(0, 0, 0),
-            move_rotation=pygame.Vector3(0, 0, 0),
-            move_location=pygame.Vector3(0, 0, 0),
+            location=(0, 0, 0),
+            scale=(1.0, 1.0, 1.0),
+            rotation=(0, 0, 0),
+            move_rotation=(0, 0, 0),
+            move_location=(0, 0, 0),
             color=[1.0, 1.0, 1.0]):
 
         raw_vertices, triangles, uvs, uv_ind, normals, normal_ind = self.load_drawing(filename)

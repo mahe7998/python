@@ -26,7 +26,7 @@ class ServerFramework(PyOGLApp):
         self.edit_mode = EditMode.NOT_SELECTED
         self.selected_object = Selection(-1, -1)
         self.selection_cubes = []
-        self.selection_axis = []
+        self.selection_axis = None
         self.fonts = dict()
         self.text_windows = dict()
         glEnable(GL_CULL_FACE) # Get rid of back side       
@@ -40,12 +40,12 @@ class ServerFramework(PyOGLApp):
         for cube_index in range(len(colors)):
             cube = LoadMesh(
                 "models/cube.obj", None,
-                location=pygame.Vector3(0.0, 0.0, 0.0),
+                location=(0.0, 0.0, 0.0),
                 color=colors[cube_index],
                 gl_draw_type=GL_TRIANGLES,
-                scale=pygame.Vector3(0.05, 0.05, 0.05),
-                rotation=pygame.Vector3(0, 0, 0),
-                move_rotation=pygame.Vector3(0, 0, 0))
+                scale=(0.05, 0.05, 0.05),
+                rotation=(0, 0, 0),
+                move_rotation=(0, 0, 0))
             cube.load(self.materials['colored'])
             self.selection_cubes.append(cube)
                 
@@ -58,11 +58,11 @@ class ServerFramework(PyOGLApp):
         else:
             self.camera = Camera(self.display_width, self.display_height)
         self.camera.relative_move(5.0, 0.0, 2.0) # Initial camera position to see Axis
-        self.lights.append(Light(0, pygame.Vector3(0, 5, 0), pygame.Vector3(1, 1, 1)))
+        self.lights.append(Light(0, (0, 5, 0), (1, 1, 1)))
         self.picking_object = PickingObject(Shader("shaders/picking_vertices.vs", "shaders/picking_frags.vs"))
-        self.axis = Axis(pygame.Vector3(0, 0, 0), [-100.0, -100.0, -100.0, 100.0, 100.0, 100.0])
+        self.axis = Axis((0, 0, 0), [-100.0, -100.0, -100.0, 100.0, 100.0, 100.0])
         self.axis.load(self.materials['colored'])
-        self.grid = XZGrid(pygame.Vector3(0, 0, 0), 100.0)
+        self.grid = XZGrid((0, 0, 0), 100.0)
         self.grid.load(self.materials['colored'])
         self.create_selection_cubes()
         
@@ -120,6 +120,9 @@ class ServerFramework(PyOGLApp):
         if self.selected_object.object_index != -1:
             self.objects[self.selected_object.object_index].update_mouse_and_keyboard(
                 self.track_mouse, self.selected_object, self.edit_mode)
+            if self.selection_axis != None:
+                self.selection_axis.location = self.objects[self.selected_object.object_index].location
+                self.selection_axis.scale = self.objects[self.selected_object.object_index].scale
             
     def pick_object(self, fullscreen, location):
         if fullscreen:
@@ -162,6 +165,7 @@ class ServerFramework(PyOGLApp):
             else:
                 self.edit_mode = EditMode.NOT_SELECTED
                 self.selected_object = Selection(-1, -1, -1)
+                self.selection_axis = None
         else:
             self.selected_object = selection
 
@@ -192,11 +196,13 @@ class ServerFramework(PyOGLApp):
             raise Exception("Invalid axis " + axis)
         if self.edit_mode == EditMode.SCALE:
             rot = identity_mat()
-            rot = rotateA(rot, -cube.rotation[0], pygame.Vector3(1, 0, 0), False)
-            rot = rotateA(rot, -cube.rotation[1], pygame.Vector3(0, 1, 0), False)
-            rot = rotateA(rot, -cube.rotation[2], pygame.Vector3(0, 0, 1), False)
+            rot = rotateA(rot, -cube.rotation[0], (1, 0, 0), False)
+            rot = rotateA(rot, -cube.rotation[1], (0, 1, 0), False)
+            rot = rotateA(rot, -cube.rotation[2], (0, 0, 1), False)
             delta_location = delta_location.dot(rot)
-        cube.location += pygame.Vector3(delta_location[0], delta_location[1], delta_location[2])
+        cube.location = (cube.location[0]+delta_location[0],
+                         cube.location[1]+delta_location[1],
+                         cube.location[2]+delta_location[2])
         cube.draw(self.camera, self.lights)
 
     def display(self):
