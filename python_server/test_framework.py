@@ -1,15 +1,14 @@
-import pygame
 from Framework.ServerFramework import *
 
 table_x = -1
 table_z = -0.5
 framework = None
 
-def open_window(screen_posX, screen_posY, screen_width, screen_heigh, fullscreen=False, display_num=0):
+def open_window(screen_posX, screen_posY, screen_width, screen_heigh, fullscreen=False, display_num=-1):
     global framework
     if framework == None:
-        framework = ServerFramework(screen_posX, screen_posY, screen_width, screen_heigh, fullscreen, display_num)
-        framework.initialize(fullscreen)
+        framework = ServerFramework()
+        framework.create_window(screen_posX, screen_posY, screen_width, screen_heigh, fullscreen, display_num)
         framework.add_object(
             LoadMesh("models/floor.obj", "images/tiles.png",
                 location=(0, 0, 0),
@@ -58,9 +57,9 @@ def open_window(screen_posX, screen_posY, screen_width, screen_heigh, fullscreen
         framework.load_font("FreeMono", "fonts/FreeMono.ttf", 
             32, 126, 17, 21, "FreeMono.png")
         # Windows x is 100, y is 150
-#        framework.add_text_window("text1", "FreeMono", 0, 10, Alignments.CENTER, 
-#            30, 20, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.2))
-#        framework.get_text_window("text1").print_text(2, 4, "_/Jacques is good!/_")
+        framework.add_text_window("text1", "FreeMono", 0, 10, Alignments.CENTER, 
+            30, 20, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.2))
+        framework.get_text_window("text1").print_text(2, 4, "_/Jacques is good!/_")
 
         #framework.load_font("FreeMonoBold", "fonts/FreeMonoBold.ttf", 
         #    32, 126, 13, 15, "FreeMonoBold.png")
@@ -69,7 +68,7 @@ def open_window(screen_posX, screen_posY, screen_width, screen_heigh, fullscreen
         #framework.get_text_window("text2").print_text(2, 4, "_/Second Window!/_")
 
         # Required after loading any font as it changes the OpenGL viewport
-        framework.update_view_port()
+        #framework.update_view_port()
        
 def close_window():
     global framework
@@ -78,7 +77,7 @@ def close_window():
         framework = None
 
 if __name__ == '__main__':
-    open_window(200, 200, 800, 600)
+    open_window(200, 200, 800, 600, False, -1)
     done = False
     while not done:
         done = framework.main_loop()

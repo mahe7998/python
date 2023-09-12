@@ -1,6 +1,5 @@
 import socket
 import sys
-import pygame
 
 from process_command import process_command
 from Framework.ServerFramework import *
@@ -12,8 +11,8 @@ framework = None
 def open_window(screen_posX, screen_posY, screen_width, screen_heigh, fullscreen=False, display_num=0):
     global framework
     if framework == None:
-        framework = ServerFramework(screen_posX, screen_posY, screen_width, screen_heigh, fullscreen, display_num)
-        framework.initialize(fullscreen)
+        framework = ServerFramework()
+        framework.create_window(screen_posX, screen_posY, screen_width, screen_heigh, fullscreen, display_num)
         framework.add_object(
             LoadMesh("models/floor.obj", "images/tiles.png",
                 location=(0, 0, 0),

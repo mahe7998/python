@@ -36,7 +36,6 @@ class Mesh:
         self.selected = False
         self.selection_color_mask = [0.5, 0.5, 1.0, 1.0]
         self.boundaries = boundaries
-        self.last_mouse_pos = (0, 0)
         self.mouse_sensitivity = 0.01
         self.vao_ref = glGenVertexArrays(1)
         self.vertex_indices = [] # Only used for selection in 3D space
@@ -58,12 +57,8 @@ class Mesh:
         if self.vertex_colors is not None:
             GraphicsData("vec3").load(self.material.program_id, "vertex_color", self.vertex_colors)
 
-    def update_mouse_and_keyboard(self, track_mouse, selected_object, edit_mode):
-        # Mouse
-        mouse_pos = pygame.mouse.get_pos()
-        if track_mouse and selected_object.cube_index != -1:
-            mouse_change = (self.last_mouse_pos[0]-mouse_pos[0],
-                            self.last_mouse_pos[1]-mouse_pos[1])
+    def update_mouse_pos(self, selected_object, edit_mode, delta_x, delta_y):
+        if selected_object.cube_index != -1:
             value_to_modify = None
             if edit_mode == EditMode.POSITION:
                 value_to_modify = self.location
@@ -71,19 +66,17 @@ class Mesh:
                 value_to_modify = self.scale
             else:
                 raise Exception("Not a valid editing mode!")
-            delta_pos = (mouse_change[0] + mouse_change[1]) * self.mouse_sensitivity
+            delta_pos = (delta_x - delta_y) * self.mouse_sensitivity
             if selected_object.cube_index == 0 or selected_object.cube_index == 3:
                 value_to_modify = (value_to_modify[0] + delta_pos, value_to_modify[1], value_to_modify[2])
             elif selected_object.cube_index == 1 or selected_object.cube_index == 4:
                 value_to_modify = (value_to_modify[0], value_to_modify[1] + delta_pos, value_to_modify[2])
             elif selected_object.cube_index == 2 or selected_object.cube_index == 5:
                 value_to_modify = (value_to_modify[0], value_to_modify[1], value_to_modify[2] + delta_pos)
-            self.last_mouse_pos = mouse_pos
             if edit_mode == EditMode.POSITION:
                 self.location = value_to_modify
             elif edit_mode == EditMode.SCALE:
                 self.scale = value_to_modify
-        self.last_mouse_pos = mouse_pos
 
     def set_transfornation(self, location, scale, rotation):
         self.location = location

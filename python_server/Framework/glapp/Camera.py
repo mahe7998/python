@@ -1,8 +1,7 @@
-import select
-
+import glfw
+import glfw.GLFW as GLFW_CONSTANTS
 import numpy as np
 from OpenGL.GLU import *
-import pygame
 from math import *
 import numpy as np
 from .Transformations import *
@@ -50,30 +49,23 @@ class Camera:
     def update_view(self, program_id):
         Uniform("mat4").load(program_id, "view_mat", self.transformation)
 
-    def update_mouse_and_keyboard(self, track_mouse, selected_object):
-        # Mouse
-        mouse_pos = pygame.mouse.get_pos()
-        if track_mouse and selected_object.cube_index == -1:
-            mouse_change = pygame.mouse.get_rel()
-            self.rotate(mouse_change[0] * self.mouse_sensitivity,
-                        -mouse_change[1] * self.mouse_sensitivity)
-        self.last_mouse_pos = mouse_pos
+    def update_mouse(self, delta_x, delta_y):
+        self.rotate(delta_x * self.mouse_sensitivity, -delta_y * self.mouse_sensitivity)
 
-        # Keyboard
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
-            if keys[pygame.K_DOWN]:
+    def update_keyboard(self, window):
+        if glfw.get_key(window, GLFW_CONSTANTS.GLFW_KEY_DOWN) == GLFW_CONSTANTS.GLFW_PRESS:
+            if glfw.get_key(window, GLFW_CONSTANTS.GLFW_KEY_RIGHT_SHIFT) == GLFW_CONSTANTS.GLFW_PRESS or glfw.get_key(window, GLFW_CONSTANTS.GLFW_KEY_LEFT_SHIFT) == GLFW_CONSTANTS.GLFW_PRESS:
                 self.transformation = translate(self.transformation, 0, -self.key_sensitivity, 0)
-            if keys[pygame.K_UP]:
-                self.transformation = translate(self.transformation, 0, self.key_sensitivity, 0)
-        else:
-            if keys[pygame.K_DOWN]:
+            else:
                 self.transformation = translate(self.transformation, 0, 0, self.key_sensitivity)
-            if keys[pygame.K_UP]:
+        elif glfw.get_key(window, GLFW_CONSTANTS.GLFW_KEY_UP) == GLFW_CONSTANTS.GLFW_PRESS:
+            if glfw.get_key(window, GLFW_CONSTANTS.GLFW_KEY_RIGHT_SHIFT) == GLFW_CONSTANTS.GLFW_PRESS or glfw.get_key(window, GLFW_CONSTANTS.GLFW_KEY_LEFT_SHIFT) == GLFW_CONSTANTS.GLFW_PRESS:
+                self.transformation = translate(self.transformation, 0, self.key_sensitivity, 0)
+            else:
                 self.transformation = translate(self.transformation, 0, 0, -self.key_sensitivity)
-        if keys[pygame.K_RIGHT]:
+        elif glfw.get_key(window, GLFW_CONSTANTS.GLFW_KEY_RIGHT) == GLFW_CONSTANTS.GLFW_PRESS:
             self.transformation = translate(self.transformation, self.key_sensitivity, 0, 0)
-        if keys[pygame.K_LEFT]:
+        elif glfw.get_key(window, GLFW_CONSTANTS.GLFW_KEY_LEFT) == GLFW_CONSTANTS.GLFW_PRESS:
             self.transformation = translate(self.transformation, -self.key_sensitivity, 0, 0)
 
     def zoom(self, zoom_in, flipped):

@@ -1,4 +1,4 @@
-import pygame
+import glfw
 from .glapp.PyOGLApp import *
 from .glapp.LoadMesh import *
 from .glapp.Light import *
@@ -15,9 +15,8 @@ boundaries_offset = 0.2 # % of object size (0.1 = 10%) for selection cubes
 
 class ServerFramework(PyOGLApp):
 
-    def __init__(self, screen_posX, screen_posY, screen_width, screen_height, fullscreen=False, display_num=0):
-        super().__init__(screen_posX, screen_posY, screen_width, screen_height,fullscreen, display_num)
-        self.camera = None
+    def __init__(self):
+        super().__init__()
         self.lights = []
         self.picking_object = None  
         self.axis = None
@@ -29,10 +28,18 @@ class ServerFramework(PyOGLApp):
         self.selection_axis = None
         self.fonts = dict()
         self.text_windows = dict()
-        glEnable(GL_CULL_FACE) # Get rid of back side       
-        glEnable(GL_BLEND) # Also need to set glBlendFunc below and draw object below first!
-        glEnable(GL_DEPTH_TEST)
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+    def initialize_3D_space(self):
+        self.materials = {
+            'textured': Shader("shaders/textured_vertices.vs", "shaders/textured_frags.vs"),
+            'colored' : Shader("shaders/color_vertices.vs", "shaders/color_frags.vs") }
+        self.lights.append(Light(0, (0, 5, 0), (1, 1, 1)))
+        self.picking_object = PickingObject(Shader("shaders/picking_vertices.vs", "shaders/picking_frags.vs"))
+        self.axis = Axis((0, 0, 0), [-100.0, -100.0, -100.0, 100.0, 100.0, 100.0])
+        self.axis.load(self.materials['colored'])
+        self.grid = XZGrid((0, 0, 0), 100.0)
+        self.grid.load(self.materials['colored'])
+        self.create_selection_cubes()
 
     def create_selection_cubes(self):
         colors = [[1, 0, 0], [0, 1, 0], [0, 0, 1],
@@ -48,23 +55,6 @@ class ServerFramework(PyOGLApp):
                 move_rotation=(0, 0, 0))
             cube.load(self.materials['colored'])
             self.selection_cubes.append(cube)
-                
-    def initialize(self, fullscreen):
-        self.materials = {
-            'textured': Shader("shaders/textured_vertices.vs", "shaders/textured_frags.vs"),
-            'colored' : Shader("shaders/color_vertices.vs", "shaders/color_frags.vs") }
-        if fullscreen:
-            self.camera = Camera(self.desktop_size[0], self.desktop_size[1])
-        else:
-            self.camera = Camera(self.display_width, self.display_height)
-        self.camera.relative_move(5.0, 0.0, 2.0) # Initial camera position to see Axis
-        self.lights.append(Light(0, (0, 5, 0), (1, 1, 1)))
-        self.picking_object = PickingObject(Shader("shaders/picking_vertices.vs", "shaders/picking_frags.vs"))
-        self.axis = Axis((0, 0, 0), [-100.0, -100.0, -100.0, 100.0, 100.0, 100.0])
-        self.axis.load(self.materials['colored'])
-        self.grid = XZGrid((0, 0, 0), 100.0)
-        self.grid.load(self.materials['colored'])
-        self.create_selection_cubes()
         
     def add_object(self, object, material):
         # First load, then append
@@ -79,9 +69,9 @@ class ServerFramework(PyOGLApp):
         self.fonts[font_name] = font
 
     def add_text_window(self, window_name, font_name, pos_x, pos_y, alignment, m_cols, n_rows, text_color, background_color):
-        if self.screen.get_flags() & pygame.FULLSCREEN:
+        if self.fullscreen:
             self.text_windows[window_name] = TextWindow(self.fonts[font_name], pos_x, pos_y, alignment, 
-                m_cols, n_rows, text_color, background_color, self.desktop_size[0], self.desktop_size[1])
+                m_cols, n_rows, text_color, background_color, self.max_resolution[0], self.max_resolution[1])
         else:
             self.text_windows[window_name] = TextWindow(self.fonts[font_name], pos_x, pos_y, alignment, 
                 m_cols, n_rows, text_color, background_color, self.display_width, self.display_height)
@@ -94,35 +84,21 @@ class ServerFramework(PyOGLApp):
         for _, text_window in self.text_windows.items():
             text_window.update_display_size(display_width, display_height)
 
-    def update_display(self, fullscreen, event=None):
-        super().update_display(fullscreen, event)
-        if event != None and event.type == pygame.VIDEORESIZE and not fullscreen:
-            if event.w != self.desktop_size[0] and event.h != self.desktop_size[1]:
-                print("camera.update_perspective (resize event): " + str(event.w) + ", " + str(event.h))
-                self.update_display_size(event.w, event.h)
+    def mouse_pos_callback(self, window, xpos, ypos):
+        if self.track_mouse:
+            if self.selected_object.object_index == -1:
+                super().mouse_pos_callback(window, xpos, ypos)
             else:
-                print("camera.update_perspective (resize event after full screen): " + str(self.display_width) + ", " + str(self.display_height))
-                self.update_display_size(self.display_width, self.display_height)
-        elif event == None:
-            if fullscreen:
-                print("camera.update_perspective (full screen): " + str(self.desktop_size[0]) + ", " + str(self.desktop_size[1]))
-                self.update_display_size(self.desktop_size[0], self.desktop_size[1])
-            else:
-                print("camera.update_perspective (resume window display): " + str(self.display_width) + ", " + str(self.display_height))
-                self.update_display_size(self.display_width, self.display_height)
-        elif event != None and fullscreen:
-            print("camera.update_perspective (full screen buttom): " + str(event.w) + ", " + str(event.h))
-            self.update_display_size(self.desktop_size[0], self.desktop_size[1])
+                self.objects[self.selected_object.object_index].update_mouse_pos(
+                    self.selected_object, self.edit_mode, 
+                    xpos-self.last_mouse_pos[0], ypos-self.last_mouse_pos[1])
+                if self.selection_axis != None:
+                    self.selection_axis.location = self.objects[self.selected_object.object_index].location
+                    self.selection_axis.scale = self.objects[self.selected_object.object_index].scale
+        self.last_mouse_pos = (xpos, ypos)
 
-    def update(self):
-        self.camera.update_mouse_and_keyboard(
-            self.track_mouse, self.selected_object)
-        if self.selected_object.object_index != -1:
-            self.objects[self.selected_object.object_index].update_mouse_and_keyboard(
-                self.track_mouse, self.selected_object, self.edit_mode)
-            if self.selection_axis != None:
-                self.selection_axis.location = self.objects[self.selected_object.object_index].location
-                self.selection_axis.scale = self.objects[self.selected_object.object_index].scale
+    def key_callback(self, window, key, scancode, action, mods):
+        super().key_callback(window, key, scancode, action, mods)
             
     def pick_object(self, fullscreen, location):
         if fullscreen:
@@ -169,11 +145,6 @@ class ServerFramework(PyOGLApp):
         else:
             self.selected_object = selection
 
-    def update_event(self, event):
-        if event.type == pygame.MOUSEWHEEL:
-            self.camera.zoom(event.y, event.flipped)
-        return super().update_event(event)
-
     def display_selection_cubes(self, cube, object, axis, negative):
         cube.location = copy.deepcopy(object.location)
         boundaries = offset_object_boundaries(object.boundaries, boundaries_offset)
@@ -205,7 +176,7 @@ class ServerFramework(PyOGLApp):
                          cube.location[2]+delta_location[2])
         cube.draw(self.camera, self.lights)
 
-    def display(self):
+    def draw(self):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         self.axis.draw(self.camera, self.lights)
         self.grid.draw(self.camera, self.lights)

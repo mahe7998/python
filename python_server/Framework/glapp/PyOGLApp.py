@@ -1,90 +1,101 @@
-import pygame.display
-from pygame.locals import *
+import glfw
+import glfw.GLFW as GLFW_CONSTANTS
 from .PickingTexture import *
 import os
 from OpenGL.GL import *
 from OpenGL.GLU import *
+from .Camera import *
+from .Monitor import *
 from sys import platform
-
-# See https://stackoverflow.com/questions/64543449/update-during-resize-in-pygame
-# on how to update display while resizing
+import time
 
 class PyOGLApp():
 
-    def __init__(self, screen_posX, screen_posY, screen_width, screen_height, fullscreen=False, display_num=0):
-        os.environ['SDL_VIDEO_WINDOWS_POS'] = "%d,%d" % (screen_posX, screen_posY)
-        self.display_width = screen_width
-        self.display_height = screen_height
+    def __init__(self):
         self.max_field_depth = 30.0
         self.axis_size = 100
         self.track_mouse = False
-        self.double_click_clock = pygame.time.Clock()
-        self.screen_mode = DOUBLEBUF | OPENGL
-        self.display_num = display_num
-        self.going_fullscreen = fullscreen
-        pygame.init()
-        fullscreen_modes = pygame.display.list_modes(0, pygame.FULLSCREEN, self.display_num)
-        self.desktop_size = fullscreen_modes[0]
-        pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLEBUFFERS, 1)
-        pygame.display.gl_set_attribute(pygame.GL_MULTISAMPLESAMPLES, 4)
-        if platform == "darwin":
-            pygame.display.gl_set_attribute(pygame.GL_CONTEXT_PROFILE_MASK, pygame.GL_CONTEXT_PROFILE_CORE)
-            #pygame.display.gl_set_attribute(pygame.GL_DEPTH_SIZE, 32)
-        if fullscreen:
-            self.screen = pygame.display.set_mode((self.desktop_size[0], self.desktop_size[1]), self.screen_mode | pygame.FULLSCREEN, display=self.display_num)
-            # Resize the OpenGL viewport
-            glViewport(0, 0, self.desktop_size[0], self.desktop_size[1])
-        else:
-            self.screen = pygame.display.set_mode((screen_width, screen_height), self.screen_mode | RESIZABLE, display=self.display_num)
-        pygame.display.set_caption('OpenGL in Python')
-        self.clock = pygame.time.Clock()
-        self.restore_mouse_position = pygame.mouse.get_pos()
+        self.last_mouse_pos = (0, 0)
+        self.last_mouse_click = 0
+        self.camera = None
+        glfw.init()
+        monitors = glfw.get_monitors()
+        self.monitors = []
+        print("Monitors:")
+        for monitor in monitors:
+            self.monitors.append(Monitor(monitor))
+        #if platform == "darwin":
+        glfw.window_hint(GLFW_CONSTANTS.GLFW_OPENGL_PROFILE, GLFW_CONSTANTS.GLFW_OPENGL_CORE_PROFILE)
+        glfw.window_hint(GLFW_CONSTANTS.GLFW_CONTEXT_VERSION_MAJOR, 3)
+        glfw.window_hint(GLFW_CONSTANTS.GLFW_CONTEXT_VERSION_MINOR, 3)
+        glfw.window_hint(GLFW_CONSTANTS.GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE)
+        glfw.window_hint(GLFW_CONSTANTS.GLFW_SAMPLES, 8)
+        # Use below to remove window decorations
+        #glfw.window_hint(GLFW_CONSTANTS.GLFW_DECORATED, GL_FALSE)
 
-    def initialize(self, fullscreen):
+    def init_callbacks(self):
+        glfw.set_mouse_button_callback(self.window, self.mouse_button_callback)
+        glfw.set_cursor_pos_callback(self.window, self.mouse_pos_callback)
+        glfw.set_scroll_callback(self.window, self.mouse_scroll_callback)
+        glfw.set_key_callback(self.window, self.key_callback)
+        glfw.set_framebuffer_size_callback(self.window, self.framebuffer_size_callback)
+
+    def initialize_3D_space(self):
         pass
 
-    def update_view_port(self):
-        if self.screen.get_flags() & pygame.FULLSCREEN:
-            glViewport(0, 0, self.desktop_size[0], self.desktop_size[1])
+    def create_window(self, screen_posX, screen_posY, screen_width, screen_height, fullscreen=False, display_num=-1):
+        self.display_width = screen_width
+        self.display_height = screen_height
+        if display_num >= len(self.monitors):
+            raise Exception("Invalid display number")
+        elif display_num == -1:
+            print("Using default monitor:")
+            default_monitor = glfw.get_primary_monitor()
+            self.monitor = Monitor(default_monitor)
         else:
-            glViewport(0, 0, self.display_width, self.display_height)
-
-    def update_display(self, fullscreen, event=None):
-        print("Update display fullscreen is %s" % ("True" if fullscreen else "False"))
-        if event != None and event.type == pygame.VIDEORESIZE:
-            if not fullscreen and not self.going_fullscreen:
-                # When coming back from full screen, the event size is the size of the screen and we want 
-                # to restore the previous resolution
-                if event.size[0] != self.desktop_size[0] and event.size[1] != self.desktop_size[1]:
-                    print("Update display size to (%d, %d)" % (event.size[0], event.size[1]))
-                    self.display_width = event.size[0]
-                    self.display_height = event.size[1]
+            print("Using monitor index %d:" % display_num)
+            self.monitor = self.monitors[display_num]
+        self.max_resolution, self.max_resolution_refresh_rate = self.monitor.get_max_resolution()
         if fullscreen:
-            if not self.going_fullscreen:
-                print("Update display to full screen  (%d, %d)" % (self.desktop_size[0], self.desktop_size[1]))
-                self.screen = pygame.display.set_mode(
-                    (self.desktop_size[0], self.desktop_size[1]), self.screen_mode | pygame.FULLSCREEN, display=self.display_num)
-            else:
-                self.going_fullscreen = False
-            # Resize the OpenGL viewport
-            glViewport(0, 0, self.desktop_size[0], self.desktop_size[1])
+            self.window = glfw.create_window(
+                self.max_resolution[0], self.max_resolution[1], 
+                "OpenGL in Python", self.monitor.internal_monitor, None)
+            window_pos = glfw.get_window_pos(self.window)
+            self.keep_display_size = (window_pos[0], window_pos[1], self.display_width, self.display_height)
+            self.fullscreen = True
         else:
-            print("Update display to windowed (%d, %d)" % (self.display_width, self.display_height))
-            if platform != "linux" or self.screen.get_flags() & pygame.FULLSCREEN:
-                self.screen = pygame.display.set_mode(
-                    (self.display_width, self.display_height), self.screen_mode | RESIZABLE, display=self.display_num)
-                # Resize the OpenGL viewport
-                glViewport(0, 0, self.display_width, self.display_height)
+            self.window = glfw.create_window(
+                self.display_width, self.display_height, 
+                "OpenGL in Python", None, None)
+            if display_num != -1 or screen_posX != -1 or screen_posY != -1:
+                if screen_posX == -1:
+                    screen_posX = 200
+                if screen_posY == -1:
+                    screen_posY = 200
+                glfw.set_window_pos(
+                    self.window, 
+                    self.monitor.position[0]+screen_posX, 
+                    self.monitor.position[1]+screen_posY)
+            self.fullscreen = False
+        glfw.make_context_current(self.window)
+        self.init_callbacks()
+        glEnable(GL_CULL_FACE) # Get rid of back side       
+        glEnable(GL_BLEND) # Also need to set glBlendFunc below and draw object below first!
+        glEnable(GL_DEPTH_TEST)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        self.frame_start = glfw.get_time()
+        self.first_draw = True
+        if fullscreen:
+            self.camera = Camera(self.max_resolution[0], self.max_resolution[1])
+        else:
+            self.camera = Camera(self.display_width, self.display_height)
+        self.camera.relative_move(5.0, 0.0, 2.0) # Initial camera position to see Axis
+        self.initialize_3D_space()
 
     def terminate(self):
-        screen = pygame.display.set_mode((self.display_width, self.display_height), flags=pygame.HIDDEN, display=self.display_num)
-        pygame.display.quit()
-        pygame.quit()
+        glfw.terminate()
 
-    def update(self):
-        pass
-
-    def display(self):
+    def draw(self):
         pass
 
     def pick_object(self, fullscreen, location):
@@ -92,51 +103,104 @@ class PyOGLApp():
 
     def set_mouse_grab(self, grab):
         self.track_mouse = grab
-        if platform != "linux" and platform != "win32":
-            pygame.event.set_grab(grab)
-            pygame.mouse.set_visible(not grab)
-        if grab: # Avoid mouse jumping when grabbing
-            pygame.mouse.get_rel()
+        self.last_mouse_pos = glfw.get_cursor_pos(self.window)
 
-    def update_event(self, event):
-        done = False
-        if event.type == pygame.QUIT:
-            done = True
-        elif event.type == pygame.VIDEORESIZE:
-            print("Resize event (%d, %d), full screen is %d" % (event.size[0], event.size[1], self.screen.get_flags() & pygame.FULLSCREEN))
-            if platform == "darwin":
-                self.update_display(self.screen.get_flags() & pygame.FULLSCREEN, event)
+    def set_fullscreen(self, fullscreen):
+        if fullscreen == self.fullscreen:
+            return
+        if fullscreen:
+            print("Entering fullscreen")
+            window_pos = glfw.get_window_pos(self.window)
+            self.keep_display_size = (window_pos[0], window_pos[1], self.display_width, self.display_height)
+            glfw.set_window_monitor(
+                self.window, self.monitor.internal_monitor, 
+                0, 0, self.max_resolution[0], self.max_resolution[1], self.max_resolution_refresh_rate)
+            #glfw.set_window_pos(self.window, self.monitor.position[0], self.monitor.position[1])
+            #glfw.set_window_size(self.window, self.max_resolution[0], self.max_resolution[1])
+            self.fullscreen = True
+        else:
+            print("Leaving fullscreen")
+            self.fullscreen = False
+            glfw.set_window_monitor(
+                self.window, None, 
+                self.keep_display_size[0], self.keep_display_size[1], 
+                self.keep_display_size[2], self.keep_display_size[3], 
+                self.max_resolution_refresh_rate)
+
+    def mouse_button_callback(self, window, button, action, mods):
+        if button == glfw.MOUSE_BUTTON_LEFT and action == glfw.PRESS:
+            if glfw.get_time() - self.last_mouse_click < 0.5:
+                print("double click!!")
+                self.set_fullscreen(not self.fullscreen)
             else:
-                if self.screen.get_flags() & pygame.FULLSCREEN and (event.size[0] != self.desktop_size[0] or event.size[1] != self.desktop_size[1]):
-                    self.update_display(False, event)
-                else:
-                    self.update_display(self.screen.get_flags() & pygame.FULLSCREEN or (event.size[0] == self.desktop_size[0] and event.size[1] == self.desktop_size[1]), event)
-        elif event.type == pygame.VIDEOEXPOSE:
-            # TODO: figure how to detect on which display we are
-            fullscreen_modes = pygame.display.list_modes(0, pygame.FULLSCREEN)
-            self.desktop_size = fullscreen_modes[0]
-        elif event.type == KEYDOWN:
-            if event.key == K_ESCAPE:
-                if self.screen.get_flags() & pygame.FULLSCREEN:
-                    self.update_display(False)
-                elif self.track_mouse:
-                    self.set_mouse_grab(False)
-        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            if self.double_click_clock.tick() < 500:
-                self.update_display(self.screen.get_flags() & pygame.FULLSCREEN == 0)
-            else:
-                self.pick_object(self.screen.get_flags() & pygame.FULLSCREEN, pygame.mouse.get_pos())
+                #print("Left button pressed")
+                self.pick_object(False, glfw.get_cursor_pos(self.window))
                 self.set_mouse_grab(True)
-        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                self.last_mouse_click = glfw.get_time()
+        elif button == glfw.MOUSE_BUTTON_LEFT and action == glfw.RELEASE:
+            #print("Left button released")
             self.set_mouse_grab(False)
+
+    def mouse_pos_callback(self, window, xpos, ypos):
+        if self.track_mouse:
+            delta_x = xpos - self.last_mouse_pos[0]
+            delta_y = ypos - self.last_mouse_pos[1]
+            print("Mouse moved: (%f, %f)" % (delta_x, delta_y))
+            if self.camera != None:
+                self.camera.update_mouse(delta_x, delta_y)
+        self.last_mouse_pos = (xpos, ypos)
+
+    def mouse_scroll_callback(self, window, xoffset, yoffset):
+        if self.camera != None:
+            self.camera.zoom(yoffset, False)
+
+    def key_callback(self, window, key, scancode, action, mods):
+        #print("key :" + str(key))
+        if action == glfw.PRESS:
+            #print("key down")
+            return
+        elif action == glfw.RELEASE:
+            #print("key up")
+            return
+        elif action == glfw.REPEAT:
+            #print("key repeat")
+            return
+    
+    def update_display_size(self, display_width, display_height):
+        pass
+
+    def framebuffer_size_callback(self, window, width, height):
+        print("Resize event (%d, %d)" % (width, height))
+        glViewport(0, 0, width, height)
+        self.display_width = width
+        self.display_height = height
+        self.update_display_size(width, height)
+        self.draw()
+        glfw.swap_buffers(self.window)
+
+    def update_events(self):
+        done = False
+        if glfw.window_should_close(self.window):
+            done = True
+        if self.camera != None:
+            self.camera.update_keyboard(self.window)
         return done
+    
+    def update_view_port(self):
+        if self.fullscreen:
+            glViewport(0, 0, self.max_resolution[0], self.max_resolution[1])
+        else:
+            glViewport(0, 0, self.display_width, self.display_height)
 
     def main_loop(self):
-        done = False
-        for event in pygame.event.get():
-            done = self.update_event(event)
-        self.update()
-        self.display()
-        pygame.display.flip()
-        self.clock.tick(60)
+        done = self.update_events()
+        if self.first_draw:
+            self.update_view_port()
+            self.first_draw = False
+        self.draw()
+        glfw.swap_buffers(self.window)
+        glfw.poll_events()
+        while (glfw.get_time()-self.frame_start) < 1/60:
+            time.sleep(0.001)
+        self.frame_start = glfw.get_time()
         return done
