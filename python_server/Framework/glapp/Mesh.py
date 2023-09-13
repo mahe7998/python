@@ -109,7 +109,7 @@ class Mesh:
             for light in lights:
                 light.update(self.material.program_id)
         if self.image is not None:
-            Uniform("sample2D").load(self.material.program_id, "tex", [self.image.texture_id, 1])
+            Uniform("sample2D").load(self.material.program_id, "texture_id", [self.image.texture_id, 1])
         self.transformation_mat = self.get_transformation_matrix()
         self.update_transformation()
         self.update_selection_color()

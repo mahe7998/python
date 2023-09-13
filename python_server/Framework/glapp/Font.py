@@ -9,14 +9,12 @@ from .Utils import *
 class Font:
 
     def __init__(self, shader_program, 
-            font_file_name, first_char, last_char, char_width, char_height,
-            save_png_filename=None):
- 
+            font_file_name, char_width, char_height,
+            max_chars, save_png_filename=None):
+
         self.shader_program = shader_program
         self.vao_ref = glGenVertexArrays(1)
         self.font_file_name = font_file_name
-        self.first_char = first_char
-        self.last_char = last_char + 1
         self.char_width = char_width * 64 # Internally, all font sizes are in 64ths of a pixel
         self.char_height = char_height * 64
 
@@ -31,17 +29,29 @@ class Font:
         # Font offset in font texture
         max_bitmap_top = 0
         min_bitmap_bottom = 0
-        for i in range(self.first_char, self.last_char):
-            face.load_char(chr(i))
+        all_chars = []
+        self.char_indexes = dict()
+        char, agi_index = face.get_first_char()
+        all_chars.append(chr(char))
+        self.char_indexes[chr(char)] = 0
+        i = 1
+        while agi_index != 0 and i < max_chars:
+            char, agi_index = face.get_next_char(char, agi_index)
+            all_chars.append(chr(char))
+            self.char_indexes[chr(char)] = i
+            i += 1
+        self.nb_chars = len(all_chars)
+        for c in all_chars:
+            face.load_char(c)
             glyph = face.glyph
-            #print("char '" + chr(i) + "', bitmap top: " + str(glyph.bitmap_top) + ", bitmap rows: " + str(glyph.bitmap.rows))
+            print("char '" + c + "', bitmap top: " + str(glyph.bitmap_top) + ", bitmap rows: " + str(glyph.bitmap.rows))
             if glyph.bitmap_top > max_bitmap_top:
                 max_bitmap_top = glyph.bitmap_top
             if glyph.bitmap_top - glyph.bitmap.rows < min_bitmap_bottom:
                 min_bitmap_bottom = glyph.bitmap_top - glyph.bitmap.rows
         pos_y = max_bitmap_top
-
-        self.font_texture_width = (self.font_width*(self.last_char-self.first_char))//64    
+        print("Total chars: " + str(len(all_chars)))
+        self.font_texture_width = (self.font_width*len(all_chars))//64
         self.font_texture_height = max_bitmap_top - min_bitmap_bottom
 
         # set ortho projection matrix in shader
@@ -102,8 +112,9 @@ class Font:
         glEnableVertexAttribArray(location_id)
         glBindBuffer(GL_ARRAY_BUFFER, 0)
 
-        for i in range(self.first_char, self.last_char):
-            face.load_char(chr(i))
+        i = 0
+        for c in all_chars:
+            face.load_char(c)
             glyph = face.glyph
 
             # Create texture for each character of the font
@@ -122,7 +133,7 @@ class Font:
             # Create 6 vertices (2 triangles) for each character of the font
             glBindBuffer(GL_ARRAY_BUFFER, VBO)
             vertices = []
-            pos_x = ((i-self.first_char)*(self.font_width))//64
+            pos_x = (i*self.font_width)//64
             get_rendering_vertices(
                 vertices,
                 pos_x + glyph.bitmap_left, pos_y,
@@ -136,6 +147,7 @@ class Font:
 
             # Render both triangles for top left and bottom right of each character
             glDrawArrays(GL_TRIANGLES, 0, len(vertices))
+            i += 1
 
         # Code below works and is used to verify the font above works correctly
         if save_png_filename != None:

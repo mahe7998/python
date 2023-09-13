@@ -10,6 +10,7 @@ from .glapp.PickingObject import *
 from .glapp.Utils import *
 from .glapp.Font import *
 from .glapp.TextWindow import *
+from .glapp.Picture import *
 
 boundaries_offset = 0.2 # % of object size (0.1 = 10%) for selection cubes
 
@@ -28,17 +29,20 @@ class ServerFramework(PyOGLApp):
         self.selection_axis = None
         self.fonts = dict()
         self.text_windows = dict()
+        self.pictures = dict()
 
     def initialize_3D_space(self):
-        self.materials = {
+        self.shaders = {
             'textured': Shader("shaders/textured_vertices.vs", "shaders/textured_frags.vs"),
-            'colored' : Shader("shaders/color_vertices.vs", "shaders/color_frags.vs") }
+            'colored' : Shader("shaders/color_vertices.vs", "shaders/color_frags.vs"),
+            'font'    : Shader("shaders/font_vertices.vs", "shaders/font_frags.vs"),
+            'picture' : Shader("shaders/picture_vertices.vs", "shaders/picture_frags.vs") }
         self.lights.append(Light(0, (0, 5, 0), (1, 1, 1)))
         self.picking_object = PickingObject(Shader("shaders/picking_vertices.vs", "shaders/picking_frags.vs"))
         self.axis = Axis((0, 0, 0), [-100.0, -100.0, -100.0, 100.0, 100.0, 100.0])
-        self.axis.load(self.materials['colored'])
+        self.axis.load(self.shaders['colored'])
         self.grid = XZGrid((0, 0, 0), 100.0)
-        self.grid.load(self.materials['colored'])
+        self.grid.load(self.shaders['colored'])
         self.create_selection_cubes()
 
     def create_selection_cubes(self):
@@ -53,19 +57,18 @@ class ServerFramework(PyOGLApp):
                 scale=(0.05, 0.05, 0.05),
                 rotation=(0, 0, 0),
                 move_rotation=(0, 0, 0))
-            cube.load(self.materials['colored'])
+            cube.load(self.shaders['colored'])
             self.selection_cubes.append(cube)
         
     def add_object(self, object, material):
         # First load, then append
-        object.load(self.materials[material])
+        object.load(self.shaders[material])
         self.objects.append(object)
 
-    def load_font(self, font_name, font_file_name, first_char, last_char, char_width, char_height,
-            save_png_filename=None):
-        font = Font(Shader("shaders/font_vertices.vs", "shaders/font_frags.vs"), 
-            font_file_name, first_char, last_char, char_width, char_height,
-            save_png_filename)
+    def load_font(self, font_name, font_file_name, char_width, char_height,
+            max_chars, save_png_filename=None):
+        font = Font(self.shaders['font'], 
+            font_file_name, char_width, char_height, max_chars, save_png_filename)
         self.fonts[font_name] = font
 
     def add_text_window(self, window_name, font_name, pos_x, pos_y, alignment, m_cols, n_rows, text_color, background_color):
@@ -75,6 +78,14 @@ class ServerFramework(PyOGLApp):
         else:
             self.text_windows[window_name] = TextWindow(self.fonts[font_name], pos_x, pos_y, alignment, 
                 m_cols, n_rows, text_color, background_color, self.display_width, self.display_height)
+            
+    def add_picture(self, picture_name, picture_file_name, pos_x, pos_y, width=-1, height=-1):
+        if self.fullscreen:
+            self.pictures[picture_name] = Picture(self.shaders['picture'], picture_file_name, pos_x, pos_y, 
+                width, height, self.max_resolution[0], self.max_resolution[1])
+        else:
+            self.pictures[picture_name] = Picture(self.shaders['picture'], picture_file_name, pos_x, pos_y, 
+                width, height, self.display_width, self.display_height)
 
     def get_text_window(self, window_name):
         return self.text_windows[window_name]
@@ -83,6 +94,8 @@ class ServerFramework(PyOGLApp):
         self.camera.update_perspective(display_width, display_height)
         for _, text_window in self.text_windows.items():
             text_window.update_display_size(display_width, display_height)
+        for _, picture in self.pictures.items():
+            picture.update_display_size(display_width, display_height)
 
     def mouse_pos_callback(self, window, xpos, ypos):
         if self.track_mouse:
@@ -100,10 +113,10 @@ class ServerFramework(PyOGLApp):
     def key_callback(self, window, key, scancode, action, mods):
         super().key_callback(window, key, scancode, action, mods)
             
-    def pick_object(self, fullscreen, location):
-        if fullscreen:
+    def pick_object(self, location):
+        if self.fullscreen:
             selection = self.picking_object.MousePick(
-                self.desktop_size[0], self.desktop_size[1],
+                self.max_resolution[0], self.max_resolution[1],
                 location[0], location[1],
                 self.objects, self.selection_cubes,
                 self.camera, self.selected_object)
@@ -127,7 +140,7 @@ class ServerFramework(PyOGLApp):
                     location=object.location,
                     boundaries=offset_object_boundaries(object.boundaries, boundaries_offset),
                     scale=object.scale)
-                self.selection_axis.load(self.materials['colored'])
+                self.selection_axis.load(self.shaders['colored'])
                 self.selected_object = selection
             elif selection.object_index != -1 and self.edit_mode == EditMode.POSITION:
                 object = self.objects[selection.object_index]
@@ -136,7 +149,7 @@ class ServerFramework(PyOGLApp):
                     boundaries=offset_object_boundaries(object.boundaries, boundaries_offset),
                     scale=object.scale,
                     rotation=object.rotation)
-                self.selection_axis.load(self.materials['colored'])
+                self.selection_axis.load(self.shaders['colored'])
                 self.edit_mode = EditMode.SCALE
             else:
                 self.edit_mode = EditMode.NOT_SELECTED
@@ -178,6 +191,7 @@ class ServerFramework(PyOGLApp):
 
     def draw(self):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        display_width, display_height = glfw.get_framebuffer_size(self.window)
         self.axis.draw(self.camera, self.lights)
         self.grid.draw(self.camera, self.lights)
         for object in self.objects:
@@ -192,6 +206,8 @@ class ServerFramework(PyOGLApp):
             self.display_selection_cubes(self.selection_cubes[5], object, "z", False)
             if self.selection_axis != None:
                 self.selection_axis.draw(self.camera, self.lights)
+        for _, picture in self.pictures.items():
+            picture.draw()
         for _, text_window in self.text_windows.items():
             text_window.draw()
 

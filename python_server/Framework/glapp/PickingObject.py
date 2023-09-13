@@ -41,8 +41,8 @@ class PickingObject:
         glDrawArrays(GL_TRIANGLES, 0, object.length)
 
     def MousePick(self, screen_width, screen_height,
-                  mouse_x, mouse_y, objects, selection_cubes,
-                  camera, current_selection):
+            mouse_x, mouse_y, objects, selection_cubes,
+            camera, current_selection):
 
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, self.fbo)
         glBindTexture(GL_TEXTURE_2D, self.pick_texture_id)

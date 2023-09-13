@@ -55,17 +55,19 @@ def open_window(screen_posX, screen_posY, screen_width, screen_heigh, fullscreen
         # Below: first char is ' '(32), last char is '~' (126)
         # Font width is 20, height is 30
         framework.load_font("FreeMono", "fonts/FreeMono.ttf", 
-            32, 126, 17, 21, "FreeMono.png")
+            17, 21, 256, "FreeMono.png")
+        framework.load_font("FreeMonoBold", "fonts/FreeMonoBold.ttf", 
+            13, 15, 256, "FreeMonoBold.png")
         # Windows x is 100, y is 150
         framework.add_text_window("text1", "FreeMono", 0, 10, Alignments.CENTER, 
-            30, 20, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.2))
-        framework.get_text_window("text1").print_text(2, 4, "_/Jacques is good!/_")
+            30, 3, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8))
+        framework.get_text_window("text1").print_text(2, 1, "_/Jacques is good!/_")
 
-        #framework.load_font("FreeMonoBold", "fonts/FreeMonoBold.ttf", 
-        #    32, 126, 13, 15, "FreeMonoBold.png")
-        #framework.add_text_window("text2", "FreeMonoBold", 0, 10, Alignments.BOTTOM_CENTER, 
-        #    30, 20, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.2))
-        #framework.get_text_window("text2").print_text(2, 4, "_/Second Window!/_")
+        #framework.add_picture("table top", "images/timber.png", 10, 10, 300, 300)
+        framework.add_picture("table top", "images/Lucas Photo 12-22 2x3.jpg", 10, 20, 300, 300)
+        framework.add_text_window("Lucas", "FreeMonoBold", 70, 300, Alignments.TOP_LEFT, 
+            20, 1, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.5))                     
+        framework.get_text_window("Lucas").print_text(5, 0, "Lucas Mahé")
 
         # Required after loading any font as it changes the OpenGL viewport
         #framework.update_view_port()

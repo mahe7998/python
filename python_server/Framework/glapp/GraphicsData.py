@@ -24,3 +24,4 @@ class GraphicsData():
             else:
                 raise Exception("Unknown data type " + self.data_type)
             glEnableVertexAttribArray(self.variable_id)
+            glBindBuffer(GL_ARRAY_BUFFER, 0)

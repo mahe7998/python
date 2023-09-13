@@ -98,7 +98,7 @@ class PyOGLApp():
     def draw(self):
         pass
 
-    def pick_object(self, fullscreen, location):
+    def pick_object(self, location):
         return Selection(-1, -1, -1)
 
     def set_mouse_grab(self, grab):
@@ -133,12 +133,10 @@ class PyOGLApp():
                 print("double click!!")
                 self.set_fullscreen(not self.fullscreen)
             else:
-                #print("Left button pressed")
-                self.pick_object(False, glfw.get_cursor_pos(self.window))
+                self.pick_object(glfw.get_cursor_pos(self.window))
                 self.set_mouse_grab(True)
                 self.last_mouse_click = glfw.get_time()
         elif button == glfw.MOUSE_BUTTON_LEFT and action == glfw.RELEASE:
-            #print("Left button released")
             self.set_mouse_grab(False)
 
     def mouse_pos_callback(self, window, xpos, ypos):

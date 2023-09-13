@@ -1,6 +1,4 @@
 # This loads .OBJ 3D objects
-import random
-
 from OpenGL.GL import *
 from .Mesh import *
 from .Utils import *

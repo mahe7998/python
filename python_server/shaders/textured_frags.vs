@@ -12,7 +12,7 @@ struct light {
 };
 #define NUM_LIGHTS 2
 uniform light light_sources[NUM_LIGHTS];
-uniform sampler2D tex;
+uniform sampler2D texture_id;
 uniform vec4 selection_color_mask;
 
 vec4 create_light(vec3 light_pos, vec3 light_color, vec3 normal, vec3 frag_pos, vec3 view_dir)
@@ -43,5 +43,5 @@ void main()
     for (int l = 0; l < NUM_LIGHTS; l++)
         frag_color += create_light(light_sources[l].position,
             light_sources[l].color, normal, frag_pos, view_dir);
-    frag_color = frag_color * texture(tex, uv) * selection_color_mask;
+    frag_color = frag_color * texture(texture_id, uv) * selection_color_mask;
 }

@@ -1,6 +1,7 @@
 from OpenGL.GL import *
 from .Font import Font
 from .Utils import *
+from .GraphicsData import *
 from .Uniform import *
 
 class TextWindow:
@@ -20,19 +21,18 @@ class TextWindow:
         self.text_array = [[' ' for n in range(n_cols)] for m in range(m_rows)]
         self.projection = get_ortho_matrix(0, display_width, 0, display_height, 1 , -1)
 
-        self.vertices = self.update_vertices(display_width, display_height)
-        first_char = font.first_char
-        last_char = font.last_char
+        self.vertices = self.load_vertices(display_width, display_height)
         texes = []
+        char_index = self.font.char_indexes[' ']
+        tex_l = char_index/font.nb_chars
+        tex_r = (char_index+1)/font.nb_chars
         for n in range(0, m_rows):
             for m in range(0, n_cols):
                 get_rendering_texes(
-                    texes,
-                    ((ord(' ')-first_char))/(last_char-first_char), # texture left
-                    ((ord(' ')-first_char+1))/(last_char-first_char)) # texture right
+                    texes, tex_l, tex_r)
         self.texes = np.array(texes, dtype=np.float32)
         
-    def update_vertices(self, display_width, display_height):
+    def load_vertices(self, display_width, display_height):
         vertices = []
         char_width = self.font.font_width // 64
         char_height = self.font.font_texture_height
@@ -79,15 +79,15 @@ class TextWindow:
         return np.array(vertices, dtype=np.float32)
     
     def update_display_size(self, display_width, display_height):
-        self.vertices = self.update_vertices(display_width, display_height)
+        self.vertices = self.load_vertices(display_width, display_height)
         self.projection = get_ortho_matrix(0, display_width, 0, display_height, 1 , -1)
 
     def set_texes(self, pos_in_tex, c):
-        first_char = self.font.first_char
-        last_char = self.font.last_char
-
-        tex_l = ((ord(c)-first_char+0))/(last_char-first_char)
-        tex_r = ((ord(c)-first_char+1))/(last_char-first_char)
+        char_index = self.font.char_indexes[' ']
+        if c in self.font.char_indexes.keys():
+            char_index = self.font.char_indexes[c]
+        tex_l = char_index/self.font.nb_chars
+        tex_r = (char_index+1)/self.font.nb_chars
 
         self.texes[pos_in_tex][0] = tex_l  # 0, 0
         pos_in_tex += 1
@@ -123,6 +123,7 @@ class TextWindow:
         Uniform("vec3").load(self.font.shader_program.program_id, "textColor", self.text_color)
         Uniform("vec4").load(self.font.shader_program.program_id, "backgroundColor", self.background_color)
         Uniform("int").load(self.font.shader_program.program_id, "transparent", 0)
+        Uniform("sample2D").load(self.font.shader_program.program_id, "texture_id", [self.font.font_texture, 1])
         glActiveTexture(GL_TEXTURE0)
 
         shader_projection = glGetUniformLocation(self.font.shader_program.program_id, "projection")
@@ -142,27 +143,14 @@ class TextWindow:
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
 
         #update content of VBO memory
-        VBO = glGenBuffers(1)
-        glBindBuffer(GL_ARRAY_BUFFER, VBO)
-        glBufferData(GL_ARRAY_BUFFER, self.vertices.nbytes, self.vertices, GL_DYNAMIC_DRAW) # or GL_STATIC_DRAW?
-        location_id = glGetAttribLocation(self.font.shader_program.program_id, "vertex")
-        glVertexAttribPointer(location_id, 2, GL_FLOAT, GL_FALSE, 0, None)
-        glEnableVertexAttribArray(location_id)
-        glBindBuffer(GL_ARRAY_BUFFER, 0)
-
-        TEX = glGenBuffers(1)
-        glBindBuffer(GL_ARRAY_BUFFER, TEX)
-        glBufferData(GL_ARRAY_BUFFER, self.texes.nbytes, self.texes, GL_DYNAMIC_DRAW) # or GL_STATIC_DRAW?
-        location_id = glGetAttribLocation(self.font.shader_program.program_id, "texCoords")
-        glVertexAttribPointer(location_id, 2, GL_FLOAT, GL_FALSE, 0, None)
-        glEnableVertexAttribArray(location_id)
-        glBindBuffer(GL_ARRAY_BUFFER, 0)
+        GraphicsData("vec2").load(self.font.shader_program.program_id, "vertex", self.vertices)
+        GraphicsData("vec2").load(self.font.shader_program.program_id, "texCoords", self.texes)
 
         #render vertices
         glDisable(GL_CULL_FACE);  
         glDrawArrays(GL_TRIANGLES, 0, len(self.vertices))
         glEnable(GL_CULL_FACE);  
 
-        glDepthMask(GL_TRUE)
+        #glDepthMask(GL_TRUE)
         glBindVertexArray(0)
         glBindTexture(GL_TEXTURE_2D, 0)
