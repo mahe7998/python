@@ -17,7 +17,7 @@ class TextWindow:
         self.background_color = background_color
 
         self.vao_ref = glGenVertexArrays(1) 
-        self.text_array = [['X' for n in range(n_cols)] for m in range(m_rows)]
+        self.text_array = [[' ' for n in range(n_cols)] for m in range(m_rows)]
         self.projection = get_ortho_matrix(0, display_width, 0, display_height, 1 , -1)
 
         self.vertices = self.update_vertices(display_width, display_height)
@@ -28,8 +28,8 @@ class TextWindow:
             for m in range(0, n_cols):
                 get_rendering_texes(
                     texes,
-                    ((ord('X')-first_char))/(last_char-first_char), # texture left
-                    ((ord('X')-first_char+1))/(last_char-first_char)) # texture right
+                    ((ord(' ')-first_char))/(last_char-first_char), # texture left
+                    ((ord(' ')-first_char+1))/(last_char-first_char)) # texture right
         self.texes = np.array(texes, dtype=np.float32)
         
     def update_vertices(self, display_width, display_height):

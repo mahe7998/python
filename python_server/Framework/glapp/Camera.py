@@ -6,7 +6,6 @@ from math import *
 import numpy as np
 from .Transformations import *
 from .Uniform import *
-from .PickingTexture import *
 from .Utils import *
 
 class Camera:

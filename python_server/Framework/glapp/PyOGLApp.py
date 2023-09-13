@@ -1,6 +1,6 @@
 import glfw
 import glfw.GLFW as GLFW_CONSTANTS
-from .PickingTexture import *
+from .PickingObject import *
 import os
 from OpenGL.GL import *
 from OpenGL.GLU import *

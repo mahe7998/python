@@ -6,7 +6,7 @@ from .glapp.Camera import *
 from .glapp.Axis import *
 from .glapp.XZgrid import *
 from .glapp.Shader import *
-from .glapp.PickingTexture import *
+from .glapp.PickingObject import *
 from .glapp.Utils import *
 from .glapp.Font import *
 from .glapp.TextWindow import *
