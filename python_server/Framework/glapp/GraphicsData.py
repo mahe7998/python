@@ -8,8 +8,6 @@ class GraphicsData():
         self.data_type = data_type
         self.buffer_ref = glGenBuffers(1)
 
-    def __del__(self):
-
     def load(self, program_id, variable_name, data):
         load_data = np.array(data, np.float32)
         glBindBuffer(GL_ARRAY_BUFFER, self.buffer_ref)
