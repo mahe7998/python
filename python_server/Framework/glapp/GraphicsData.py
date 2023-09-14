@@ -9,7 +9,7 @@ class GraphicsData():
         self.buffer_ref = glGenBuffers(1)
 
     def __del__(self):
-        if glDeleteBuffers in dir(OpenGL.GL):
+        if "glDeleteBuffers" in dir(OpenGL.GL):
             glDeleteBuffers(1, [self.buffer_ref])
 
     def load(self, program_id, variable_name, data):
