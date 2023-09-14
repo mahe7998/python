@@ -44,13 +44,13 @@ class Font:
         for c in all_chars:
             face.load_char(c)
             glyph = face.glyph
-            print("char '" + c + "', bitmap top: " + str(glyph.bitmap_top) + ", bitmap rows: " + str(glyph.bitmap.rows))
+            #print("char '" + c + "', bitmap top: " + str(glyph.bitmap_top) + ", bitmap rows: " + str(glyph.bitmap.rows))
             if glyph.bitmap_top > max_bitmap_top:
                 max_bitmap_top = glyph.bitmap_top
             if glyph.bitmap_top - glyph.bitmap.rows < min_bitmap_bottom:
                 min_bitmap_bottom = glyph.bitmap_top - glyph.bitmap.rows
         pos_y = max_bitmap_top
-        print("Total chars: " + str(len(all_chars)))
+        #print("Total chars: " + str(len(all_chars)))
         self.font_texture_width = (self.font_width*len(all_chars))//64
         self.font_texture_height = max_bitmap_top - min_bitmap_bottom
 

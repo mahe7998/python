@@ -31,6 +31,7 @@ class TextWindow:
                 get_rendering_texes(
                     texes, tex_l, tex_r)
         self.texes = np.array(texes, dtype=np.float32)
+        self.content_changed = True
         
     def load_vertices(self, display_width, display_height):
         vertices = []
@@ -41,31 +42,31 @@ class TextWindow:
 
         if self.alignment == Alignments.TOP_RIGHT:
             pos_x = display_width - window_width - self.pos_x
-            pos_y = display_height  + char_height - window_height - self.pos_y
+            pos_y = display_height - self.pos_y
         elif self.alignment == Alignments.BOTTOM_RIGHT:
             pos_x = display_width - window_width - self.pos_x
-            pos_y = self.pos_y + char_height
-        if self.alignment == Alignments.CENTER_RIGHT:
+            pos_y = self.pos_y + window_height
+        elif self.alignment == Alignments.CENTER_RIGHT:
             pos_x = display_width - window_width - self.pos_x
             pos_y = display_height//2 + char_height - window_height//2 - self.pos_y
         elif self.alignment == Alignments.TOP_LEFT:
             pos_x = self.pos_x
-            pos_y = display_height + char_height - window_height - self.pos_y
+            pos_y = display_height - self.pos_y
         elif self.alignment == Alignments.BOTTOM_LEFT:
             pos_x = self.pos_x
-            pos_y = self.pos_y + char_height
+            pos_y = self.pos_y + window_height
         elif self.alignment == Alignments.CENTER_LEFT:
             pos_x = self.pos_x
-            pos_y = display_height//2 + char_height - window_height//2 - self.pos_y
+            pos_y = display_height//2 + window_height//2 - self.pos_y
         elif self.alignment == Alignments.TOP_CENTER:
             pos_x = display_width//2 - window_width//2 - self.pos_x
-            pos_y = display_height + char_height - window_height - self.pos_y
+            pos_y = display_height - self.pos_y
         elif self.alignment == Alignments.BOTTOM_CENTER:
             pos_x = display_width//2 - window_width//2 - self.pos_x
-            pos_y = self.pos_y + char_height
+            pos_y = self.pos_y + window_height
         elif self.alignment == Alignments.CENTER:
             pos_x = display_width//2 - window_width//2 - self.pos_x
-            pos_y = display_height//2 + char_height - window_height//2 - self.pos_y
+            pos_y = display_height//2 + window_height//2 - self.pos_y
         else:
             raise Exception("Alignment not implemented yet")
         
@@ -74,13 +75,14 @@ class TextWindow:
                 get_rendering_vertices(
                     vertices,   
                     pos_x + m * char_width, 
-                    pos_y + n * char_height, 
+                    pos_y - n * char_height, 
                     char_width, char_height, char_height)
         return np.array(vertices, dtype=np.float32)
     
     def update_display_size(self, display_width, display_height):
         self.vertices = self.load_vertices(display_width, display_height)
         self.projection = get_ortho_matrix(0, display_width, 0, display_height, 1 , -1)
+        self.content_changed = True
 
     def set_texes(self, pos_in_tex, c):
         char_index = self.font.char_indexes[' ']
@@ -114,6 +116,7 @@ class TextWindow:
                     y += 1
                     if y >= self.m_rows:
                         break
+        self.content_changed = True
 
     def draw(self):
 
@@ -124,10 +127,8 @@ class TextWindow:
         Uniform("vec4").load(self.font.shader_program.program_id, "backgroundColor", self.background_color)
         Uniform("int").load(self.font.shader_program.program_id, "transparent", 0)
         Uniform("sample2D").load(self.font.shader_program.program_id, "texture_id", [self.font.font_texture, 1])
+        Uniform("mat4").load(self.font.shader_program.program_id, "projection", self.projection)
         glActiveTexture(GL_TEXTURE0)
-
-        shader_projection = glGetUniformLocation(self.font.shader_program.program_id, "projection")
-        glUniformMatrix4fv(shader_projection, 1, GL_TRUE, self.projection)
 
         fb_status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
         if fb_status != GL_FRAMEBUFFER_COMPLETE:
@@ -143,8 +144,10 @@ class TextWindow:
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
 
         #update content of VBO memory
-        GraphicsData("vec2").load(self.font.shader_program.program_id, "vertex", self.vertices)
-        GraphicsData("vec2").load(self.font.shader_program.program_id, "texCoords", self.texes)
+        if self.content_changed:
+            GraphicsData("vec2").load(self.font.shader_program.program_id, "vertex", self.vertices)
+            GraphicsData("vec2").load(self.font.shader_program.program_id, "texCoords", self.texes)
+            self.content_changed = False
 
         #render vertices
         glDisable(GL_CULL_FACE);  

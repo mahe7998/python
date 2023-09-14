@@ -109,7 +109,7 @@ class PyOGLApp():
         if fullscreen == self.fullscreen:
             return
         if fullscreen:
-            print("Entering fullscreen")
+            #print("Entering fullscreen")
             window_pos = glfw.get_window_pos(self.window)
             self.keep_display_size = (window_pos[0], window_pos[1], self.display_width, self.display_height)
             glfw.set_window_monitor(
@@ -119,7 +119,7 @@ class PyOGLApp():
             #glfw.set_window_size(self.window, self.max_resolution[0], self.max_resolution[1])
             self.fullscreen = True
         else:
-            print("Leaving fullscreen")
+            #print("Leaving fullscreen")
             self.fullscreen = False
             glfw.set_window_monitor(
                 self.window, None, 
@@ -130,7 +130,7 @@ class PyOGLApp():
     def mouse_button_callback(self, window, button, action, mods):
         if button == glfw.MOUSE_BUTTON_LEFT and action == glfw.PRESS:
             if glfw.get_time() - self.last_mouse_click < 0.5:
-                print("double click!!")
+                #print("double click!!")
                 self.set_fullscreen(not self.fullscreen)
             else:
                 self.pick_object(glfw.get_cursor_pos(self.window))
@@ -143,7 +143,7 @@ class PyOGLApp():
         if self.track_mouse:
             delta_x = xpos - self.last_mouse_pos[0]
             delta_y = ypos - self.last_mouse_pos[1]
-            print("Mouse moved: (%f, %f)" % (delta_x, delta_y))
+            #print("Mouse moved: (%f, %f)" % (delta_x, delta_y))
             if self.camera != None:
                 self.camera.update_mouse(delta_x, delta_y)
         self.last_mouse_pos = (xpos, ypos)
@@ -168,7 +168,7 @@ class PyOGLApp():
         pass
 
     def framebuffer_size_callback(self, window, width, height):
-        print("Resize event (%d, %d)" % (width, height))
+        #print("Resize event (%d, %d)" % (width, height))
         glViewport(0, 0, width, height)
         self.display_width = width
         self.display_height = height

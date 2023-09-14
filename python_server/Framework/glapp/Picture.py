@@ -5,7 +5,7 @@ from .Mesh import *
 
 class Picture():
 
-    def __init__(self, shader_program, filename, x, y, width, height, display_width, display_height, keep_aspect_ratio=True):
+    def __init__(self, shader_program, filename, x, y, width, height, screen_width, screen_height, keep_aspect_ratio=True):
 
         self.shader_program = shader_program
         self.x = x
@@ -35,7 +35,7 @@ class Picture():
         uvs.append((1.0, 1.0)) # 1, 1
         uvs.append((1.0, 0.0)) # 1, 0
         self.uvs = np.array(uvs, np.float32)
-        self.load_vertices(display_width, display_height)
+        self.load_vertices(screen_width, screen_height)
 
     def load(self, image):
 
@@ -49,20 +49,20 @@ class Picture():
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
         glBindTexture(GL_TEXTURE_2D, 0)
 
-    def load_vertices(self, display_width, display_height):
+    def load_vertices(self, screen_width, screen_height):
         x = self.x
-        y = display_height - self.y
-        height = self.height
+        y = screen_height-self.y
         width = self.width
+        height = self.height
         if self.keep_aspect_ratio:
             image_ratio = self.image_width/self.image_height
             display_ratio = self.width/self.height
             if display_ratio > image_ratio:
-                width = self.width*image_ratio
+                width = self.height * image_ratio
                 x = self.x + (self.width-width)/2
             else:
-                height = self.height*image_ratio
-                y = display_height - self.y - (self.height-height)/2
+                height = self.width/image_ratio
+                y = screen_height - self.y - (self.height-height)/2
         vertices = []
         vertices.append((x,       y))        # 0, 0
         vertices.append((x,       y-height)) # 0, 1
@@ -76,7 +76,7 @@ class Picture():
         self.shader_program.use()
         GraphicsData("vec2").load(self.shader_program.program_id, "vertex", self.vertices)
         GraphicsData("vec2").load(self.shader_program.program_id, "vertex_uv", self.uvs)
-        self.projection = get_ortho_matrix(0, display_width, 0, display_height, 1 , -1)
+        self.projection = get_ortho_matrix(0, screen_width, 0, screen_height, 1 , -1)
         shader_projection = glGetUniformLocation(self.shader_program.program_id, "projection")
         glUniformMatrix4fv(shader_projection, 1, GL_TRUE, self.projection)
 
