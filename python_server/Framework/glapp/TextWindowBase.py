@@ -22,6 +22,8 @@ class TextWindowBase:
         self.n_cols = n_cols
         self.text_color = text_color
         self.background_color = background_color
+        self.graphics_data_vertices = GraphicsData("vec2")
+        self.graphics_data_text_coords = GraphicsData("vec2")
         self.init_text()
         self.vao_ref = glGenVertexArrays(1) 
         self.texes = self.load_texes()
@@ -118,6 +120,10 @@ class TextWindowBase:
         pos_in_tex += 1
         self.texes[pos_in_tex][0] = tex_r # 1, 0
 
+    def update_content(self):
+        self.graphics_data_vertices.load(self.font.shader_program.program_id, "vertex", self.vertices)
+        self.graphics_data_text_coords.load(self.font.shader_program.program_id, "texCoords", self.texes)
+
     def draw(self):
 
         glBindVertexArray(self.vao_ref)
@@ -145,8 +151,7 @@ class TextWindowBase:
 
         #update content of VBO memory
         if self.content_changed:
-            GraphicsData("vec2").load(self.font.shader_program.program_id, "vertex", self.vertices)
-            GraphicsData("vec2").load(self.font.shader_program.program_id, "texCoords", self.texes)
+            self.update_content()
             self.content_changed = False
 
         #render vertices

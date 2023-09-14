@@ -19,6 +19,8 @@ class PickingObject:
         self.fbo = glGenFramebuffers(1)
         self.pick_texture_id = glGenTextures(1)
         self.depth_texture_id = glGenTextures(1)
+        self.graphics_data_position = GraphicsData("vec3")
+        self.graphics_data_vertex_indices = GraphicsData("vec2")
 
     def SetObjectIndex(self, program_id, index):
         Uniform("uint").load(program_id, "gObjectIndex", index)
@@ -27,8 +29,8 @@ class PickingObject:
         vao_ref = glGenVertexArrays(1)
         glBindVertexArray(vao_ref)
         # Send vertices and indices
-        GraphicsData("vec3").load(self.picking_shader.program_id, "position", object.vertices)
-        GraphicsData("vec2").load(self.picking_shader.program_id, "vertex_index", object.vertex_indices)
+        self.graphics_data_position.load(self.picking_shader.program_id, "position", object.vertices)
+        self.graphics_data_vertex_indices.load(self.picking_shader.program_id, "vertex_index", object.vertex_indices)
 
         # Set transformation matrix for each object
         transformation_mat = object.get_transformation_matrix()

@@ -45,17 +45,21 @@ class Mesh:
         if image_filename is not None:
             self.image = Texture(image_filename)
         self.material = None
+        self.graghics_data_position = GraphicsData("vec3")
+        self.graghics_data_vertex_normals = GraphicsData("vec3")
+        self.graghics_data_uvs = GraphicsData("vec2")
+        self.graphics_data_colors = GraphicsData("vec3")
 
     def load(self, material):
         self.material = material
         glBindVertexArray(self.vao_ref)
-        GraphicsData("vec3").load(self.material.program_id, "position", self.vertices)
+        self.graghics_data_position.load(self.material.program_id, "position", self.vertices)
         if self.vertex_normals is not None:
-            GraphicsData("vec3").load(self.material.program_id, "vertex_normal", self.vertex_normals)
+            self.graghics_data_vertex_normals.load(self.material.program_id, "vertex_normal", self.vertex_normals)
         if self.vertex_uvs is not None:
-            GraphicsData("vec2").load(self.material.program_id, "vertex_uv", self.vertex_uvs)
+            self.graghics_data_uvs.load(self.material.program_id, "vertex_uv", self.vertex_uvs)
         if self.vertex_colors is not None:
-            GraphicsData("vec3").load(self.material.program_id, "vertex_color", self.vertex_colors)
+            self.graphics_data_colors.load(self.material.program_id, "vertex_color", self.vertex_colors)
 
     def update_mouse_pos(self, selected_object, edit_mode, delta_x, delta_y):
         if selected_object.cube_index != -1:

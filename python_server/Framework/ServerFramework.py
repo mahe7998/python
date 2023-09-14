@@ -10,6 +10,7 @@ from .glapp.PickingObject import *
 from .glapp.Utils import *
 from .glapp.Font import *
 from .glapp.TextWindow import *
+from .glapp.ScrollTextWindow import *
 from .glapp.Picture import *
 
 boundaries_offset = 0.2 # % of object size (0.1 = 10%) for selection cubes
@@ -71,13 +72,18 @@ class ServerFramework(PyOGLApp):
             font_file_name, char_width, char_height, max_chars, save_png_filename)
         self.fonts[font_name] = font
 
-    def add_text_window(self, window_name, font_name, pos_x, pos_y, alignment, m_cols, n_rows, text_color, background_color):
+    def add_text_window(self, window_name, font_name, pos_x, pos_y, alignment, m_cols, n_rows, text_color, background_color, type=None):
+        display_width = self.display_width
+        display_height = self.display_height
         if self.fullscreen:
-            self.text_windows[window_name] = TextWindow(self.fonts[font_name], pos_x, pos_y, alignment, 
-                m_cols, n_rows, text_color, background_color, self.max_resolution[0], self.max_resolution[1])
+            display_width = self.max_resolution[0]
+            display_height = self.max_resolution[1]
+        if type == "scroll":
+            self.text_windows[window_name] = ScrollTextWindow(self.fonts[font_name], pos_x, pos_y, alignment, 
+                m_cols, n_rows, text_color, background_color, display_width, display_height)
         else:
             self.text_windows[window_name] = TextWindow(self.fonts[font_name], pos_x, pos_y, alignment, 
-                m_cols, n_rows, text_color, background_color, self.display_width, self.display_height)
+                m_cols, n_rows, text_color, background_color, display_width, display_height)
             
     def add_picture(self, picture_name, picture_file_name, pos_x, pos_y, width=-1, height=-1):
         if self.fullscreen:

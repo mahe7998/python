@@ -24,6 +24,8 @@ class Picture():
             self.height = image.height
         self.image_width = image.width
         self.image_height = image.height
+        self.graphics_data_vertices = GraphicsData("vec2")
+        self.graphics_data_uvs = GraphicsData("vec2")
         self.load(image)
         image.close()
         self.vao_ref = glGenVertexArrays(1)
@@ -38,7 +40,6 @@ class Picture():
         self.load_vertices(screen_width, screen_height)
 
     def load(self, image):
-
         glBindTexture(GL_TEXTURE_2D, self.texture_id)
         pixel_data = np.array(list(image.getdata()), np.uint8)
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, image.width, image.height, 0, GL_RGB, GL_UNSIGNED_BYTE, pixel_data)
@@ -74,8 +75,8 @@ class Picture():
 
         glBindVertexArray(self.vao_ref)
         self.shader_program.use()
-        GraphicsData("vec2").load(self.shader_program.program_id, "vertex", self.vertices)
-        GraphicsData("vec2").load(self.shader_program.program_id, "vertex_uv", self.uvs)
+        self.graphics_data_vertices.load(self.shader_program.program_id, "vertex", self.vertices)
+        self.graphics_data_uvs.load(self.shader_program.program_id, "vertex_uv", self.uvs)
         self.projection = get_ortho_matrix(0, screen_width, 0, screen_height, 1 , -1)
         shader_projection = glGetUniformLocation(self.shader_program.program_id, "projection")
         glUniformMatrix4fv(shader_projection, 1, GL_TRUE, self.projection)
