@@ -64,39 +64,48 @@ def open_window(screen_posX, screen_posY, screen_width, screen_heigh, fullscreen
         framework.get_text_window("center").print_text(2, 1, "_/Jacques is good!/_")
         framework.get_text_window("center").print_text(3, 2, "    3rd line ")
 
-        framework.add_text_window("top left", "FreeMono", 1, 1, Alignments.TOP_LEFT, 
-            8, 1, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8))
-        framework.get_text_window("top left").print_text(0, 0, "top left")
-        framework.add_text_window("top center", "FreeMono", 0, 1, Alignments.TOP_CENTER, 
-            12, 1, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8))
-        framework.get_text_window("top center").print_text(0, 0, " top center ")
-        framework.add_text_window("top right", "FreeMono", 1, 1, Alignments.TOP_RIGHT, 
-            9, 1, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8))
-        framework.get_text_window("top right").print_text(0, 0, "top right")
-        framework.add_text_window("bottom left", "FreeMono", 1, 1, Alignments.BOTTOM_LEFT, 
-            11, 1, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8))
-        framework.get_text_window("bottom left").print_text(0, 0, "bottom left")
-        framework.add_text_window("bottom center", "FreeMono", 1, 1, Alignments.BOTTOM_CENTER, 
-            13, 1, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8))
-        framework.get_text_window("bottom center").print_text(0, 0, "bottom center")
-        framework.add_text_window("bottom right", "FreeMono", 1, 1, Alignments.BOTTOM_RIGHT, 
-            12, 1, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8))
-        framework.get_text_window("bottom right").print_text(0, 0, "bottom right")
-        framework.add_text_window("center left", "FreeMono", 1, 0, Alignments.CENTER_LEFT, 
-            11, 1, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8))
-        framework.get_text_window("center left").print_text(0, 0, "center left")
-        framework.add_text_window("bottom center", "FreeMono", 1, 1, Alignments.BOTTOM_CENTER,
-            13, 1, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8))
-        framework.get_text_window("bottom center").print_text(0, 0, "bottom center")
-        framework.add_text_window("center right", "FreeMono", 1, 0, Alignments.CENTER_RIGHT, 
-            12, 1, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8))
-        framework.get_text_window("center right").print_text(0, 0, "center right")
+        if False:
+            framework.add_text_window("top left", "FreeMono", 1, 1, Alignments.TOP_LEFT, 
+                8, 1, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8))
+            framework.get_text_window("top left").print_text(0, 0, "top left")
+            framework.add_text_window("bottom left", "FreeMono", 1, 1, Alignments.BOTTOM_LEFT, 
+                11, 1, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8))
+            framework.get_text_window("bottom left").print_text(0, 0, "bottom left")
+            framework.add_text_window("center left", "FreeMono", 1, 0, Alignments.CENTER_LEFT, 
+                11, 1, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8))
+            framework.get_text_window("center left").print_text(0, 0, "center left")
 
-        #framework.add_picture("table top", "images/timber.png", 10, 10, 300, 300)
-        framework.add_picture("Picture Lucas", "images/Lucas Photo 12-22 2x3.jpg", 10, 30, 150, 200)
-        framework.add_text_window("Lucas", "FreeMonoBold", 25, 210, Alignments.TOP_LEFT, 
-            15, 1, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.5))                     
-        framework.get_text_window("Lucas").print_text(2, 0, "Lucas Mahé")
+            framework.add_text_window("top center", "FreeMono", 0, 1, Alignments.TOP_CENTER, 
+                12, 1, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8))
+            framework.get_text_window("top center").print_text(0, 0, " top center ")
+            framework.add_text_window("bottom center", "FreeMono", 1, 1, Alignments.BOTTOM_CENTER, 
+                13, 1, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8))
+            framework.get_text_window("bottom center").print_text(0, 0, "bottom center")
+        else:
+            framework.add_text_window("top to bottom left", "FreeMono", 1, 1, Alignments.TOP_TO_BOTTOM_LEFT, 
+                30, 30, (1.0, 1.0, 1.0), (0.0, 0.0, 0.0, 0.9))
+            framework.get_text_window("top to bottom left").print_text(0, 0, "top to bottom left")
+
+        if False:
+            framework.add_text_window("top right", "FreeMono", 1, 1, Alignments.TOP_RIGHT, 
+                9, 1, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8))
+            framework.get_text_window("top right").print_text(0, 0, "top right")
+            framework.add_text_window("center right", "FreeMono", 1, 0, Alignments.CENTER_RIGHT, 
+                12, 1, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8))
+            framework.get_text_window("center right").print_text(0, 0, "center right")
+            framework.add_text_window("bottom right", "FreeMono", 1, 1, Alignments.BOTTOM_RIGHT, 
+                12, 1, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8))
+            framework.get_text_window("bottom right").print_text(0, 0, "bottom right")
+
+            #framework.add_picture("table top", "images/timber.png", 10, 10, 300, 300)
+            framework.add_picture("Picture Lucas", "images/Lucas Photo 12-22 2x3.jpg", 10, 30, 150, 200)
+            framework.add_text_window("Lucas", "FreeMonoBold", 25, 210, Alignments.TOP_LEFT, 
+                15, 1, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.5))                     
+            framework.get_text_window("Lucas").print_text(2, 0, "Lucas Mahé")
+        else:
+            framework.add_text_window("top to bottom right", "FreeMonoBold", 0, 1, Alignments.TOP_TO_BOTTOM_RIGHT, 
+                30, 30, (1.0, 1.0, 1.0), (0.0, 0.0, 0.0, 0.9))
+            framework.get_text_window("top to bottom right").print_text(0, 0, "top to bottom right")
 
         # Required after loading any font as it changes the OpenGL viewport
         #framework.update_view_port()

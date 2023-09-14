@@ -11,7 +11,8 @@ class EditMode(Enum):
         return self.value == other.value
     
 class Alignments(Enum):
-    TOP_LEFT, TOP_CENTER, TOP_RIGHT, CENTER_LEFT, CENTER, CENTER_RIGHT, BOTTOM_LEFT, BOTTOM_CENTER, BOTTOM_RIGHT = range(0, 9)
+    TOP_LEFT, TOP_CENTER, TOP_RIGHT, CENTER_LEFT, CENTER, CENTER_RIGHT, BOTTOM_LEFT, BOTTOM_CENTER, \
+        BOTTOM_RIGHT, TOP_TO_BOTTOM_LEFT, TOP_TO_BOTTOM_CENTER, TOP_TO_BOTTOM_RIGHT = range(0, 12)
 
     # See https://bugs.python.org/issue30545 for explanations
     def __eq__(self, other):
