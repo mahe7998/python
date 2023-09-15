@@ -37,8 +37,8 @@ class TextWindowBase:
     def load_texes(self):
         texes = []
         space_char_index = self.font.get_char_index(' ')
-        tex_l = space_char_index/self.font.nb_chars
-        tex_r = (space_char_index+1)/self.font.nb_chars
+        tex_l = space_char_index/self.font.get_nb_chars()
+        tex_r = (space_char_index+1)/self.font.get_nb_chars()
         for _ in range(0, self.max_display_rows):
             for _ in range(0, self.n_cols):
                 get_rendering_texes(
@@ -105,8 +105,8 @@ class TextWindowBase:
         char_index = self.font.get_char_index(' ')
         if self.font.char_exists(c):
             char_index = self.font.get_char_index(c)
-        tex_l = char_index/self.font.nb_chars
-        tex_r = (char_index+1)/self.font.nb_chars
+        tex_l = char_index/self.font.get_nb_chars()
+        tex_r = (char_index+1)/self.font.get_nb_chars()
 
         self.texes[pos_in_tex][0] = tex_l  # 0, 0
         pos_in_tex += 1
@@ -120,11 +120,20 @@ class TextWindowBase:
         pos_in_tex += 1
         self.texes[pos_in_tex][0] = tex_r # 1, 0
 
+    def update_texes(self):
+        pass
+
     def update_content(self):
         self.graphics_data_vertices.load(self.font.shader_program.program_id, "vertex", self.vertices)
         self.graphics_data_text_coords.load(self.font.shader_program.program_id, "texCoords", self.texes)
 
-    def draw(self):
+    def draw(self, display_width, display_height):
+
+        # Do this before drawing anything else because updating texes may 
+        # cause additional OpenGL calls for loading new font texture chars
+        if self.content_changed:
+            self.update_texes()
+            glViewport(0, 0, display_width, display_height)
 
         glBindVertexArray(self.vao_ref)
         self.font.shader_program.use()
@@ -134,7 +143,6 @@ class TextWindowBase:
         Uniform("int").load(self.font.shader_program.program_id, "transparent", 0)
         Uniform("sample2D").load(self.font.shader_program.program_id, "texture_id", [self.font.font_texture, 1])
         Uniform("mat4").load(self.font.shader_program.program_id, "projection", self.projection)
-        glActiveTexture(GL_TEXTURE0)
 
         fb_status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
         if fb_status != GL_FRAMEBUFFER_COMPLETE:
@@ -155,7 +163,7 @@ class TextWindowBase:
             self.content_changed = False
 
         #render vertices
-        glDisable(GL_CULL_FACE);  
+        glDisable(GL_CULL_FACE); 
         glDrawArrays(GL_TRIANGLES, 0, len(self.vertices))
         glEnable(GL_CULL_FACE);  
 

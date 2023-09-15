@@ -67,9 +67,9 @@ class ServerFramework(PyOGLApp):
         self.objects.append(object)
 
     def load_font(self, font_name, font_file_name, char_width, char_height,
-            max_chars, save_png_filename=None):
+            nb_preloaded_chars, max_cached_chars, save_png_filename=None):
         font = Font(self.shaders['font'], 
-            font_file_name, char_width, char_height, max_chars, save_png_filename)
+            font_file_name, char_width, char_height, nb_preloaded_chars, max_cached_chars, save_png_filename)
         self.fonts[font_name] = font
 
     def add_text_window(self, window_name, font_name, pos_x, pos_y, alignment, m_cols, n_rows, text_color, background_color, type=None):
@@ -215,6 +215,6 @@ class ServerFramework(PyOGLApp):
         for _, picture in self.pictures.items():
             picture.draw()
         for _, text_window in self.text_windows.items():
-            text_window.draw()
+            text_window.draw(display_width, display_height)
 
 

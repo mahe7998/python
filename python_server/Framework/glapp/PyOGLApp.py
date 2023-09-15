@@ -192,9 +192,7 @@ class PyOGLApp():
 
     def main_loop(self):
         done = self.update_events()
-        if self.first_draw:
-            self.update_view_port()
-            self.first_draw = False
+        self.update_view_port() 
         self.draw()
         glfw.swap_buffers(self.window)
         glfw.poll_events()

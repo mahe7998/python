@@ -30,15 +30,14 @@ class ScrollTextWindow(TextWindowBase):
                         char_index = space_char_index
                     else:
                         char_index = self.font.get_char_index(line[n])
-                    tex_l = char_index/self.font.nb_chars
-                    tex_r = (char_index+1)/self.font.nb_chars
+                    tex_l = char_index/self.font.get_nb_chars()
+                    tex_r = (char_index+1)/self.font.get_nb_chars()
                     get_rendering_texes(
                         texes, tex_l, tex_r)
             return np.array(texes, dtype=np.float32)
 
-    def update_content(self):
+    def update_texes(self):
         self.texes = self.load_texes()
-        super().update_content()
 
     def set_max_history(self, max_history):
         self.max_history = max_history

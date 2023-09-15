@@ -19,8 +19,8 @@ class TextWindow(TextWindowBase):
                     char_index = space_char_index
                 else:
                     char_index = self.font.get_char_index(self.text_array[m][n])
-                tex_l = char_index/self.font.nb_chars
-                tex_r = (char_index+1)/self.font.nb_chars
+                tex_l = char_index/self.font.get_nb_chars()
+                tex_r = (char_index+1)/self.font.get_nb_chars()
                 get_rendering_texes(
                     texes, tex_l, tex_r)
         return np.array(texes, dtype=np.float32)
@@ -29,8 +29,8 @@ class TextWindow(TextWindowBase):
         char_index = self.font.get_char_index(' ')
         if self.font.char_exists(c):
             char_index = self.font.get_char_index(c)
-        tex_l = char_index/self.font.nb_chars
-        tex_r = (char_index+1)/self.font.nb_chars
+        tex_l = char_index/self.font.get_nb_chars()
+        tex_r = (char_index+1)/self.font.get_nb_chars()
 
         self.texes[pos_in_tex][0] = tex_l  # 0, 0
         pos_in_tex += 1
