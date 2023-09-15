@@ -36,9 +36,9 @@ class TextWindowBase:
     
     def load_texes(self):
         texes = []
-        char_index = self.font.char_indexes[' ']
-        tex_l = char_index/self.font.nb_chars
-        tex_r = (char_index+1)/self.font.nb_chars
+        space_char_index = self.font.get_char_index(' ')
+        tex_l = space_char_index/self.font.nb_chars
+        tex_r = (space_char_index+1)/self.font.nb_chars
         for _ in range(0, self.max_display_rows):
             for _ in range(0, self.n_cols):
                 get_rendering_texes(
@@ -102,9 +102,9 @@ class TextWindowBase:
         self.content_changed = True
 
     def set_texes(self, pos_in_tex, c):
-        char_index = self.font.char_indexes[' ']
-        if c in self.font.char_indexes.keys():
-            char_index = self.font.char_indexes[c]
+        char_index = self.font.get_char_index(' ')
+        if self.font.char_exists(c):
+            char_index = self.font.get_char_index(c)
         tex_l = char_index/self.font.nb_chars
         tex_r = (char_index+1)/self.font.nb_chars
 

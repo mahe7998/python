@@ -18,7 +18,8 @@ class ScrollTextWindow(TextWindowBase):
             super().load_texes()
         else:
             nb_history_lines = len(self.history)
-            first_line = max(0, nb_history_lines - self.max_display_rows + 1)
+            first_line = max(0, nb_history_lines-self.max_display_rows + 1)
+            space_char_index = self.font.get_char_index(' ')
             for m in range(0, self.max_display_rows):
                 if m+first_line >= nb_history_lines:
                     line = ""
@@ -26,9 +27,9 @@ class ScrollTextWindow(TextWindowBase):
                     line = self.history[m+first_line]
                 for n in range(0, self.n_cols):
                     if n >= len(line):
-                        char_index = self.font.char_indexes[' ']
+                        char_index = space_char_index
                     else:
-                        char_index = self.font.char_indexes[line[n]]
+                        char_index = self.font.get_char_index(line[n])
                     tex_l = char_index/self.font.nb_chars
                     tex_r = (char_index+1)/self.font.nb_chars
                     get_rendering_texes(

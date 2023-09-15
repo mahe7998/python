@@ -12,12 +12,13 @@ class TextWindow(TextWindowBase):
     
     def load_texes(self):
         texes = []
+        space_char_index = self.font.get_char_index(' ')
         for m in range(0, self.max_display_rows):
             for n in range(0, self.n_cols):
                 if m >= self.m_rows:
-                    char_index = self.font.char_indexes[' ']
+                    char_index = space_char_index
                 else:
-                    char_index = self.font.char_indexes[self.text_array[m][n]]
+                    char_index = self.font.get_char_index(self.text_array[m][n])
                 tex_l = char_index/self.font.nb_chars
                 tex_r = (char_index+1)/self.font.nb_chars
                 get_rendering_texes(
@@ -25,9 +26,9 @@ class TextWindow(TextWindowBase):
         return np.array(texes, dtype=np.float32)
 
     def set_texes(self, pos_in_tex, c):
-        char_index = self.font.char_indexes[' ']
-        if c in self.font.char_indexes.keys():
-            char_index = self.font.char_indexes[c]
+        char_index = self.font.get_char_index(' ')
+        if self.font.char_exists(c):
+            char_index = self.font.get_char_index(c)
         tex_l = char_index/self.font.nb_chars
         tex_r = (char_index+1)/self.font.nb_chars
 

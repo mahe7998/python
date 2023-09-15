@@ -161,3 +161,8 @@ class Font:
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
         glBindVertexArray(0)
 
+    def get_char_index(self, char):
+        return self.char_indexes[char]
+    
+    def char_exists(self, char):
+        return char in self.char_indexes.keys()
