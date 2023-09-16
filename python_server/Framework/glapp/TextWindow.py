@@ -5,7 +5,7 @@ class TextWindow(TextWindowBase):
     def __init__(self, font, pos_x, pos_y, alignment, n_cols, m_rows, 
                  text_color, background_color, display_width, display_height):
         super().__init__(font, pos_x, pos_y, alignment, n_cols, m_rows, 
-                         text_color, background_color, display_width, display_height)
+            text_color, background_color, display_width, display_height)
 
     def init_text(self):
         self.text_array = [[' ' for n in range(self.n_cols)] for m in range(self.m_rows)]

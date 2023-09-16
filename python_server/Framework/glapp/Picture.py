@@ -2,11 +2,13 @@ from OpenGL.GL import *
 from PIL import Image
 import numpy as np
 from .Mesh import *
+from .Geometry2D import *
 
-class Picture():
+class Picture(Geometry2D):
 
     def __init__(self, shader_program, filename, x, y, width, height, screen_width, screen_height, keep_aspect_ratio=True):
 
+        super().__init__([x, y, x+width, y+height])
         self.shader_program = shader_program
         self.x = x
         self.y = y

@@ -4,11 +4,13 @@ from .Utils import *
 from .GraphicsData import *
 from .Uniform import *
 from .TextWindowBase import *
-
-class TextWindowBase:
+from .Geometry2D import *
+class TextWindowBase(Geometry2D):
 
     def __init__(self, font, pos_x, pos_y, alignment, n_cols, m_rows, 
                  text_color, background_color, display_width, display_height):
+
+        super().__init__([0.0, 0.0, 0.0, 0.0])
         self.font = font
         self.pos_x = pos_x
         self.pos_y = pos_y
@@ -27,8 +29,7 @@ class TextWindowBase:
         self.init_text()
         self.vao_ref = glGenVertexArrays(1) 
         self.texes = self.load_texes()
-        self.vertices = self.load_vertices(display_width, display_height)
-        self.projection = get_ortho_matrix(0, display_width, 0, display_height, 1 , -1)
+        self.vertices = self.update_position(display_width, display_height)
         self.content_changed = True
 
     def init_text(self):
@@ -45,12 +46,12 @@ class TextWindowBase:
                     texes, tex_l, tex_r)
         return np.array(texes, dtype=np.float32)
 
-    def load_vertices(self, display_width, display_height):
+    def update_position(self, display_width, display_height):
         vertices = []
         char_width = self.font.font_width // 64
         char_height = self.font.font_texture_height
         window_width = self.n_cols * char_width
-        window_height = self.m_rows * char_height
+        window_height = self.max_display_rows * char_height
 
         if self.alignment == Alignments.TOP_RIGHT or self.alignment == Alignments.TOP_TO_BOTTOM_RIGHT:
             pos_x = display_width - window_width - self.pos_x
@@ -81,7 +82,7 @@ class TextWindowBase:
             pos_y = display_height//2 + window_height//2 - self.pos_y
         else:
             raise Exception("Alignment not implemented yet")
-        
+                              
         for n in range(0, self.max_display_rows):
             for m in range(0, self.n_cols):
                 get_rendering_vertices(
@@ -89,6 +90,9 @@ class TextWindowBase:
                     pos_x + m * char_width, 
                     pos_y - n * char_height, 
                     char_width, char_height, char_height)
+
+        self.projection = get_ortho_matrix(0, display_width, 0, display_height, 1 , -1)
+        super().update_bouding_box([pos_x, pos_y, pos_x + window_width, pos_y + window_height])
         return np.array(vertices, dtype=np.float32)
     
     def update_display_size(self, display_width, display_height):
@@ -97,8 +101,7 @@ class TextWindowBase:
            self.alignment == Alignments.TOP_TO_BOTTOM_CENTER:
             self.max_display_rows = max(1, display_height//self.font.font_texture_height + 1)
             self.texes = self.load_texes()
-        self.vertices = self.load_vertices(display_width, display_height)
-        self.projection = get_ortho_matrix(0, display_width, 0, display_height, 1 , -1)
+        self.vertices = self.update_position(display_width, display_height)
         self.content_changed = True
 
     def set_texes(self, pos_in_tex, c):
@@ -143,6 +146,7 @@ class TextWindowBase:
         Uniform("int").load(self.font.shader_program.program_id, "transparent", 0)
         Uniform("sample2D").load(self.font.shader_program.program_id, "texture_id", [self.font.font_texture, 1])
         Uniform("mat4").load(self.font.shader_program.program_id, "projection", self.projection)
+        glActiveTexture(GL_TEXTURE0)
 
         fb_status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
         if fb_status != GL_FRAMEBUFFER_COMPLETE:

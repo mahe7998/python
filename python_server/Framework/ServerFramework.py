@@ -12,6 +12,7 @@ from .glapp.Font import *
 from .glapp.TextWindow import *
 from .glapp.ScrollTextWindow import *
 from .glapp.Picture import *
+from .glapp.Line import *
 
 boundaries_offset = 0.2 # % of object size (0.1 = 10%) for selection cubes
 
@@ -31,13 +32,15 @@ class ServerFramework(PyOGLApp):
         self.fonts = dict()
         self.text_windows = dict()
         self.pictures = dict()
+        self.geometry2D = dict()
 
     def initialize_3D_space(self):
         self.shaders = {
             'textured': Shader("shaders/textured_vertices.vs", "shaders/textured_frags.vs"),
             'colored' : Shader("shaders/color_vertices.vs", "shaders/color_frags.vs"),
             'font'    : Shader("shaders/font_vertices.vs", "shaders/font_frags.vs"),
-            'picture' : Shader("shaders/picture_vertices.vs", "shaders/picture_frags.vs") }
+            'picture' : Shader("shaders/picture_vertices.vs", "shaders/picture_frags.vs"),
+            'geometry 2D' : Shader("shaders/geometry2D_vertices.vs", "shaders/geometry2D_frags.vs") }
         self.lights.append(Light(0, (0, 5, 0), (1, 1, 1)))
         self.picking_object = PickingObject(Shader("shaders/picking_vertices.vs", "shaders/picking_frags.vs"))
         self.axis = Axis((0, 0, 0), [-100.0, -100.0, -100.0, 100.0, 100.0, 100.0])
@@ -92,6 +95,18 @@ class ServerFramework(PyOGLApp):
         else:
             self.pictures[picture_name] = Picture(self.shaders['picture'], picture_file_name, pos_x, pos_y, 
                 width, height, self.display_width, self.display_height)
+    
+    def get_picture(self, picture_name):
+        return self.pictures[picture_name]
+            
+    def get_shader(self, sharder_name):
+        return self.shaders[sharder_name]
+            
+    def add_geometry2D(self, geometry_name, geometry):
+        self.geometry2D[geometry_name] = geometry
+
+    def get_geometry2D(self, geometry_name):
+        return self.geometry2D[geometry_name]
 
     def get_text_window(self, window_name):
         return self.text_windows[window_name]
@@ -216,5 +231,7 @@ class ServerFramework(PyOGLApp):
             picture.draw()
         for _, text_window in self.text_windows.items():
             text_window.draw(display_width, display_height)
+        for _, geometry in self.geometry2D.items():
+            geometry.draw(display_width, display_height)
 
 

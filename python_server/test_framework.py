@@ -5,12 +5,24 @@ table_z = -0.5
 framework = None
 scroll_text_window = None
 
-def open_window(screen_posX, screen_posY, screen_width, screen_heigh, fullscreen=False, display_num=-1):
+class MyServerFramework(ServerFramework):
+
+    def __init__(self):
+        super().__init__()
+
+    def update_display_size(self, display_width, display_height):
+        global scroll_text_window
+        super().update_display_size(display_width, display_height)
+        scroll_wnd_bb = scroll_text_window.get_bounding_box()
+        self.get_geometry2D("left window border").update_position(
+             (scroll_wnd_bb[2], display_height), (scroll_wnd_bb[2], 0.0))
+
+def open_window(screen_posX, screen_posY, display_width, display_height, fullscreen=False, display_num=-1):
     global framework
     global scroll_text_window
     if framework == None:
-        framework = ServerFramework()
-        framework.create_window(screen_posX, screen_posY, screen_width, screen_heigh, fullscreen, display_num)
+        framework = MyServerFramework()
+        framework.create_window(screen_posX, screen_posY, display_width, display_height, fullscreen, display_num)
         framework.add_object(
             LoadMesh("models/floor.obj", "images/tiles.png",
                 location=(0, 0, 0),
@@ -79,7 +91,7 @@ def open_window(screen_posX, screen_posY, screen_width, screen_heigh, fullscreen
             framework.get_text_window("center left").print_text(0, 0, "center left")
         else:
             framework.add_text_window("top to bottom left", "FreeMono", 1, 1, Alignments.TOP_TO_BOTTOM_LEFT, 
-                40, 30, (1.0, 1.0, 1.0), (0.0, 0.0, 0.0, 0.9), 'scroll')
+                10, 1, (1.0, 1.0, 1.0), (0.0, 0.0, 0.0, 0.9), 'scroll')
             scroll_text_window = framework.get_text_window("top to bottom left")
             scroll_text_window.load_text("top to bottom left scroll window")
 
@@ -101,14 +113,20 @@ def open_window(screen_posX, screen_posY, screen_width, screen_heigh, fullscreen
                 12, 1, (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8))
             framework.get_text_window("bottom right").print_text(0, 0, "bottom right")
         else:
-            framework.add_text_window("top to bottom right", "FreeMonoBold", 0, 1, Alignments.TOP_TO_BOTTOM_RIGHT, 
-                30, 30, (1.0, 1.0, 1.0), (0.0, 0.0, 0.0, 0.9))
+            framework.add_text_window("top to bottom right", "FreeMonoBold", 0, 1, 
+                Alignments.TOP_TO_BOTTOM_RIGHT, 30, 30, (1.0, 1.0, 1.0), (0.0, 0.0, 0.0, 0.9))
             framework.get_text_window("top to bottom right").print_text(0, 0, "top to bottom right")
 
-        framework.add_text_window("Lucas", "FreeMonoBold", 415, 210, Alignments.TOP_LEFT, 
-            15, 1, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.5))
-        framework.get_text_window("Lucas").print_text(2, 0, "Lucas Mahé")
         framework.add_picture("Picture Lucas", "images/Lucas Photo 12-22 2x3.jpg", 400, 30, 150, 200)
+        picture_bb = framework.get_picture("Picture Lucas").get_bounding_box()
+        framework.add_text_window("Lucas", "FreeMonoBold", picture_bb[0]+15, picture_bb[3] - 20, 
+            Alignments.TOP_LEFT, 15, 1, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.5))
+        framework.get_text_window("Lucas").print_text(2, 0, "Lucas Mahé")
+
+        scroll_wnd_bb = scroll_text_window.get_bounding_box()
+        framework.add_geometry2D("left window border", 
+            Line(framework.get_shader('geometry 2D'), 
+                (scroll_wnd_bb[2], display_height), (scroll_wnd_bb[2], 0.0), (1.0, 0.0), (1.0, 1.0, 1.0)))
 
         # Required after loading any font as it changes the OpenGL viewport
         #framework.update_view_port()
