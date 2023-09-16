@@ -91,7 +91,7 @@ def open_window(screen_posX, screen_posY, display_width, display_height, fullscr
             framework.get_text_window("center left").print_text(0, 0, "center left")
         else:
             framework.add_text_window("top to bottom left", "FreeMono", 1, 1, Alignments.TOP_TO_BOTTOM_LEFT, 
-                10, 1, (1.0, 1.0, 1.0), (0.0, 0.0, 0.0, 0.9), 'scroll')
+                15, 1, (1.0, 1.0, 1.0), (0.0, 0.0, 0.0, 0.9), 'scroll')
             scroll_text_window = framework.get_text_window("top to bottom left")
             scroll_text_window.load_text("top to bottom left scroll window")
 
