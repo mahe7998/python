@@ -13,6 +13,7 @@ from .glapp.TextWindow import *
 from .glapp.ScrollTextWindow import *
 from .glapp.Picture import *
 from .glapp.Line import *
+from .glapp.Frame import *
 
 boundaries_offset = 0.2 # % of object size (0.1 = 10%) for selection cubes
 

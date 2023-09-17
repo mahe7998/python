@@ -15,7 +15,11 @@ class MyServerFramework(ServerFramework):
         super().update_display_size(display_width, display_height)
         scroll_wnd_bb = scroll_text_window.get_bounding_box()
         self.get_geometry2D("left window border").update_position(
-             (scroll_wnd_bb[2], display_height), (scroll_wnd_bb[2], 0.0))
+             (scroll_wnd_bb[2], display_height), (scroll_wnd_bb[2], 0.0), display_width, display_height)
+        picture_bb = framework.get_picture("Picture Lucas").get_bounding_box()
+        self.get_geometry2D("White frame").update_position(
+            (picture_bb[0], picture_bb[1]), (picture_bb[2]-picture_bb[0], picture_bb[3]-picture_bb[1]), 
+            display_width, display_height)
 
 def open_window(screen_posX, screen_posY, display_width, display_height, fullscreen=False, display_num=-1):
     global framework
@@ -126,7 +130,13 @@ def open_window(screen_posX, screen_posY, display_width, display_height, fullscr
         scroll_wnd_bb = scroll_text_window.get_bounding_box()
         framework.add_geometry2D("left window border", 
             Line(framework.get_shader('geometry 2D'), 
-                (scroll_wnd_bb[2], display_height), (scroll_wnd_bb[2], 0.0), (1.0, 0.0), (1.0, 1.0, 1.0)))
+                (scroll_wnd_bb[2], display_height), (scroll_wnd_bb[2], 0.0), (1.0, 0.0), (1.0, 1.0, 1.0),
+                display_width, display_height))
+
+        framework.add_geometry2D("White frame", 
+            Frame(framework.get_shader('geometry 2D'), 
+                (picture_bb[0], picture_bb[1]), (picture_bb[2]-picture_bb[0], picture_bb[3]-picture_bb[1]), 
+                (1.0, 1.0), (1.0, 1.0, 1.0), display_width, display_height))
 
         # Required after loading any font as it changes the OpenGL viewport
         #framework.update_view_port()
@@ -138,7 +148,7 @@ def close_window():
         framework = None
 
 if __name__ == '__main__':
-    open_window(200, 200, 800, 600, False, -1)
+    open_window(200, 200, 1000, 800, False, -1)
     done = False
     line_mum = 2
     while not done:
