@@ -6,7 +6,7 @@ from .Geometry2D import *
 
 class Picture(Geometry2D):
 
-    def __init__(self, shader_program, filename, x, y, width, height, screen_width, screen_height, keep_aspect_ratio=True):
+    def __init__(self, shader_program, filename, x, y, width, height, angle, screen_width, screen_height, keep_aspect_ratio=True):
 
         super().__init__([x, y, x+width, y+height])
         self.shader_program = shader_program
@@ -14,6 +14,7 @@ class Picture(Geometry2D):
         self.y = y
         self.width = width
         self.height = height
+        self.angle = angle
         self.keep_aspect_ratio = keep_aspect_ratio
         self.surface = None
         self.texture_id = glGenTextures(1)
@@ -52,9 +53,9 @@ class Picture(Geometry2D):
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
         glBindTexture(GL_TEXTURE_2D, 0)
 
-    def load_vertices(self, screen_width, screen_height):
-        x = self.x
-        y = screen_height-self.y
+    def load_vertices(self, dislpay_width, display_height):
+        x = -self.width/2
+        y = -self.height/2
         width = self.width
         height = self.height
         if self.keep_aspect_ratio:
@@ -62,16 +63,16 @@ class Picture(Geometry2D):
             display_ratio = self.width/self.height
             if display_ratio > image_ratio:
                 width = self.height * image_ratio
-                x = self.x + (self.width-width)/2
+                x = -width/2
             else:
                 height = self.width/image_ratio
-                y = screen_height - self.y - (self.height-height)/2
+                y = -height/2
         vertices = []
         vertices.append((x,       y))        # 0, 0
-        vertices.append((x,       y-height)) # 0, 1
-        vertices.append((x+width, y-height)) # 1, 1
+        vertices.append((x,       y+height)) # 0, 1
+        vertices.append((x+width, y+height)) # 1, 1
         vertices.append((x,       y))        # 0, 0
-        vertices.append((x+width, y-height)) # 1, 1
+        vertices.append((x+width, y+height)) # 1, 1
         vertices.append((x+width, y))        # 1, 0
         self.vertices = np.array(vertices, np.float32)
 
@@ -79,18 +80,23 @@ class Picture(Geometry2D):
         self.shader_program.use()
         self.graphics_data_vertices.load(self.shader_program.program_id, "vertex", self.vertices)
         self.graphics_data_uvs.load(self.shader_program.program_id, "vertex_uv", self.uvs)
-        self.projection = get_ortho_matrix(0, screen_width, 0, screen_height, 1 , -1)
-        shader_projection = glGetUniformLocation(self.shader_program.program_id, "projection")
-        glUniformMatrix4fv(shader_projection, 1, GL_TRUE, self.projection)
 
     def update_display_size(self, display_width, display_height):
         self.load_vertices(display_width, display_height)        
 
-    def draw(self):
+    def draw(self, display_width, display_height):
         glBindVertexArray(self.vao_ref)
         self.shader_program.use()
         glBindTexture(GL_TEXTURE_2D, self.texture_id)
         Uniform("sample2D").load(self.shader_program.program_id, "texture_id", [self.texture_id, 1])
+        self.projection = get_ortho_matrix(0, display_width, 0, display_height, 1 , -1)
+        transformation_mat = identity_mat()
+        hw = self.width/2
+        hh = self.height/2
+        transformation_mat = translate(transformation_mat, self.x+hw, display_height-self.y-hh, 0.0)
+        transformation_mat = rotateA(transformation_mat, self.angle+180, (0, 0, 1))
+        Uniform("mat4").load(self.shader_program.program_id, "transformation", transformation_mat)
+        Uniform("mat4").load(self.shader_program.program_id, "projection", self.projection)
 
         #texture options
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)

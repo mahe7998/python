@@ -4,7 +4,7 @@ table_x = -1
 table_z = -0.5
 framework = None
 scroll_text_window = None
-
+picture_angle = 0.0
 class MyServerFramework(ServerFramework):
 
     def __init__(self):
@@ -19,11 +19,12 @@ class MyServerFramework(ServerFramework):
         picture_bb = framework.get_picture("Picture Lucas").get_bounding_box()
         self.get_geometry2D("White frame").update_position(
             (picture_bb[0], picture_bb[1]), (picture_bb[2]-picture_bb[0], picture_bb[3]-picture_bb[1]), 
-            display_width, display_height)
+            0.0, display_width, display_height)
 
 def open_window(screen_posX, screen_posY, display_width, display_height, fullscreen=False, display_num=-1):
     global framework
     global scroll_text_window
+    global picture_angle
     if framework == None:
         framework = MyServerFramework()
         framework.create_window(screen_posX, screen_posY, display_width, display_height, fullscreen, display_num)
@@ -121,7 +122,7 @@ def open_window(screen_posX, screen_posY, display_width, display_height, fullscr
                 Alignments.TOP_TO_BOTTOM_RIGHT, 30, 30, (1.0, 1.0, 1.0), (0.0, 0.0, 0.0, 0.9))
             framework.get_text_window("top to bottom right").print_text(0, 0, "top to bottom right")
 
-        framework.add_picture("Picture Lucas", "images/Lucas Photo 12-22 2x3.jpg", 400, 30, 150, 200)
+        framework.add_picture("Picture Lucas", "images/Lucas Photo 12-22 2x3.jpg", 400, 30, 150, 200, picture_angle)
         picture_bb = framework.get_picture("Picture Lucas").get_bounding_box()
         framework.add_text_window("Lucas", "FreeMonoBold", picture_bb[0]+15, picture_bb[3] - 20, 
             Alignments.TOP_LEFT, 15, 1, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.5))
@@ -136,7 +137,7 @@ def open_window(screen_posX, screen_posY, display_width, display_height, fullscr
         framework.add_geometry2D("White frame", 
             Frame(framework.get_shader('geometry 2D'), 
                 (picture_bb[0], picture_bb[1]), (picture_bb[2]-picture_bb[0], picture_bb[3]-picture_bb[1]), 
-                (1.0, 1.0), (1.0, 1.0, 1.0), display_width, display_height))
+                (1.0, 1.0), (1.0, 1.0, 1.0), picture_angle, display_width, display_height))
 
         # Required after loading any font as it changes the OpenGL viewport
         #framework.update_view_port()

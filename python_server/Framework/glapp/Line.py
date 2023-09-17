@@ -2,6 +2,7 @@ from OpenGL.GL import *
 from .Geometry2D import *
 from .Uniform import *
 from .Utils import *
+from .Transformations import *
 import numpy as np
 
 class Line(Geometry2D):
@@ -49,6 +50,8 @@ class Line(Geometry2D):
         # set ortho projection matrix in shader
         projection = get_ortho_matrix(0, display_width, 0, display_height, 1 , -1)
         Uniform("mat4").load(self.shader_program.program_id, "projection", projection)
+        transformation_mat = identity_mat()
+        Uniform("mat4").load(self.shader_program.program_id, "transformation", transformation_mat)
         Uniform("vec3").load(self.shader_program.program_id, "color", 
             [self.color[0], self.color[1], self.color[2]])
         

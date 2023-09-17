@@ -89,13 +89,13 @@ class ServerFramework(PyOGLApp):
             self.text_windows[window_name] = TextWindow(self.fonts[font_name], pos_x, pos_y, alignment, 
                 m_cols, n_rows, text_color, background_color, display_width, display_height)
             
-    def add_picture(self, picture_name, picture_file_name, pos_x, pos_y, width=-1, height=-1):
+    def add_picture(self, picture_name, picture_file_name, pos_x, pos_y, width=-1, height=-1, angle=0.0):
         if self.fullscreen:
             self.pictures[picture_name] = Picture(self.shaders['picture'], picture_file_name, pos_x, pos_y, 
-                width, height, self.max_resolution[0], self.max_resolution[1])
+                width, height, angle, self.max_resolution[0], self.max_resolution[1])
         else:
             self.pictures[picture_name] = Picture(self.shaders['picture'], picture_file_name, pos_x, pos_y, 
-                width, height, self.display_width, self.display_height)
+                width, height, angle, self.display_width, self.display_height)
     
     def get_picture(self, picture_name):
         return self.pictures[picture_name]
@@ -229,7 +229,7 @@ class ServerFramework(PyOGLApp):
             if self.selection_axis != None:
                 self.selection_axis.draw(self.camera, self.lights)
         for _, picture in self.pictures.items():
-            picture.draw()
+            picture.draw(display_width, display_height)
         for _, text_window in self.text_windows.items():
             text_window.draw(display_width, display_height)
         for _, geometry in self.geometry2D.items():
