@@ -31,7 +31,6 @@ class ServerFramework(PyOGLApp):
         self.selection_cubes = []
         self.selection_axis = None
         self.fonts = dict()
-        self.text_windows = dict()
         self.geometry2D = dict()
 
     def initialize_3D_space(self):
@@ -78,18 +77,6 @@ class ServerFramework(PyOGLApp):
     def get_font(self, font_name):
         return self.fonts[font_name]
 
-    def add_text_window(self, window_name, window):
-        self.text_windows[window_name] = window
-
-    def get_text_window(self, window_name):
-        return self.text_windows[window_name]
-    
-    #        ScrollTextWindow(self.fonts[font_name], position, m_cols, n_rows, 
-    #            angle, alignment, text_color, background_color, display_width, display_height)
-    #    else:
-    #        self.text_windows[window_name] = TextWindow(self.fonts[font_name], position, m_cols, n_rows, 
-    #            angle, alignment, text_color, background_color, display_width, display_height)
-            
     def get_shader(self, sharder_name):
         return self.shaders[sharder_name]
             
@@ -101,8 +88,8 @@ class ServerFramework(PyOGLApp):
 
     def update_display_size(self, display_width, display_height):
         self.camera.update_perspective(display_width, display_height)
-        for _, text_window in self.text_windows.items():
-            text_window.update_display_size(display_width, display_height)
+        for _, geometry in self.geometry2D.items():
+            geometry.update_display_size(display_width, display_height)
 
     def mouse_pos_callback(self, window, xpos, ypos):
         if self.track_mouse:
@@ -213,8 +200,6 @@ class ServerFramework(PyOGLApp):
             self.display_selection_cubes(self.selection_cubes[5], object, "z", False)
             if self.selection_axis != None:
                 self.selection_axis.draw(self.camera, self.lights)
-        for _, text_window in self.text_windows.items():
-            text_window.draw(display_width, display_height)
         for _, geometry in self.geometry2D.items():
             geometry.draw(display_width, display_height)
 
