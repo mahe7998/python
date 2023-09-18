@@ -6,14 +6,12 @@ from .Geometry2D import *
 
 class Picture(Geometry2D):
 
-    def __init__(self, shader_program, filename, x, y, width, height, angle, screen_width, screen_height, keep_aspect_ratio=True):
+    def __init__(self, shader_program, filename, position, size, angle, screen_width, screen_height, keep_aspect_ratio=True):
 
-        super().__init__([x, y, x+width, y+height])
+        super().__init__([position[0], position[1], position[0]+size[0], position[1]+size[1]])
         self.shader_program = shader_program
-        self.x = x
-        self.y = y
-        self.width = width
-        self.height = height
+        self.position = [position[0], position[1]]
+        self.size = [size[0], size[1]]
         self.angle = angle
         self.keep_aspect_ratio = keep_aspect_ratio
         self.surface = None
@@ -21,10 +19,10 @@ class Picture(Geometry2D):
         image = Image.open(filename)
         #image.thumbnail((width, height))
         # By default, display original image size
-        if width == -1:
-            self.width = image.width
-        if height == -1:
-            self.height = image.height
+        if size[0] == -1:
+            self.size[0] = image.width
+        if size[1] == -1:
+            self.size[1] = image.height
         self.image_width = image.width
         self.image_height = image.height
         self.graphics_data_vertices = GraphicsData("vec2")
@@ -54,18 +52,18 @@ class Picture(Geometry2D):
         glBindTexture(GL_TEXTURE_2D, 0)
 
     def load_vertices(self, dislpay_width, display_height):
-        x = -self.width/2
-        y = -self.height/2
-        width = self.width
-        height = self.height
+        x = -self.size[0]/2
+        y = -self.size[1]/2
+        width = self.size[0]
+        height = self.size[1]
         if self.keep_aspect_ratio:
             image_ratio = self.image_width/self.image_height
-            display_ratio = self.width/self.height
+            display_ratio = self.size[0]/self.size[1]
             if display_ratio > image_ratio:
-                width = self.height * image_ratio
+                width = self.size[1] * image_ratio
                 x = -width/2
             else:
-                height = self.width/image_ratio
+                height = self.size[0]/image_ratio
                 y = -height/2
         vertices = []
         vertices.append((x,       y))        # 0, 0
@@ -91,9 +89,9 @@ class Picture(Geometry2D):
         Uniform("sample2D").load(self.shader_program.program_id, "texture_id", [self.texture_id, 1])
         self.projection = get_ortho_matrix(0, display_width, 0, display_height, 1 , -1)
         transformation_mat = identity_mat()
-        hw = self.width/2
-        hh = self.height/2
-        transformation_mat = translate(transformation_mat, self.x+hw, display_height-self.y-hh, 0.0)
+        hw = self.size[0]/2
+        hh = self.size[1]/2
+        transformation_mat = translate(transformation_mat, self.position[0]+hw, display_height-self.position[1]-hh, 0.0)
         transformation_mat = rotateA(transformation_mat, self.angle+180, (0, 0, 1))
         Uniform("mat4").load(self.shader_program.program_id, "transformation", transformation_mat)
         Uniform("mat4").load(self.shader_program.program_id, "projection", self.projection)

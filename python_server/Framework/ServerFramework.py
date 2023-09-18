@@ -89,13 +89,13 @@ class ServerFramework(PyOGLApp):
             self.text_windows[window_name] = TextWindow(self.fonts[font_name], pos_x, pos_y, alignment, 
                 m_cols, n_rows, text_color, background_color, display_width, display_height)
             
-    def add_picture(self, picture_name, picture_file_name, pos_x, pos_y, width=-1, height=-1, angle=0.0):
+    def add_picture(self, picture_name, picture_file_name, position, size, angle=0.0):
         if self.fullscreen:
-            self.pictures[picture_name] = Picture(self.shaders['picture'], picture_file_name, pos_x, pos_y, 
-                width, height, angle, self.max_resolution[0], self.max_resolution[1])
+            self.pictures[picture_name] = Picture(self.shaders['picture'], picture_file_name, 
+                position, size, self.max_resolution[0], self.max_resolution[1])
         else:
-            self.pictures[picture_name] = Picture(self.shaders['picture'], picture_file_name, pos_x, pos_y, 
-                width, height, angle, self.display_width, self.display_height)
+            self.pictures[picture_name] = Picture(self.shaders['picture'], picture_file_name, position,
+                size, angle, self.display_width, self.display_height)
     
     def get_picture(self, picture_name):
         return self.pictures[picture_name]

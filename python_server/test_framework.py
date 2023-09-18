@@ -122,7 +122,7 @@ def open_window(screen_posX, screen_posY, display_width, display_height, fullscr
                 Alignments.TOP_TO_BOTTOM_RIGHT, 30, 30, (1.0, 1.0, 1.0), (0.0, 0.0, 0.0, 0.9))
             framework.get_text_window("top to bottom right").print_text(0, 0, "top to bottom right")
 
-        framework.add_picture("Picture Lucas", "images/Lucas Photo 12-22 2x3.jpg", 400, 30, 150, 200, picture_angle)
+        framework.add_picture("Picture Lucas", "images/Lucas Photo 12-22 2x3.jpg", (400, 30), (150, 200), picture_angle)
         picture_bb = framework.get_picture("Picture Lucas").get_bounding_box()
         framework.add_text_window("Lucas", "FreeMonoBold", picture_bb[0]+15, picture_bb[3] - 20, 
             Alignments.TOP_LEFT, 15, 1, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.5))
