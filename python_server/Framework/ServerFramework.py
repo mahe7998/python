@@ -202,5 +202,4 @@ class ServerFramework(PyOGLApp):
                 self.selection_axis.draw(self.camera, self.lights)
         for _, geometry in self.geometry2D.items():
             geometry.draw(display_width, display_height)
-
-
+            

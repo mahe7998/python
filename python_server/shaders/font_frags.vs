@@ -9,8 +9,12 @@ uniform int transparent;
 
 void main()
 {
-    if ((transparent == 1) || texture(texture_id, TexCoords).r > 0.0) {
+    if (transparent == 1) {
         color = vec4(textColor, texture(texture_id, TexCoords).r);
-    } else
-        color = backgroundColor;
+    }
+    else {
+        float alpha = texture(texture_id, TexCoords).r;
+        color = alpha*vec4(textColor, 1) + (1-alpha)*backgroundColor;
+        color = vec4(color.rgb, backgroundColor.a);
+    }
 }

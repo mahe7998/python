@@ -85,7 +85,7 @@ class Font:
             raise Exception("Frame buffer error, status: " + str(fb_status))
 
         glViewport(0, 0, self.font_texture_width, self.font_texture_height)
-        glClearColor(0.0, 0.0, 0.0, 1.0)
+        glClearColor(0.0, 0.0, 0.0, 0.0)
         glClear(GL_COLOR_BUFFER_BIT)
 
         # Create 2 buffers that will be used for all 6 vertices and 6 UVs 

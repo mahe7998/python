@@ -146,18 +146,16 @@ def open_window(screen_posX, screen_posY, display_width, display_height, fullscr
             Picture(framework.get_shader('picture'), "images/Lucas Photo 12-22 2x3.jpg", (400, 30), (150, 200),
                     picture_angle, display_width, display_height))
         picture_bb = framework.get_geometry2D("Picture Lucas").get_bounding_box()
+        framework.add_geometry2D("White frame", 
+            Frame(framework.get_shader('geometry 2D'), 
+                (picture_bb[0], picture_bb[1]), (picture_bb[2]-picture_bb[0], picture_bb[3]-picture_bb[1]), 
+                (1.0, 1.0), (1.0, 1.0, 1.0), picture_angle, display_width, display_height))
         framework.add_geometry2D("Lucas", 
             TextWindow(framework.get_font("FreeMonoBold"), (picture_bb[0]+15, picture_bb[3]-20), 
                        15, 1, 0.0, Alignments.TOP_LEFT, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.5),
                        display_width, display_height))
         framework.get_geometry2D("Lucas").print_text(2, 0, "Lucas Mahé")
-     
-        framework.add_geometry2D("White frame", 
-            Frame(framework.get_shader('geometry 2D'), 
-                (picture_bb[0], picture_bb[1]), (picture_bb[2]-picture_bb[0], picture_bb[3]-picture_bb[1]), 
-                (1.0, 1.0), (1.0, 1.0, 1.0), picture_angle, display_width, display_height))
 
-      
 def close_window():
     global framework
     if framework != None:
