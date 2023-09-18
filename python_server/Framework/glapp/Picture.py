@@ -6,7 +6,7 @@ from .Geometry2D import *
 
 class Picture(Geometry2D):
 
-    def __init__(self, shader_program, filename, position, size, angle, screen_width, screen_height, keep_aspect_ratio=True):
+    def __init__(self, shader_program, filename, position, size, angle, display_width, display_height, keep_aspect_ratio=True):
 
         super().__init__([position[0], position[1], position[0]+size[0], position[1]+size[1]])
         self.shader_program = shader_program
@@ -38,7 +38,7 @@ class Picture(Geometry2D):
         uvs.append((1.0, 1.0)) # 1, 1
         uvs.append((1.0, 0.0)) # 1, 0
         self.uvs = np.array(uvs, np.float32)
-        self.load_vertices(screen_width, screen_height)
+        self.load_vertices(display_width, display_height)
 
     def load(self, image):
         glBindTexture(GL_TEXTURE_2D, self.texture_id)

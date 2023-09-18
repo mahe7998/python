@@ -32,7 +32,6 @@ class ServerFramework(PyOGLApp):
         self.selection_axis = None
         self.fonts = dict()
         self.text_windows = dict()
-        self.pictures = dict()
         self.geometry2D = dict()
 
     def initialize_3D_space(self):
@@ -76,30 +75,20 @@ class ServerFramework(PyOGLApp):
             font_file_name, char_width, char_height, nb_preloaded_chars, max_cached_chars, save_png_filename)
         self.fonts[font_name] = font
 
-    def add_text_window(self, window_name, font_name, position, m_cols, n_rows, angle, alignment, 
-                        text_color, background_color, type=None):
-        display_width = self.display_width
-        display_height = self.display_height
-        if self.fullscreen:
-            display_width = self.max_resolution[0]
-            display_height = self.max_resolution[1]
-        if type == "scroll":
-            self.text_windows[window_name] = ScrollTextWindow(self.fonts[font_name], position, m_cols, n_rows, 
-                angle, alignment, text_color, background_color, display_width, display_height)
-        else:
-            self.text_windows[window_name] = TextWindow(self.fonts[font_name], position, m_cols, n_rows, 
-                angle, alignment, text_color, background_color, display_width, display_height)
-            
-    def add_picture(self, picture_name, picture_file_name, position, size, angle=0.0):
-        if self.fullscreen:
-            self.pictures[picture_name] = Picture(self.shaders['picture'], picture_file_name, 
-                position, size, self.max_resolution[0], self.max_resolution[1])
-        else:
-            self.pictures[picture_name] = Picture(self.shaders['picture'], picture_file_name, position,
-                size, angle, self.display_width, self.display_height)
+    def get_font(self, font_name):
+        return self.fonts[font_name]
+
+    def add_text_window(self, window_name, window):
+        self.text_windows[window_name] = window
+
+    def get_text_window(self, window_name):
+        return self.text_windows[window_name]
     
-    def get_picture(self, picture_name):
-        return self.pictures[picture_name]
+    #        ScrollTextWindow(self.fonts[font_name], position, m_cols, n_rows, 
+    #            angle, alignment, text_color, background_color, display_width, display_height)
+    #    else:
+    #        self.text_windows[window_name] = TextWindow(self.fonts[font_name], position, m_cols, n_rows, 
+    #            angle, alignment, text_color, background_color, display_width, display_height)
             
     def get_shader(self, sharder_name):
         return self.shaders[sharder_name]
@@ -110,15 +99,10 @@ class ServerFramework(PyOGLApp):
     def get_geometry2D(self, geometry_name):
         return self.geometry2D[geometry_name]
 
-    def get_text_window(self, window_name):
-        return self.text_windows[window_name]
-    
     def update_display_size(self, display_width, display_height):
         self.camera.update_perspective(display_width, display_height)
         for _, text_window in self.text_windows.items():
             text_window.update_display_size(display_width, display_height)
-        for _, picture in self.pictures.items():
-            picture.update_display_size(display_width, display_height)
 
     def mouse_pos_callback(self, window, xpos, ypos):
         if self.track_mouse:
@@ -229,8 +213,6 @@ class ServerFramework(PyOGLApp):
             self.display_selection_cubes(self.selection_cubes[5], object, "z", False)
             if self.selection_axis != None:
                 self.selection_axis.draw(self.camera, self.lights)
-        for _, picture in self.pictures.items():
-            picture.draw(display_width, display_height)
         for _, text_window in self.text_windows.items():
             text_window.draw(display_width, display_height)
         for _, geometry in self.geometry2D.items():
