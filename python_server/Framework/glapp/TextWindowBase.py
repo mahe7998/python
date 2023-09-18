@@ -9,14 +9,13 @@ from .Transformations import *
 
 class TextWindowBase(Geometry2D):
 
-    def __init__(self, font, pos_x, pos_y, alignment, n_cols, m_rows, angle,
+    def __init__(self, font, position, n_cols, m_rows, angle, alignment,
                  text_color, background_color, display_width, display_height):
 
         super().__init__([0.0, 0.0, 0.0, 0.0])
         self.font = font
-        self.pos_x = pos_x
-        self.pos_y = pos_y
-        self.position = [pos_x, pos_y]
+        self.requested_position = [position[0], position[1]]
+        self.position = [position[0], position[1]]
         self.size = [0, 0] # Calculated later based on alignment
         self.angle = angle
         self.alignment = alignment
@@ -59,32 +58,32 @@ class TextWindowBase(Geometry2D):
         window_height = self.max_display_rows * char_height
 
         if self.alignment == Alignments.TOP_RIGHT or self.alignment == Alignments.TOP_TO_BOTTOM_RIGHT:
-            pos_x = display_width - window_width - self.pos_x
-            pos_y = display_height - self.pos_y
+            pos_x = display_width - window_width - self.requested_position[0]
+            pos_y = display_height - self.requested_position[1]
         elif self.alignment == Alignments.BOTTOM_RIGHT:
-            pos_x = display_width - window_width - self.pos_x
-            pos_y = self.pos_y + window_height
+            pos_x = display_width - window_width - self.requested_position[0]
+            pos_y = self.requested_position[1] + window_height
         elif self.alignment == Alignments.CENTER_RIGHT:
-            pos_x = display_width - window_width - self.pos_x
-            pos_y = display_height//2 + char_height - window_height//2 - self.pos_y
+            pos_x = display_width - window_width - self.requested_position[0]
+            pos_y = display_height//2 + char_height - window_height//2 - self.requested_position[1]
         elif self.alignment == Alignments.TOP_LEFT or self.alignment == Alignments.TOP_TO_BOTTOM_LEFT:
-            pos_x = self.pos_x
-            pos_y = display_height - self.pos_y
+            pos_x = self.requested_position[0]
+            pos_y = display_height - self.requested_position[1]
         elif self.alignment == Alignments.BOTTOM_LEFT:
-            pos_x = self.pos_x
-            pos_y = self.pos_y + window_height
+            pos_x = self.requested_position[0]
+            pos_y = self.requested_position[1] + window_height
         elif self.alignment == Alignments.CENTER_LEFT:
-            pos_x = self.pos_x
-            pos_y = display_height//2 + window_height//2 - self.pos_y
+            pos_x = self.requested_position[0]
+            pos_y = display_height//2 + window_height//2 - self.requested_position[1]
         elif self.alignment == Alignments.TOP_CENTER or self.alignment == Alignments.TOP_TO_BOTTOM_CENTER:
-            pos_x = display_width//2 - window_width//2 - self.pos_x
-            pos_y = display_height - self.pos_y
+            pos_x = display_width//2 - window_width//2 - self.requested_position[0]
+            pos_y = display_height - self.requested_position[1]
         elif self.alignment == Alignments.BOTTOM_CENTER:
-            pos_x = display_width//2 - window_width//2 - self.pos_x
-            pos_y = self.pos_y + window_height
+            pos_x = display_width//2 - window_width//2 - self.requested_position[0]
+            pos_y = self.requested_position[1] + window_height
         elif self.alignment == Alignments.CENTER:
-            pos_x = display_width//2 - window_width//2 - self.pos_x
-            pos_y = display_height//2 + window_height//2 - self.pos_y
+            pos_x = display_width//2 - window_width//2 - self.requested_position[0]
+            pos_y = display_height//2 + window_height//2 - self.requested_position[1]
         else:
             raise Exception("Alignment not implemented yet")
         self.position = [pos_x, pos_y]

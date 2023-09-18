@@ -2,9 +2,9 @@ from .TextWindowBase import *
 
 class TextWindow(TextWindowBase):
 
-    def __init__(self, font, pos_x, pos_y, alignment, n_cols, m_rows, angle, 
+    def __init__(self, font, position, n_cols, m_rows, angle, alignment,
                  text_color, background_color, display_width, display_height):
-        super().__init__(font, pos_x, pos_y, alignment, n_cols, m_rows, angle,
+        super().__init__(font, position, n_cols, m_rows, angle, alignment,
             text_color, background_color, display_width, display_height)
 
     def init_text(self):
