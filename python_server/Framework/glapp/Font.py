@@ -97,7 +97,7 @@ class Font:
         # set ortho projection matrix in shader
         projection_mat = get_ortho_matrix(0, self.font_texture_width, self.font_texture_height, 0, 1 , -1)
         Uniform("mat4").load(self.shader_program.program_id, "projection", projection_mat)
-        Uniform("vec3").load(self.shader_program.program_id, "textColor", [1.0, 1.0, 1.0])
+        Uniform("vec4").load(self.shader_program.program_id, "textColor", [1.0, 1.0, 1.0, 1.0])
         #Uniform("vec4").load(self.shader_program.program_id, "backgroundColor", [1.0, 1.0, 1.0, 1.0])
         Uniform("int").load(self.shader_program.program_id, "transparent", 1)
         transformation_mat = identity_mat()
@@ -208,7 +208,7 @@ class Font:
         # set ortho projection matrix in shader
         projection_mat = get_ortho_matrix(0, self.font_texture_width, self.font_texture_height, 0, 1 , -1)
         Uniform("mat4").load(self.shader_program.program_id, "projection", projection_mat)
-        Uniform("vec3").load(self.shader_program.program_id, "textColor", [1.0, 1.0, 1.0])
+        Uniform("vec4").load(self.shader_program.program_id, "textColor", [1.0, 1.0, 1.0, 1.0])
         Uniform("int").load(self.shader_program.program_id, "transparent", 1)
         glActiveTexture(GL_TEXTURE0)
 

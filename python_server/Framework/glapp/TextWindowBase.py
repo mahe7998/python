@@ -9,7 +9,7 @@ from .Transformations import *
 
 class TextWindowBase(Geometry2D):
 
-    def __init__(self, font, position, n_cols, m_rows, angle, alignment,
+    def __init__(self, font, position, n_cols, m_rows, angle, z, alignment,
                  text_color, background_color, display_width, display_height):
 
         super().__init__([0.0, 0.0, 0.0, 0.0])
@@ -18,6 +18,7 @@ class TextWindowBase(Geometry2D):
         self.position = [position[0], position[1]]
         self.size = [0, 0] # Calculated later based on alignment
         self.angle = angle
+        self.z = z
         self.alignment = alignment
         self.m_rows = m_rows
         self.max_display_rows = m_rows
@@ -95,7 +96,7 @@ class TextWindowBase(Geometry2D):
                     vertices,   
                     -window_width/2 + m*char_width, 
                     -window_height/2 - n*char_height, 
-                    char_width, char_height, char_height)
+                    char_width, char_height, char_height, self.z)
 
         self.projection = get_ortho_matrix(0, display_width, 0, display_height, 1 , -1)
         super().update_bouding_box([pos_x, pos_y, pos_x + window_width, pos_y + window_height])
@@ -147,7 +148,7 @@ class TextWindowBase(Geometry2D):
         glBindVertexArray(self.vao_ref)
         self.font.shader_program.use()
            
-        Uniform("vec3").load(self.font.shader_program.program_id, "textColor", self.text_color)
+        Uniform("vec4").load(self.font.shader_program.program_id, "textColor", self.text_color)
         Uniform("vec4").load(self.font.shader_program.program_id, "backgroundColor", self.background_color)
         Uniform("int").load(self.font.shader_program.program_id, "transparent", 0)
         Uniform("sample2D").load(self.font.shader_program.program_id, "texture_id", [self.font.font_texture, 1])

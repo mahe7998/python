@@ -7,13 +7,14 @@ import numpy as np
 
 class Frame(Geometry2D):
 
-    def __init__(self, shader_program, position, size, line_width, color, angle, display_width, display_height):
+    def __init__(self, shader_program, position, size, line_width, color, angle, z, display_width, display_height):
         super().__init__([0.0, 0.0, 0.0, 0.0]) # we update position later...
         # Create a vertex buffer object for the rectangle
         self.shader_program = shader_program
         self.line_width = line_width
         self.color = color
         self.angle = angle
+        self.z = z
         self.update_position(position, size, angle, display_width, display_height)
         self.vbo = glGenBuffers(1)
         glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
@@ -29,17 +30,18 @@ class Frame(Geometry2D):
         ofy = self.line_width[1]/2
         hw = size[0]/2
         hh = size[1]/2
+        z = self.z
         self.vertices = np.array([
-            [-hw-ofx, hh+ofy, -1.0],
-            [-hw+ofx, hh-ofy, -1.0],
-            [hw+ofx, hh+ofy, -1.0],
-            [hw-ofx, hh-ofy, -1.0],
-            [hw+ofx, -hh-ofy, -1.0],
-            [hw-ofx, -hh+ofy, -1.0],
-            [-hw-ofx, -hh-ofy, -1.0],
-            [-hw+ofx, -hh+ofy, -1.0],
-            [-hw-ofx, hh+ofy, -1.0],
-            [-hw+ofx, hh-ofy, -1.0]
+            [-hw-ofx,  hh+ofy, z],
+            [-hw+ofx,  hh-ofy, z],
+            [hw+ofx,   hh+ofy, z],
+            [hw-ofx,   hh-ofy, z],
+            [hw+ofx,  -hh-ofy, z],
+            [hw-ofx,  -hh+ofy, z],
+            [-hw-ofx, -hh-ofy, z],
+            [-hw+ofx, -hh+ofy, z],
+            [-hw-ofx,  hh+ofy, z],
+            [-hw+ofx,  hh-ofy, z]
         ], dtype=np.float32)
         super().update_bouding_box(
             [position[0]-ofx, display_height-position[1]+ofy, 

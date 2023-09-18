@@ -6,12 +6,13 @@ from .Geometry2D import *
 
 class Picture(Geometry2D):
 
-    def __init__(self, shader_program, filename, position, size, angle, display_width, display_height, keep_aspect_ratio=True):
+    def __init__(self, shader_program, filename, position, size, angle, z, display_width, display_height, keep_aspect_ratio=True):
 
         super().__init__([position[0], position[1], position[0]+size[0], position[1]+size[1]])
         self.shader_program = shader_program
         self.position = [position[0], position[1]]
         self.size = [size[0], size[1]]
+        self.z = z
         self.angle = angle
         self.keep_aspect_ratio = keep_aspect_ratio
         self.surface = None
@@ -25,7 +26,7 @@ class Picture(Geometry2D):
             self.size[1] = image.height
         self.image_width = image.width
         self.image_height = image.height
-        self.graphics_data_vertices = GraphicsData("vec2")
+        self.graphics_data_vertices = GraphicsData("vec3")
         self.graphics_data_uvs = GraphicsData("vec2")
         self.load(image)
         image.close()
@@ -33,10 +34,8 @@ class Picture(Geometry2D):
         uvs = []
         uvs.append((0.0, 0.0)) # 0, 0
         uvs.append((0.0, 1.0)) # 0, 1
-        uvs.append((1.0, 1.0)) # 1, 1
-        uvs.append((0.0, 0.0)) # 0, 0
-        uvs.append((1.0, 1.0)) # 1, 1
         uvs.append((1.0, 0.0)) # 1, 0
+        uvs.append((1.0, 1.0)) # 1, 1
         self.uvs = np.array(uvs, np.float32)
         self.load_vertices(display_width, display_height)
 
@@ -66,12 +65,11 @@ class Picture(Geometry2D):
                 height = self.size[0]/image_ratio
                 y = -height/2
         vertices = []
-        vertices.append((x,       y))        # 0, 0
-        vertices.append((x,       y+height)) # 0, 1
-        vertices.append((x+width, y+height)) # 1, 1
-        vertices.append((x,       y))        # 0, 0
-        vertices.append((x+width, y+height)) # 1, 1
-        vertices.append((x+width, y))        # 1, 0
+        z = self.z
+        vertices.append((x,       y,        z)) # 0, 0
+        vertices.append((x,       y+height, z)) # 0, 1
+        vertices.append((x+width, y,        z)) # 1, 0
+        vertices.append((x+width, y+height, z)) # 1, 1
         self.vertices = np.array(vertices, np.float32)
 
         glBindVertexArray(self.vao_ref)
@@ -103,7 +101,7 @@ class Picture(Geometry2D):
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
 
         glDisable(GL_CULL_FACE);  
-        glDrawArrays(GL_TRIANGLES, 0, len(self.vertices))
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, len(self.vertices))
         glEnable(GL_CULL_FACE);  
         
         glBindTexture(GL_TEXTURE_2D, 0)
