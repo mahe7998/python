@@ -5,15 +5,20 @@ from .GraphicsData import *
 from .Uniform import *
 from .TextWindowBase import *
 from .Geometry2D import *
+from .Transformations import *
+
 class TextWindowBase(Geometry2D):
 
-    def __init__(self, font, pos_x, pos_y, alignment, n_cols, m_rows, 
+    def __init__(self, font, pos_x, pos_y, alignment, n_cols, m_rows, angle,
                  text_color, background_color, display_width, display_height):
 
         super().__init__([0.0, 0.0, 0.0, 0.0])
         self.font = font
         self.pos_x = pos_x
         self.pos_y = pos_y
+        self.position = [pos_x, pos_y]
+        self.size = [0, 0] # Calculated later based on alignment
+        self.angle = angle
         self.alignment = alignment
         self.m_rows = m_rows
         self.max_display_rows = m_rows
@@ -24,7 +29,7 @@ class TextWindowBase(Geometry2D):
         self.n_cols = n_cols
         self.text_color = text_color
         self.background_color = background_color
-        self.graphics_data_vertices = GraphicsData("vec2")
+        self.graphics_data_vertices = GraphicsData("vec3")
         self.graphics_data_text_coords = GraphicsData("vec2")
         self.init_text()
         self.vao_ref = glGenVertexArrays(1) 
@@ -82,13 +87,15 @@ class TextWindowBase(Geometry2D):
             pos_y = display_height//2 + window_height//2 - self.pos_y
         else:
             raise Exception("Alignment not implemented yet")
+        self.position = [pos_x, pos_y]
+        self.size = [window_width, window_height]
                               
         for n in range(0, self.max_display_rows):
             for m in range(0, self.n_cols):
                 get_rendering_vertices(
                     vertices,   
-                    pos_x + m * char_width, 
-                    pos_y - n * char_height, 
+                    -window_width/2 + m*char_width, 
+                    -window_height/2 - n*char_height, 
                     char_width, char_height, char_height)
 
         self.projection = get_ortho_matrix(0, display_width, 0, display_height, 1 , -1)
@@ -146,6 +153,12 @@ class TextWindowBase(Geometry2D):
         Uniform("int").load(self.font.shader_program.program_id, "transparent", 0)
         Uniform("sample2D").load(self.font.shader_program.program_id, "texture_id", [self.font.font_texture, 1])
         Uniform("mat4").load(self.font.shader_program.program_id, "projection", self.projection)
+        transformation_mat = identity_mat()
+        hw = self.size[0]/2
+        hh = self.size[1]/2
+        transformation_mat = translate(transformation_mat, self.position[0]+hw, self.position[1]+hh, 0.0)
+        transformation_mat = rotateA(transformation_mat, self.angle, (0, 0, 1))
+        Uniform("mat4").load(self.font.shader_program.program_id, "transformation", transformation_mat)
         glActiveTexture(GL_TEXTURE0)
 
         fb_status = glCheckFramebufferStatus(GL_FRAMEBUFFER)

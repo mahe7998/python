@@ -67,12 +67,12 @@ def offset_object_boundaries(boundaries, offset):
     return new_boundaries
 
 def get_rendering_vertices(vertices, xpos, ypos, w, h, top):
-    vertices.append((xpos,     ypos + (h-top) - h)) # 0, 0
-    vertices.append((xpos,     ypos + (h-top)    )) # 0, 1
-    vertices.append((xpos + w, ypos + (h-top),   )) # 1, 1
-    vertices.append((xpos,     ypos + (h-top) - h)) # 0, 0
-    vertices.append((xpos + w, ypos + (h-top),   )) # 1, 1
-    vertices.append((xpos + w, ypos + (h-top) - h)) # 1, 0
+    vertices.append((xpos,     ypos + (h-top) - h, -1.0)) # 0, 0
+    vertices.append((xpos,     ypos + (h-top)    , -1.0)) # 0, 1
+    vertices.append((xpos + w, ypos + (h-top)    , -1.0)) # 1, 1
+    vertices.append((xpos,     ypos + (h-top) - h, -1.0)) # 0, 0
+    vertices.append((xpos + w, ypos + (h-top)    , -1.0)) # 1, 1
+    vertices.append((xpos + w, ypos + (h-top) - h, -1.0)) # 1, 0
 
 def get_rendering_texes(texes, tex_l=0.0, tex_r=1.0, tex_t=1.0, tex_b=0.0):
     texes.append((tex_l, tex_b)) # 0, 0

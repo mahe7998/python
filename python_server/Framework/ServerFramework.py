@@ -76,7 +76,8 @@ class ServerFramework(PyOGLApp):
             font_file_name, char_width, char_height, nb_preloaded_chars, max_cached_chars, save_png_filename)
         self.fonts[font_name] = font
 
-    def add_text_window(self, window_name, font_name, pos_x, pos_y, alignment, m_cols, n_rows, text_color, background_color, type=None):
+    def add_text_window(self, window_name, font_name, pos_x, pos_y, alignment, m_cols, n_rows, angle,
+                        text_color, background_color, type=None):
         display_width = self.display_width
         display_height = self.display_height
         if self.fullscreen:
@@ -84,10 +85,10 @@ class ServerFramework(PyOGLApp):
             display_height = self.max_resolution[1]
         if type == "scroll":
             self.text_windows[window_name] = ScrollTextWindow(self.fonts[font_name], pos_x, pos_y, alignment, 
-                m_cols, n_rows, text_color, background_color, display_width, display_height)
+                m_cols, n_rows, angle, text_color, background_color, display_width, display_height)
         else:
             self.text_windows[window_name] = TextWindow(self.fonts[font_name], pos_x, pos_y, alignment, 
-                m_cols, n_rows, text_color, background_color, display_width, display_height)
+                m_cols, n_rows, angle, text_color, background_color, display_width, display_height)
             
     def add_picture(self, picture_name, picture_file_name, position, size, angle=0.0):
         if self.fullscreen:

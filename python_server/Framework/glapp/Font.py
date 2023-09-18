@@ -5,6 +5,7 @@ from PIL import Image
 from PIL import ImageOps
 from .Uniform import *
 from .Utils import *
+from .Transformations import *
 
 class Font:
 
@@ -99,6 +100,8 @@ class Font:
         Uniform("vec3").load(self.shader_program.program_id, "textColor", [1.0, 1.0, 1.0])
         #Uniform("vec4").load(self.shader_program.program_id, "backgroundColor", [1.0, 1.0, 1.0, 1.0])
         Uniform("int").load(self.shader_program.program_id, "transparent", 1)
+        transformation_mat = identity_mat()
+        Uniform("mat4").load(self.shader_program.program_id, "transformation", transformation_mat)
         glActiveTexture(GL_TEXTURE0)
 
         glBindVertexArray(self.vao_ref)
@@ -180,7 +183,7 @@ class Font:
         final_vertices = np.array(vertices, dtype=np.float32)
         glBufferData(GL_ARRAY_BUFFER, final_vertices.nbytes, final_vertices, GL_DYNAMIC_DRAW)
         location_id = glGetAttribLocation(self.shader_program.program_id, "vertex")
-        glVertexAttribPointer(location_id, 2, GL_FLOAT, GL_FALSE, 0, None)
+        glVertexAttribPointer(location_id, 3, GL_FLOAT, GL_FALSE, 0, None)
         glEnableVertexAttribArray(location_id)
         glBindBuffer(GL_ARRAY_BUFFER, 0)
 

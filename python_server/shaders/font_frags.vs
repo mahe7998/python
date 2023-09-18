@@ -10,8 +10,7 @@ uniform int transparent;
 void main()
 {
     if ((transparent == 1) || texture(texture_id, TexCoords).r > 0.0) {
-        vec4 sampled = vec4(1.0, 1.0, 1.0, texture(texture_id, TexCoords).r);
-        color = vec4(textColor, 1.0) * sampled;
+        color = vec4(textColor, texture(texture_id, TexCoords).r);
     } else
         color = backgroundColor;
 }

@@ -15,13 +15,11 @@ out vec2 uv;
 void main()
 {
     // Light at the position of the camera
-    //light_pos = vec3(inverse(model_mat) *
-    //    vec4(view_mat[3][0], view_mat[3][1], view_mat[3][2],1));
     view_pos = vec3(inverse(model_mat) *
         vec4(view_mat[3][0], view_mat[3][1], view_mat[3][2],1));
-    gl_Position = projection_mat * inverse(view_mat) * model_mat * vec4(position,1);
+    gl_Position = projection_mat * inverse(view_mat) * model_mat * vec4(position, 1.0);
     normal = mat3(transpose(inverse(model_mat))) * vertex_normal;
-    frag_pos = vec3(model_mat * vec4(position,1));
+    frag_pos = vec3(model_mat * vec4(position, 1.0));
     color = vertex_color;
     uv = vertex_uv;
 }

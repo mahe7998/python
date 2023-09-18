@@ -3,9 +3,9 @@ import numpy as np
 
 class ScrollTextWindow(TextWindowBase):
 
-    def __init__(self, font, pos_x, pos_y, alignment, n_cols, m_rows, 
+    def __init__(self, font, pos_x, pos_y, alignment, n_cols, m_rows, angle,
                  text_color, background_color, display_width, display_height):
-        super().__init__(font, pos_x, pos_y, alignment, n_cols, m_rows, 
+        super().__init__(font, pos_x, pos_y, alignment, n_cols, m_rows, angle,
                          text_color, background_color, display_width, display_height)
         self.max_history = 1000
 
