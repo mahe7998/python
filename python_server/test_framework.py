@@ -84,28 +84,28 @@ def open_window(screen_posX, screen_posY, display_width, display_height, fullscr
         
         # Windows x is 100, y is 150
         framework.add_geometry2D("center", 
-            TextWindow(framework.get_font("FreeMono"), (0, 0), 25, 4, 0.0, Alignments.CENTER, 
-                       (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8), display_width, display_height))
+            TextWindow(framework.get_font("FreeMono"), (0, 0), 25, 4, 0.0, 0.4, Alignments.CENTER, 
+                       (1.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0, 0.8), display_width, display_height))
         framework.get_geometry2D("center").print_text(2, 1, "_/Jacques is good!/_")
         framework.get_geometry2D("center").print_text(3, 2, "    3rd line ")
 
         if show_alignments:
             framework.add_geometry2D("top left", 
-                TextWindow(framework.get_font("FreeMono"), (1, 1), 8, 1, 0.0, Alignments.TOP_LEFT, 
-                           (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8), display_width, display_height))
+                TextWindow(framework.get_font("FreeMono"), (1, 1), 8, 1, 0.0, 0.0, Alignments.TOP_LEFT, 
+                           (1.0, 0.0, 0.0, 0.8), (1.0, 1.0, 1.0, 0.8), display_width, display_height))
             framework.get_geometry2D("top left").print_text(0, 0, "top left")
             framework.add_geometry2D("bottom left",
-                TextWindow(framework.get_font("FreeMono"), (1, 1), 11, 1, 0.0, Alignments.BOTTOM_LEFT, 
-                           (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8), display_width, display_height))
+                TextWindow(framework.get_font("FreeMono"), (1, 1), 11, 1, 0.0,  0.0, Alignments.BOTTOM_LEFT, 
+                           (1.0, 0.0, 0.0, 0.8), (1.0, 1.0, 1.0, 0.8), display_width, display_height))
             framework.get_geometry2D("bottom left").print_text(0, 0, "bottom left")
             framework.add_geometry2D("center left", 
-                TextWindow(framework.get_font("FreeMono"), (1, 0), 11, 1, 0.0, Alignments.CENTER_LEFT, 
-                           (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8), display_width, display_height))
+                TextWindow(framework.get_font("FreeMono"), (1, 0), 11, 1, 0.0,  0.0, Alignments.CENTER_LEFT, 
+                           (1.0, 0.0, 0.0, 0.8), (1.0, 1.0, 1.0, 0.8), display_width, display_height))
             framework.get_geometry2D("center left").print_text(0, 0, "center left")
         else:
             framework.add_geometry2D("top to bottom left", 
-                ScrollTextWindow(framework.get_font("FreeMono"), (1, 1), 15, 1, 0.0, Alignments.TOP_TO_BOTTOM_LEFT, 
-                                 (1.0, 1.0, 1.0), (0.0, 0.0, 0.0, 0.9), display_width, display_height))
+                ScrollTextWindow(framework.get_font("FreeMono"), (1, 1), 15, 1, 0.0,  0.0, Alignments.TOP_TO_BOTTOM_LEFT, 
+                                 (1.0, 1.0, 1.0, 0.8), (0.0, 0.0, 0.0, 1.0), display_width, display_height))
             scroll_text_window = framework.get_geometry2D("top to bottom left")
             scroll_text_window.load_text("top to bottom left scroll window")
             scroll_wnd_bb = scroll_text_window.get_bounding_box()
@@ -115,44 +115,44 @@ def open_window(screen_posX, screen_posY, display_width, display_height, fullscr
                     display_width, display_height))
 
         framework.add_geometry2D("top center", 
-            TextWindow(framework.get_font("FreeMono"), (0, 1), 12, 1, 0.0, Alignments.TOP_CENTER, 
-                       (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8), display_width, display_height))
+            TextWindow(framework.get_font("FreeMono"), (0, 1), 12, 1, 0.0,  0.0, Alignments.TOP_CENTER, 
+                       (1.0, 0.0, 0.0, 0.8), (1.0, 1.0, 1.0, 0.8), display_width, display_height))
         framework.get_geometry2D("top center").print_text(0, 0, " top center ")
         framework.add_geometry2D("bottom center",
-            TextWindow(framework.get_font("FreeMono"), (1, 1), 13, 1, 0.0, Alignments.BOTTOM_CENTER, 
-                       (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8), display_width, display_height))
+            TextWindow(framework.get_font("FreeMono"), (1, 1), 13, 1, 0.0,  0.0, Alignments.BOTTOM_CENTER, 
+                       (1.0, 0.0, 0.0, 0.8), (1.0, 1.0, 1.0, 0.8), display_width, display_height))
         framework.get_geometry2D("bottom center").print_text(0, 0, "bottom center")
 
         if show_alignments:
             framework.add_geometry2D("top right", 
-                TextWindow(framework.get_font("FreeMono"), (1, 1), 9, 1, 0.0, Alignments.TOP_RIGHT, 
-                (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8), display_width, display_height))
+                TextWindow(framework.get_font("FreeMono"), (1, 1), 9, 1, 0.0,  0.0, Alignments.TOP_RIGHT, 
+                (1.0, 0.0, 0.0, 0.8), (1.0, 1.0, 1.0, 0.8), display_width, display_height))
             framework.get_geometry2D("top right").print_text(0, 0, "top right")
             framework.add_geometry2D("center right", 
-                TextWindow(framework.get_font("FreeMono"), (1, 0), 12, 1, 0.0, Alignments.CENTER_RIGHT, 
-                (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8), display_width, display_height))
+                TextWindow(framework.get_font("FreeMono"), (1, 0), 12, 1, 0.0,  0.0, Alignments.CENTER_RIGHT, 
+                (1.0, 0.0, 0.0, 0.8), (1.0, 1.0, 1.0, 0.8), display_width, display_height))
             framework.get_geometry2D("center right").print_text(0, 0, "center right")
             framework.add_geometry2D("bottom right", 
-                TextWindow(framework.get_font("FreeMono"), (1, 1), 12, 1, 0.0, Alignments.BOTTOM_RIGHT, 
-                (1.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.8), display_width, display_height))
+                TextWindow(framework.get_font("FreeMono"), (1, 1), 12, 1, 0.0,  0.0, Alignments.BOTTOM_RIGHT, 
+                (1.0, 0.0, 0.0, 0.8), (1.0, 1.0, 1.0, 0.8), display_width, display_height))
             framework.get_geometry2D("bottom right").print_text(0, 0, "bottom right")
         else:
             framework.add_geometry2D("top to bottom right",
-                TextWindow(framework.get_font("FreeMonoBold"), (0, 1), 30, 30, 0.0, Alignments.TOP_TO_BOTTOM_RIGHT,
-                (1.0, 1.0, 1.0), (0.0, 0.0, 0.0, 0.9), display_width, display_height))
+                TextWindow(framework.get_font("FreeMonoBold"), (0, 1), 30, 30, 0.0,  0.0, Alignments.TOP_TO_BOTTOM_RIGHT,
+                (1.0, 1.0, 1.0, 0.8), (0.0, 0.0, 0.0, 0.8), display_width, display_height))
             framework.get_geometry2D("top to bottom right").print_text(0, 0, "top to bottom right")
 
         framework.add_geometry2D("Picture Lucas",
             Picture(framework.get_shader('picture'), "images/Lucas Photo 12-22 2x3.jpg", (400, 30), (150, 200),
-                    picture_angle, display_width, display_height))
+                    picture_angle, 0.2, display_width, display_height))
         picture_bb = framework.get_geometry2D("Picture Lucas").get_bounding_box()
         framework.add_geometry2D("White frame", 
             Frame(framework.get_shader('geometry 2D'), 
                 (picture_bb[0], picture_bb[1]), (picture_bb[2]-picture_bb[0], picture_bb[3]-picture_bb[1]), 
-                (1.0, 1.0), (1.0, 1.0, 1.0), picture_angle, display_width, display_height))
+                (1.0, 1.0), (1.0, 1.0, 1.0), picture_angle, 0.0, display_width, display_height))
         framework.add_geometry2D("Lucas", 
             TextWindow(framework.get_font("FreeMonoBold"), (picture_bb[0]+15, picture_bb[3]-20), 
-                       15, 1, 0.0, Alignments.TOP_LEFT, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0, 0.5),
+                       15, 1, 0.0, 0.05, Alignments.TOP_LEFT, (0.0, 0.0, 0.0, 0.7), (1.0, 1.0, 1.0, 0.7),
                        display_width, display_height))
         framework.get_geometry2D("Lucas").print_text(2, 0, "Lucas Mahé")
 
