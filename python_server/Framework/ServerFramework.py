@@ -25,12 +25,12 @@ class ServerFramework(PyOGLApp):
         self.picking_object = None  
         self.axis = None
         self.grid = None
-        self.objects = []
         self.edit_mode = EditMode.NOT_SELECTED
-        self.selected_object = Selection(-1, -1)
+        self.selected_geometry = Selection(None, -1)
         self.selection_cubes = []
         self.selection_axis = None
         self.fonts = dict()
+        self.geometry3D = dict()
         self.geometry2D = dict()
 
     def initialize_3D_space(self):
@@ -39,13 +39,12 @@ class ServerFramework(PyOGLApp):
             'colored' : Shader("shaders/color_vertices.vs", "shaders/color_frags.vs"),
             'font'    : Shader("shaders/font_vertices.vs", "shaders/font_frags.vs"),
             'picture' : Shader("shaders/picture_vertices.vs", "shaders/picture_frags.vs"),
+            'selection' : Shader("shaders/picking_vertices.vs", "shaders/picking_frags.vs"),
             'geometry 2D' : Shader("shaders/geometry2D_vertices.vs", "shaders/geometry2D_frags.vs") }
         self.lights.append(Light(0, (0, 5, 0), (1, 1, 1)))
-        self.picking_object = PickingObject(Shader("shaders/picking_vertices.vs", "shaders/picking_frags.vs"))
-        self.axis = Axis((0, 0, 0), [-100.0, -100.0, -100.0, 100.0, 100.0, 100.0])
-        self.axis.load(self.shaders['colored'])
-        self.grid = XZGrid((0, 0, 0), 100.0)
-        self.grid.load(self.shaders['colored'])
+        self.picking_object = PickingObject(self.get_shader('selection'))
+        self.axis = Axis(self.get_shader('colored'), (0, 0, 0), [-100.0, -100.0, -100.0, 100.0, 100.0, 100.0])
+        self.grid = XZGrid(self.get_shader('colored'), (0, 0, 0), 100.0)
         self.create_selection_cubes()
 
     def create_selection_cubes(self):
@@ -53,6 +52,7 @@ class ServerFramework(PyOGLApp):
                   [1, 0, 0], [0, 1, 0], [0, 0, 1]]
         for cube_index in range(len(colors)):
             cube = LoadMesh(
+                self.get_shader('colored'),
                 "models/cube.obj", None,
                 location=(0.0, 0.0, 0.0),
                 color=colors[cube_index],
@@ -60,18 +60,19 @@ class ServerFramework(PyOGLApp):
                 scale=(0.05, 0.05, 0.05),
                 rotation=(0, 0, 0),
                 move_rotation=(0, 0, 0))
-            cube.load(self.shaders['colored'])
             self.selection_cubes.append(cube)
         
-    def add_object(self, object, material):
+    def add_geometry3D(self, name, object):
         # First load, then append
-        object.load(self.shaders[material])
-        self.objects.append(object)
+        self.geometry3D[name] = object
+
+    def get_geometry3D(self, name):
+        return self.geometry3D[name]
 
     def load_font(self, font_name, font_file_name, char_width, char_height,
             nb_preloaded_chars, max_cached_chars, save_png_filename=None):
-        font = Font(self.shaders['font'], 
-            font_file_name, char_width, char_height, nb_preloaded_chars, max_cached_chars, save_png_filename)
+        font = Font(self.get_shader('font'), font_file_name, char_width, char_height, 
+                    nb_preloaded_chars, max_cached_chars, save_png_filename)
         self.fonts[font_name] = font
 
     def get_font(self, font_name):
@@ -93,15 +94,15 @@ class ServerFramework(PyOGLApp):
 
     def mouse_pos_callback(self, window, xpos, ypos):
         if self.track_mouse:
-            if self.selected_object.object_index == -1:
+            if self.selected_geometry.name == None:
                 super().mouse_pos_callback(window, xpos, ypos)
             else:
-                self.objects[self.selected_object.object_index].update_mouse_pos(
-                    self.selected_object, self.edit_mode, 
+                self.get_geometry3D(self.selected_geometry.name).update_mouse_pos(
+                    self.selected_geometry, self.edit_mode, 
                     xpos-self.last_mouse_pos[0], ypos-self.last_mouse_pos[1])
                 if self.selection_axis != None:
-                    self.selection_axis.location = self.objects[self.selected_object.object_index].location
-                    self.selection_axis.scale = self.objects[self.selected_object.object_index].scale
+                    self.selection_axis.location = self.get_geometry3D(self.selected_geometry.name).location
+                    self.selection_axis.scale = self.get_geometry3D(self.selected_geometry.name).scale
         self.last_mouse_pos = (xpos, ypos)
 
     def key_callback(self, window, key, scancode, action, mods):
@@ -112,45 +113,45 @@ class ServerFramework(PyOGLApp):
             selection = self.picking_object.MousePick(
                 self.max_resolution[0], self.max_resolution[1],
                 location[0], location[1],
-                self.objects, self.selection_cubes,
-                self.camera, self.selected_object)
+                self.geometry3D, self.selection_cubes,
+                self.camera, self.selected_geometry)
         else:
             selection = self.picking_object.MousePick(
                 self.display_width, self.display_height,
                 location[0], location[1],
-                self.objects, self.selection_cubes,
-                self.camera, self.selected_object)
+                self.geometry3D, self.selection_cubes,
+                self.camera, self.selected_geometry)
         #print("selection: object is " + str(selection.object_index) +
         #      ", fragment is " + str(selection.primitive_index) +
         #      ", cube is " + str(selection.cube_index))
         if selection.cube_index == -1: # i.e. when none of the "editing" objects are selected
-            if self.selected_object.object_index != -1:
-                self.objects[self.selected_object.object_index].selected = False
-            if selection.object_index != -1 and selection.object_index != self.selected_object.object_index:
-                object = self.objects[selection.object_index]
+            if self.selected_geometry.name != None:
+                self.get_geometry3D(self.selected_geometry.name).selected = False
+            if selection.name != None and selection.name != self.selected_geometry.name:
+                object = self.get_geometry3D(selection.name)
                 object.selected = True
                 self.edit_mode = EditMode.POSITION
                 self.selection_axis = Axis(
+                    self.get_shader('colored'),
                     location=object.location,
                     boundaries=offset_object_boundaries(object.boundaries, boundaries_offset),
                     scale=object.scale)
-                self.selection_axis.load(self.shaders['colored'])
-                self.selected_object = selection
-            elif selection.object_index != -1 and self.edit_mode == EditMode.POSITION:
-                object = self.objects[selection.object_index]
+                self.selected_geometry = selection
+            elif selection.name != None and self.edit_mode == EditMode.POSITION:
+                object = self.get_geometry3D(selection.name)
                 self.selection_axis = Axis(
+                    self.get_shader('colored'),
                     location=object.location,
                     boundaries=offset_object_boundaries(object.boundaries, boundaries_offset),
                     scale=object.scale,
                     rotation=object.rotation)
-                self.selection_axis.load(self.shaders['colored'])
                 self.edit_mode = EditMode.SCALE
             else:
                 self.edit_mode = EditMode.NOT_SELECTED
-                self.selected_object = Selection(-1, -1, -1)
+                self.selected_geometry = Selection(None, -1, -1)
                 self.selection_axis = None
         else:
-            self.selected_object = selection
+            self.selected_geometry = selection
 
     def display_selection_cubes(self, cube, object, axis, negative):
         cube.location = copy.deepcopy(object.location)
@@ -188,10 +189,10 @@ class ServerFramework(PyOGLApp):
         display_width, display_height = glfw.get_framebuffer_size(self.window)
         self.axis.draw(self.camera, self.lights)
         self.grid.draw(self.camera, self.lights)
-        for object in self.objects:
-            object.draw(self.camera, self.lights)
-        if self.selected_object.object_index != -1:
-            object = self.objects[self.selected_object.object_index] # Shallow copy
+        for _, geometry in self.geometry3D.items():
+            geometry.draw(self.camera, self.lights)
+        if self.selected_geometry.name != None:
+            object = self.get_geometry3D(self.selected_geometry.name) # Shallow copy
             self.display_selection_cubes(self.selection_cubes[0], object, "x", True)
             self.display_selection_cubes(self.selection_cubes[1], object, "y", True)
             self.display_selection_cubes(self.selection_cubes[2], object, "z", True)
@@ -202,4 +203,3 @@ class ServerFramework(PyOGLApp):
                 self.selection_axis.draw(self.camera, self.lights)
         for _, geometry in self.geometry2D.items():
             geometry.draw(display_width, display_height)
-            

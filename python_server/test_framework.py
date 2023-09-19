@@ -32,49 +32,56 @@ def open_window(screen_posX, screen_posY, display_width, display_height, fullscr
     if framework == None:
         framework = MyServerFramework()
         framework.create_window(screen_posX, screen_posY, display_width, display_height, fullscreen, display_num)
-        framework.add_object(
-            LoadMesh("models/floor.obj", "images/tiles.png",
-                location=(0, 0, 0),
-                scale=(10, 0, 10),
-                move_rotation=(0, 0, 0)),
-            'textured')
-        framework.add_object(
-            LoadMesh("models/tabletop.obj", "images/timber.png",
-                location=(table_x, 1, table_z),
-                scale=(1.2, 1, 1.2),
-                move_rotation=(0, 0, 0)),
-            'textured')
-        framework.add_object(
-            LoadMesh("models/tableleg.obj", "images/timber.png",
-                location=(table_x-0.5, 0.5, table_z-0.5),
-                scale=(1, 1, 1),
-                move_rotation=(0, 0, 0)),
-            'textured')
-        framework.add_object(
-            LoadMesh("models/tableleg.obj", "images/timber.png",
-                location=(table_x-0.5, 0.5, table_z+0.5),
-                scale=(1, 1, 1),
-                move_rotation=(0, 0, 0)),
-            'textured')
-        framework.add_object(
-            LoadMesh("models/tableleg.obj", "images/timber.png",
-                location=(table_x+0.5, 0.5, table_z-0.5),
-                scale=(1, 1, 1),
-                move_rotation=(0, 0, 0)),
-            'textured')
-        framework.add_object(
-            LoadMesh("models/tableleg.obj", "images/timber.png",
-                location=(table_x+0.5, 0.5, table_z+0.5),
-                scale=(1, 1, 1),
-                move_rotation=(0, 0, 0)),
-            'textured')
-        framework.add_object(
-            LoadMesh("models/teapot.obj", "images/gold.png",
-                location=(table_x, 1.07, table_z),
-                scale=(0.1, 0.1, 0.1),
+        framework.add_geometry3D(
+            "floor",
+            LoadMesh(framework.get_shader('textured'),
+                     "models/floor.obj", "images/tiles.png",
+                     location=(0, 0, 0),
+                     scale=(10, 0, 10),
+                     move_rotation=(0, 0, 0)))
+        framework.add_geometry3D(
+            "table top",
+            LoadMesh(framework.get_shader('textured'),
+                     "models/tabletop.obj", "images/timber.png",
+                     location=(table_x, 1, table_z),
+                     scale=(1.2, 1, 1.2),
+                     move_rotation=(0, 0, 0)))
+        framework.add_geometry3D(
+            "table leg 1",
+            LoadMesh(framework.get_shader('textured'),
+                     "models/tableleg.obj", "images/timber.png",
+                     location=(table_x-0.5, 0.5, table_z-0.5),
+                     scale=(1, 1, 1),
+                     move_rotation=(0, 0, 0)))
+        framework.add_geometry3D(
+            "table leg 2",
+            LoadMesh(framework.get_shader('textured'),
+                     "models/tableleg.obj", "images/timber.png",
+                     location=(table_x-0.5, 0.5, table_z+0.5),
+                     scale=(1, 1, 1),
+                     move_rotation=(0, 0, 0)))
+        framework.add_geometry3D(
+            "table leg 3",
+            LoadMesh(framework.get_shader('textured'),
+                     "models/tableleg.obj", "images/timber.png",
+                     location=(table_x+0.5, 0.5, table_z-0.5),
+                     scale=(1, 1, 1),
+                     move_rotation=(0, 0, 0)))
+        framework.add_geometry3D(
+            "table leg 4",
+            LoadMesh(framework.get_shader('textured'),
+                     "models/tableleg.obj", "images/timber.png",
+                     location=(table_x+0.5, 0.5, table_z+0.5),
+                     scale=(1, 1, 1),
+                     move_rotation=(0, 0, 0)))
+        framework.add_geometry3D(
+            "teapot",
+            LoadMesh(framework.get_shader('textured'),
+                     "models/teapot.obj", "images/gold.png",
+                     location=(table_x, 1.07, table_z),
+                     scale=(0.1, 0.1, 0.1),
                 rotation=(0, 45, 0),
-                move_rotation=(0, 0, 0)),
-            'textured')
+                move_rotation=(0, 0, 0)))
         # Below: first char is ' '(32), last char is '~' (126)
         # Font width is 20, height is 30
         framework.load_font("FreeMono", "fonts/FreeMono.ttf", 
@@ -105,7 +112,7 @@ def open_window(screen_posX, screen_posY, display_width, display_height, fullscr
         else:
             framework.add_geometry2D("top to bottom left", 
                 ScrollTextWindow(framework.get_font("FreeMono"), (1, 1), 15, 1, 0.0,  0.0, Alignments.TOP_TO_BOTTOM_LEFT, 
-                                 (1.0, 1.0, 1.0, 0.8), (0.0, 0.0, 0.0, 1.0), display_width, display_height))
+                                 (1.0, 1.0, 1.0, 1.0), (0.0, 0.0, 0.0, 1.0), display_width, display_height))
             scroll_text_window = framework.get_geometry2D("top to bottom left")
             scroll_text_window.load_text("top to bottom left scroll window")
             scroll_wnd_bb = scroll_text_window.get_bounding_box()

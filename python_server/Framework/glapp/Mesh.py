@@ -9,6 +9,7 @@ import numpy as np
 class Mesh:
     def __init__(
             self,
+            shader_program,
             vertices,
             image_filename=None,
             vertex_normals=None,
@@ -22,6 +23,7 @@ class Mesh:
             move_location=(0, 0, 0),
             boundaries=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]):
 
+        self.shader_program = shader_program
         self.vertices = vertices
         self.length = len(vertices)
         self.vertex_normals = vertex_normals
@@ -44,22 +46,21 @@ class Mesh:
         self.image = None
         if image_filename is not None:
             self.image = Texture(image_filename)
-        self.material = None
         self.graghics_data_position = GraphicsData("vec3")
         self.graghics_data_vertex_normals = GraphicsData("vec3")
         self.graghics_data_uvs = GraphicsData("vec2")
         self.graphics_data_colors = GraphicsData("vec3")
+        self.load()
 
-    def load(self, material):
-        self.material = material
+    def load(self):
         glBindVertexArray(self.vao_ref)
-        self.graghics_data_position.load(self.material.program_id, "position", self.vertices)
+        self.graghics_data_position.load(self.shader_program.program_id, "position", self.vertices)
         if self.vertex_normals is not None:
-            self.graghics_data_vertex_normals.load(self.material.program_id, "vertex_normal", self.vertex_normals)
+            self.graghics_data_vertex_normals.load(self.shader_program.program_id, "vertex_normal", self.vertex_normals)
         if self.vertex_uvs is not None:
-            self.graghics_data_uvs.load(self.material.program_id, "vertex_uv", self.vertex_uvs)
+            self.graghics_data_uvs.load(self.shader_program.program_id, "vertex_uv", self.vertex_uvs)
         if self.vertex_colors is not None:
-            self.graphics_data_colors.load(self.material.program_id, "vertex_color", self.vertex_colors)
+            self.graphics_data_colors.load(self.shader_program.program_id, "vertex_color", self.vertex_colors)
 
     def update_mouse_pos(self, selected_object, edit_mode, delta_x, delta_y):
         if selected_object.cube_index != -1:
@@ -97,23 +98,23 @@ class Mesh:
         return transformation_mat
 
     def update_transformation(self):
-        Uniform("mat4").load (self.material.program_id, "model_mat", self.transformation_mat)
+        Uniform("mat4").load (self.shader_program.program_id, "model_mat", self.transformation_mat)
 
     def update_selection_color(self):
         if self.selected:
-            Uniform("vec4").load(self.material.program_id, "selection_color_mask", self.selection_color_mask)
+            Uniform("vec4").load(self.shader_program.program_id, "selection_color_mask", self.selection_color_mask)
         else:
-            Uniform("vec4").load(self.material.program_id, "selection_color_mask", [1.0, 1.0, 1.0, 1.0])
+            Uniform("vec4").load(self.shader_program.program_id, "selection_color_mask", [1.0, 1.0, 1.0, 1.0])
 
     def draw(self, camera, lights=None):
-        self.material.use()
-        camera.update_projection(self.material.program_id)
-        camera.update_view(self.material.program_id)
+        self.shader_program.use()
+        camera.update_projection(self.shader_program.program_id)
+        camera.update_view(self.shader_program.program_id)
         if lights is not None:
             for light in lights:
-                light.update(self.material.program_id)
+                light.update(self.shader_program.program_id)
         if self.image is not None:
-            Uniform("sample2D").load(self.material.program_id, "texture_id", [self.image.texture_id, 1])
+            Uniform("sample2D").load(self.shader_program.program_id, "texture_id", [self.image.texture_id, 1])
         self.transformation_mat = self.get_transformation_matrix()
         self.update_transformation()
         self.update_selection_color()

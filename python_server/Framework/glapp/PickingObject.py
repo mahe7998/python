@@ -7,8 +7,10 @@ from .XZgrid import *
 
 class Selection:
 
-    def __init__(self, object_index, primitive_index, cube_index=-1):
-        self.object_index = object_index
+    def __init__(self, name, primitive_index, cube_index=-1):
+        if name == -1:
+            raise Exception("Internal error: object name cannot be -1 (Use None instead)!")
+        self.name = name
         self.primitive_index = primitive_index
         self.cube_index = cube_index
 
@@ -74,12 +76,14 @@ class PickingObject:
         camera.update_view(self.picking_shader.program_id)
 
         object_index = 1
-        for object in objects:
+        names = []
+        for name, object in objects.items():
 
             self.draw_object(object, object_index)
+            names.append(name)
             object_index += 1
 
-        if current_selection.object_index != -1:
+        if current_selection.name != None:
 
             for cube in selection_cubes:
                 self.draw_object(cube, object_index)
@@ -94,14 +98,16 @@ class PickingObject:
         glBindFramebuffer(GL_READ_FRAMEBUFFER, 0)
 
         if pixel[0][0][0] == 0:
-            return Selection(-1, -1, -1)
-        elif pixel[0][0][0]-1 >= len(objects):
-            if current_selection.object_index == -1:
-                raise Exception("Internal error: cube access while object not selected!")
-            return Selection(
-                current_selection.object_index,
-                pixel[0][0][1],
-                pixel[0][0][0]-1-len(objects))
+            return Selection(None, -1, -1)
         else:
-            return Selection(
-                pixel[0][0][0]-1, pixel[0][0][1], -1)
+            index = pixel[0][0][0]
+            if index-1 >= len(objects):
+                if current_selection.name == None:
+                    raise Exception("Internal error: cube access while no object selected!")
+                return Selection(
+                    current_selection.name,
+                    pixel[0][0][1],
+                    pixel[0][0][0]-1-len(objects))
+            else:
+                return Selection(
+                    names[index-1], pixel[0][0][1], -1)

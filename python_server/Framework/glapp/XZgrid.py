@@ -1,7 +1,7 @@
 from .Mesh import *
 
 class XZGrid(Mesh):
-    def __init__(self, location, size, material=None):
+    def __init__(self, shader_program, location, size, material=None):
         self.vertices = []
         self.vertex_indices = []
         self.boundaries = [-size, -size, -size, size, size, size] # Box around object
@@ -26,6 +26,7 @@ class XZGrid(Mesh):
             colors.append([0.3, 0.3, 0.3])
 
         super().__init__(
+            shader_program,
             self.vertices,
             image_filename=None,
             vertex_normals=None,

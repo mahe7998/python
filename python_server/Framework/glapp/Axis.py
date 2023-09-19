@@ -2,6 +2,7 @@ from .Mesh import *
 
 class Axis(Mesh):
     def __init__(self,
+            shader_program,
             location=(0, 0, 0),
             boundaries=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             scale=(1.0, 1.0, 1.0),
@@ -23,6 +24,7 @@ class Axis(Mesh):
                   [0.0, 0.0, 1.0],
                   [0.0, 0.0, 1.0]]
         super().__init__(
+            shader_program,
             self.vertices,
             image_filename=None,
             vertex_normals=None,

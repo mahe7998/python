@@ -6,6 +6,7 @@ from .Utils import *
 class LoadMesh(Mesh):
     def __init__(
             self,
+            shader_program,
             filename,
             image_filename,
             gl_draw_type=GL_TRIANGLES,
@@ -26,6 +27,7 @@ class LoadMesh(Mesh):
         for i in range(len(vertices)):
             vertex_colors.append(color);
         super().__init__(
+            shader_program,
             vertices,
             image_filename=image_filename,
             vertex_normals=vertex_normals,

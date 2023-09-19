@@ -1,7 +1,6 @@
 import glfw
 import glfw.GLFW as GLFW_CONSTANTS
 from .PickingObject import *
-import os
 from OpenGL.GL import *
 from OpenGL.GLU import *
 from .Camera import *
