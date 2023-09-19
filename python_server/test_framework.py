@@ -6,6 +6,7 @@ framework = None
 scroll_text_window = None
 picture_angle = 0.0
 show_alignments = False
+
 class MyServerFramework(ServerFramework):
 
     def __init__(self):
@@ -32,13 +33,23 @@ def open_window(screen_posX, screen_posY, display_width, display_height, fullscr
     if framework == None:
         framework = MyServerFramework()
         framework.create_window(screen_posX, screen_posY, display_width, display_height, fullscreen, display_num)
+        framework.add_light("main light", Light(0, (0, 5, 0), (1, 1, 1)))
+        framework.add_geometry3D(
+            "axis",
+            Axis(framework.get_shader('colored'), (0, 0, 0), [-100.0, -100.0, -100.0, 100.0, 100.0, 100.0]),
+            False) # Not selectable!
+        framework.add_geometry3D(
+            "grid",
+            XZGrid(framework.get_shader('colored'), (0, 0, 0), 100.0),
+            False) # Not selectable!
         framework.add_geometry3D(
             "floor",
             LoadMesh(framework.get_shader('textured'),
                      "models/floor.obj", "images/tiles.png",
                      location=(0, 0, 0),
                      scale=(10, 0, 10),
-                     move_rotation=(0, 0, 0)))
+                     move_rotation=(0, 0, 0)),
+            False)
         framework.add_geometry3D(
             "table top",
             LoadMesh(framework.get_shader('textured'),

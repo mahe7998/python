@@ -17,6 +17,7 @@ class PyOGLApp():
         self.last_mouse_pos = (0, 0)
         self.last_mouse_click = 0
         self.camera = None
+        self.lights = dict()
         glfw.init()
         monitors = glfw.get_monitors()
         self.monitors = []
@@ -91,6 +92,9 @@ class PyOGLApp():
         self.camera.relative_move(5.0, 0.0, 2.0) # Initial camera position to see Axis
         self.initialize_3D_space()
 
+    def add_light(self, name, light):
+        self.lights[name] = light
+
     def terminate(self):
         glfw.terminate()
 
@@ -114,8 +118,6 @@ class PyOGLApp():
             glfw.set_window_monitor(
                 self.window, self.monitor.internal_monitor, 
                 0, 0, self.max_resolution[0], self.max_resolution[1], self.max_resolution_refresh_rate)
-            #glfw.set_window_pos(self.window, self.monitor.position[0], self.monitor.position[1])
-            #glfw.set_window_size(self.window, self.max_resolution[0], self.max_resolution[1])
             self.fullscreen = True
         else:
             #print("Leaving fullscreen")

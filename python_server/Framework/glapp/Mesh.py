@@ -41,6 +41,7 @@ class Mesh:
         self.mouse_sensitivity = 0.01
         self.vao_ref = glGenVertexArrays(1)
         self.vertex_indices = [] # Only used for selection in 3D space
+        self.selectable = True
         for i in range(len(vertices)):
             self.vertex_indices.append([i//3, 0])
         self.image = None
@@ -61,6 +62,12 @@ class Mesh:
             self.graghics_data_uvs.load(self.shader_program.program_id, "vertex_uv", self.vertex_uvs)
         if self.vertex_colors is not None:
             self.graphics_data_colors.load(self.shader_program.program_id, "vertex_color", self.vertex_colors)
+
+    def set_selectable(self, selectable):
+        self.selectable = selectable
+
+    def get_selectable(self):
+        return self.selectable
 
     def update_mouse_pos(self, selected_object, edit_mode, delta_x, delta_y):
         if selected_object.cube_index != -1:
@@ -111,7 +118,7 @@ class Mesh:
         camera.update_projection(self.shader_program.program_id)
         camera.update_view(self.shader_program.program_id)
         if lights is not None:
-            for light in lights:
+            for _, light in lights.items():
                 light.update(self.shader_program.program_id)
         if self.image is not None:
             Uniform("sample2D").load(self.shader_program.program_id, "texture_id", [self.image.texture_id, 1])

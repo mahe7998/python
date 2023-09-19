@@ -78,10 +78,10 @@ class PickingObject:
         object_index = 1
         names = []
         for name, object in objects.items():
-
-            self.draw_object(object, object_index)
-            names.append(name)
-            object_index += 1
+            if object.get_selectable():
+                self.draw_object(object, object_index)
+                names.append(name)
+                object_index += 1
 
         if current_selection.name != None:
 
@@ -101,13 +101,13 @@ class PickingObject:
             return Selection(None, -1, -1)
         else:
             index = pixel[0][0][0]
-            if index-1 >= len(objects):
+            if index-1 >= len(names): # i.e. when a cube is selected
                 if current_selection.name == None:
                     raise Exception("Internal error: cube access while no object selected!")
                 return Selection(
                     current_selection.name,
                     pixel[0][0][1],
-                    pixel[0][0][0]-1-len(objects))
+                    pixel[0][0][0]-1-len(names))
             else:
                 return Selection(
                     names[index-1], pixel[0][0][1], -1)

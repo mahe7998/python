@@ -10,7 +10,7 @@ struct light {
     vec3 position;
     vec3 color;
 };
-#define NUM_LIGHTS 2
+#define NUM_LIGHTS 1
 uniform light light_sources[NUM_LIGHTS];
 uniform sampler2D texture_id;
 uniform vec4 selection_color_mask;

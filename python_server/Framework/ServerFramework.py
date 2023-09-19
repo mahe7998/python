@@ -21,10 +21,7 @@ class ServerFramework(PyOGLApp):
 
     def __init__(self):
         super().__init__()
-        self.lights = []
         self.picking_object = None  
-        self.axis = None
-        self.grid = None
         self.edit_mode = EditMode.NOT_SELECTED
         self.selected_geometry = Selection(None, -1)
         self.selection_cubes = []
@@ -41,10 +38,7 @@ class ServerFramework(PyOGLApp):
             'picture' : Shader("shaders/picture_vertices.vs", "shaders/picture_frags.vs"),
             'selection' : Shader("shaders/picking_vertices.vs", "shaders/picking_frags.vs"),
             'geometry 2D' : Shader("shaders/geometry2D_vertices.vs", "shaders/geometry2D_frags.vs") }
-        self.lights.append(Light(0, (0, 5, 0), (1, 1, 1)))
         self.picking_object = PickingObject(self.get_shader('selection'))
-        self.axis = Axis(self.get_shader('colored'), (0, 0, 0), [-100.0, -100.0, -100.0, 100.0, 100.0, 100.0])
-        self.grid = XZGrid(self.get_shader('colored'), (0, 0, 0), 100.0)
         self.create_selection_cubes()
 
     def create_selection_cubes(self):
@@ -62,9 +56,10 @@ class ServerFramework(PyOGLApp):
                 move_rotation=(0, 0, 0))
             self.selection_cubes.append(cube)
         
-    def add_geometry3D(self, name, object):
+    def add_geometry3D(self, name, geometry, selectable=True):
         # First load, then append
-        self.geometry3D[name] = object
+        self.geometry3D[name] = geometry
+        geometry.set_selectable(selectable)
 
     def get_geometry3D(self, name):
         return self.geometry3D[name]
@@ -77,12 +72,13 @@ class ServerFramework(PyOGLApp):
 
     def get_font(self, font_name):
         return self.fonts[font_name]
-
+    
     def get_shader(self, sharder_name):
         return self.shaders[sharder_name]
-            
-    def add_geometry2D(self, geometry_name, geometry):
+                
+    def add_geometry2D(self, geometry_name, geometry, selectable=True):
         self.geometry2D[geometry_name] = geometry
+        geometry.set_selectable(selectable)
 
     def get_geometry2D(self, geometry_name):
         return self.geometry2D[geometry_name]
@@ -187,8 +183,6 @@ class ServerFramework(PyOGLApp):
     def draw(self):
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         display_width, display_height = glfw.get_framebuffer_size(self.window)
-        self.axis.draw(self.camera, self.lights)
-        self.grid.draw(self.camera, self.lights)
         for _, geometry in self.geometry3D.items():
             geometry.draw(self.camera, self.lights)
         if self.selected_geometry.name != None:
