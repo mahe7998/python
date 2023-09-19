@@ -206,7 +206,11 @@ def on_connect(new_socket, address):
                 # Handle other socket errors
                 print("Server socket error: " + str(e))
         else:
-            full_str += receivedData.decode()
+            try:
+                full_str += receivedData.decode()
+            except ValueError as ve:
+                print("Error: could not decode received data: " + ve.reason)
+                full_str = "\n"
             end = full_str.index('\n')
             # Split buffer into single line with no \n
             while end >= 0 and running:
