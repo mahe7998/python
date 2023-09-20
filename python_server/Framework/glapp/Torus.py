@@ -1,4 +1,5 @@
 from .Mesh import *
+import random
 
 class Torus(Mesh):
     def __init__(self,
@@ -9,6 +10,7 @@ class Torus(Mesh):
             slices=20, # How many outer rings
             loops=40, # How many inner rings
             color=(1.0, 1.0, 1.0),
+            gl_draw_type=GL_TRIANGLES,
             boundaries=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             location=(0.0, 0.0, 0.0),
             scale=(1.0, 1.0, 1.0),
@@ -46,9 +48,9 @@ class Torus(Mesh):
 
                 raw_vertices.append([x, y, z])
                 raw_normals.append([
-                    cos_loops * sin_slices, 
-                    sin_loops * sin_slices, 
-                    cos_slices])
+                    cos_slices*cos_loops,
+                    sin_loops*cos_slices, 
+                    sin_slices])
                 raw_vertex_uvs.append([u, v]);
         
         vertices = []
@@ -97,7 +99,7 @@ class Torus(Mesh):
             vertex_normals=normals,
             vertex_uvs=vertex_uvs,
             vertex_colors=colors,
-            gl_draw_type=GL_TRIANGLES,
+            gl_draw_type=gl_draw_type,
             location=location,
             scale=scale,
             rotation=rotation,
