@@ -93,6 +93,12 @@ def open_window(screen_posX, screen_posY, display_width, display_height, fullscr
                      scale=(0.1, 0.1, 0.1),
                 rotation=(0, 45, 0),
                 move_rotation=(0, 0, 0)))
+        framework.add_geometry3D("Torus", 
+            Torus(framework.get_shader('textured'), "images/gold.png", 
+                  1.0, 0.3, location=(table_x+0.5, 1.25, table_z-0.3),
+                  rotation=(0.0, 0.0, 0,0), scale=(0.15, 0.15, 0.15), 
+                  move_rotation=(0.0, 0.0, 0.0)))
+
         # Below: first char is ' '(32), last char is '~' (126)
         # Font width is 20, height is 30
         framework.load_font("FreeMono", "fonts/FreeMono.ttf", 
