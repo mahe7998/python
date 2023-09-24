@@ -33,6 +33,8 @@ def open_window(screen_posX, screen_posY, display_width, display_height, fullscr
     if framework == None:
         framework = MyServerFramework()
         framework.create_window(screen_posX, screen_posY, display_width, display_height, fullscreen, display_num)
+        # Note: we can create a maximum of 1 light; adding more would require increasing NUM_LIGHTS
+        # in textured_frags.vs shader code.
         framework.add_light("main light", Light(0, (0, 5, 0), (1, 1, 1)))
         framework.add_geometry3D(
             "axis",
@@ -99,14 +101,15 @@ def open_window(screen_posX, screen_posY, display_width, display_height, fullscr
                   rotation=(0.0, 0.0, 0,0), scale=(0.15, 0.15, 0.15), 
                   move_rotation=(0.0, 2.0, 0.0)))
 
-        # Below: first char is ' '(32), last char is '~' (126)
-        # Font width is 20, height is 30
+        # Below: we pre-load the 96 first characters of the font (i.e. all
+        # displayable characters in the ASCII table) 256 represents the
+        # maximum number of characters in the font texture cache. Special characters
+        # like accents and other non-ASCII characters are loaded on demand.
         framework.load_font("FreeMono", "fonts/FreeMono.ttf", 
             17, 21, 96, 256, "FreeMono.png")
         framework.load_font("FreeMonoBold", "fonts/FreeMonoBold.ttf", 
             13, 15, 96, 256, "FreeMonoBold.png")
         
-        # Windows x is 100, y is 150
         framework.add_geometry2D("center", 
             TextWindow(framework.get_font("FreeMono"), (0, 0), 25, 4, 0.0, 0.4, Alignments.CENTER, 
                        (1.0, 0.0, 0.0, 1.0), (1.0, 1.0, 1.0, 0.8), display_width, display_height))
