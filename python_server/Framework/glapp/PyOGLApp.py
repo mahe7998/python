@@ -130,7 +130,7 @@ class PyOGLApp():
 
     def mouse_button_callback(self, window, button, action, mods):
         if button == glfw.MOUSE_BUTTON_LEFT and action == glfw.PRESS:
-            if glfw.get_time() - self.last_mouse_click < 0.5:
+            if glfw.get_time() - self.last_mouse_click < 0.2:
                 #print("double click!!")
                 self.set_fullscreen(not self.fullscreen)
             else:

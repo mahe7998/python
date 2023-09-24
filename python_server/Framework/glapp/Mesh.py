@@ -21,7 +21,7 @@ class Mesh:
             rotation=(0, 0, 0),
             move_rotation=(0, 0, 0),
             move_location=(0, 0, 0),
-            boundaries=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]):
+            boundaries=None):
 
         self.shader_program = shader_program
         self.vertices = vertices
@@ -37,8 +37,11 @@ class Mesh:
         self.scale = scale
         self.selected = False
         self.selection_color_mask = [0.5, 0.5, 1.0, 1.0]
-        self.boundaries = boundaries
-        self.mouse_sensitivity = 0.01
+        # Make sure self.verttices is set prior to update_boundaries() call
+        if boundaries is None:
+            self.boundaries = self.update_boundaries()
+        else:
+            self.boundaries = boundaries
         self.vao_ref = glGenVertexArrays(1)
         self.vertex_indices = [] # Only used for selection in 3D space
         self.selectable = True
@@ -68,27 +71,12 @@ class Mesh:
 
     def get_selectable(self):
         return self.selectable
-
-    def update_mouse_pos(self, selected_object, edit_mode, delta_x, delta_y):
-        if selected_object.cube_index != -1:
-            value_to_modify = None
-            if edit_mode == EditMode.POSITION:
-                value_to_modify = self.location
-            elif edit_mode == EditMode.SCALE:
-                value_to_modify = self.scale
-            else:
-                raise Exception("Not a valid editing mode!")
-            delta_pos = (delta_x - delta_y) * self.mouse_sensitivity
-            if selected_object.cube_index == 0 or selected_object.cube_index == 3:
-                value_to_modify = (value_to_modify[0] + delta_pos, value_to_modify[1], value_to_modify[2])
-            elif selected_object.cube_index == 1 or selected_object.cube_index == 4:
-                value_to_modify = (value_to_modify[0], value_to_modify[1] + delta_pos, value_to_modify[2])
-            elif selected_object.cube_index == 2 or selected_object.cube_index == 5:
-                value_to_modify = (value_to_modify[0], value_to_modify[1], value_to_modify[2] + delta_pos)
-            if edit_mode == EditMode.POSITION:
-                self.location = value_to_modify
-            elif edit_mode == EditMode.SCALE:
-                self.scale = value_to_modify
+    
+    def update_boundaries(self):
+        pass
+    
+    def get_boundaries(self):
+        return self.boundaries
 
     def set_transfornation(self, location, scale, rotation):
         self.location = location
@@ -128,9 +116,10 @@ class Mesh:
         glBindVertexArray(self.vao_ref)
         glDrawArrays(self.gl_draw_type, 0, self.length)
         # Animation needs to be done after to match related object (axis) location
-        self.rotation = (self.rotation[0]+self.move_rotation[0], 
-                         self.rotation[1]+self.move_rotation[1], 
-                         self.rotation[2]+self.move_rotation[2])
-        self.location = (self.location[0]+self.move_location[0], 
-                         self.location[1]+self.move_location[1], 
-                         self.location[2]+self.move_location[2])
+        if not self.selected:
+            self.rotation = (self.rotation[0]+self.move_rotation[0], 
+                            self.rotation[1]+self.move_rotation[1], 
+                            self.rotation[2]+self.move_rotation[2])
+            self.location = (self.location[0]+self.move_location[0], 
+                            self.location[1]+self.move_location[1], 
+                            self.location[2]+self.move_location[2])

@@ -7,12 +7,12 @@ from .XZgrid import *
 
 class Selection:
 
-    def __init__(self, name, primitive_index, cube_index=-1):
+    def __init__(self, name, primitive_index, geometry_index=-1):
         if name == -1:
             raise Exception("Internal error: object name cannot be -1 (Use None instead)!")
         self.name = name
         self.primitive_index = primitive_index
-        self.cube_index = cube_index
+        self.geometry_index = geometry_index
 
 class PickingObject:
 

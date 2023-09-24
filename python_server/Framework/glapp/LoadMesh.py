@@ -19,8 +19,6 @@ class LoadMesh(Mesh):
 
         raw_vertices, triangles, uvs, uv_ind, normals, normal_ind = self.load_drawing(filename)
         vertices = format_vertices(raw_vertices, triangles)
-        # Calculate boundaries
-        boundaries = self.get_boundaries(raw_vertices)
         vertex_uvs = format_vertices(uvs, uv_ind)
         vertex_normals = format_vertices(normals, normal_ind)
         vertex_colors = []
@@ -38,13 +36,12 @@ class LoadMesh(Mesh):
             scale=scale,
             rotation=rotation,
             move_rotation=move_rotation,
-            move_location=move_location,
-            boundaries=boundaries)
+            move_location=move_location)
 
-    def get_boundaries(self, raw_vertices):
-        boundaries = [raw_vertices[0][0], raw_vertices[0][1], raw_vertices[0][2],
-                      raw_vertices[0][0], raw_vertices[0][1], raw_vertices[0][2]] # Box around object
-        for vertex in raw_vertices:
+    def update_boundaries(self):
+        boundaries = [self.vertices[0][0], self.vertices[0][1], self.vertices[0][2],
+                      self.vertices[0][0], self.vertices[0][1], self.vertices[0][2]] # Box around object
+        for vertex in self.vertices:
             if vertex[0] < boundaries[0]:  # X min
                 boundaries[0] = vertex[0]
             if vertex[1] < boundaries[1]:  # Y min
@@ -58,7 +55,7 @@ class LoadMesh(Mesh):
             if vertex[2] > boundaries[5]:  # Z max
                 boundaries[5] = vertex[2]
         return boundaries
-
+    
     def load_drawing(self, filename):
         vertices = []
         normals = []
