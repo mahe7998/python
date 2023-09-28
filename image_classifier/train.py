@@ -1,6 +1,10 @@
 # This app trains a new network on a dataset and saves the model as a checkpoint
 # This file is part of the Udacity Own Image Classifier Project
 # Author: Jacques Mahe, October 2019
+# Launch: 
+#  python train.py  ./flowers --arch VGG --gpu --save_dir ./output/VGG_checkpoint.pthS
+#  python train.py  ./flowers --arch  VGG --gpu --save_dir ./output/VGG_checkpoint.pth --load_dir ./output/VGG_checkpoint.pth
+#  python predict.py ./flowers/valid/28/image_05265.jpg output/checkpoint.pth --category_names cat_to_name.json --gpu
 import argparse
 import os, sys, errno
 import train_class
@@ -15,7 +19,7 @@ parser.add_argument('--save_dir', type=str, default="",
 parser.add_argument('--load_dir', type=str, default="",
                     help='file name to load a previously saved model checkpoint')
 parser.add_argument('-a', '--arch', type=str, default="VGG",
-                    help='Pre-trained model base (Choose between VGG, DenseNet, ShuffleNet, AlexNet and GoogleNet)')
+                    help='Pre-trained model base (Choose between VGG, D*enseNet, ShuffleNet, AlexNet and GoogleNet)')
 parser.add_argument('-l', '--learning_rate', type=float, default=0.001,
                     help='Training learning rate (default: 0.001)')
 parser.add_argument('-u', '--hidden_units', type=int, default=512,

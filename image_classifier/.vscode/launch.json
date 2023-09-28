@@ -1,0 +1,13 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+			"args": ["./flowers", "--arch", "VGG", "--gpu", "--epochs" , "2", "--save_dir",  "./output/VGG_checkpoint.pth", "--load_dir" "./output/VGG_checkpoint.pth"]
+        }
+    ]
+}
