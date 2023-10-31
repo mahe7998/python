@@ -6,3 +6,6 @@ transformers/sentiment-analysis.local/
 transformers/text-generation.local/
 transformers/fill-mask.local/
 transformers/pytorch_model.bin
+*.png
+*.pth
+
