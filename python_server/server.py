@@ -1,6 +1,7 @@
 import socket
 import sys
 import threading
+from io import StringIO
 
 from process_command import process_command
 
