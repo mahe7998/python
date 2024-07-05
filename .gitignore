@@ -8,4 +8,5 @@ transformers/fill-mask.local/
 transformers/pytorch_model.bin
 *.png
 *.pth
-
+*.pyc
+.DS_Store
