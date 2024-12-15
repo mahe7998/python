@@ -46,10 +46,14 @@ def on_connect(new_socket, address):
             break
         full_str += receivedData.decode()
         end = full_str.index('\n')
-        # Split buffer into single line with no \n
+        cr_in_string = '\r' in full_str # Once CR, always CR
+        delta = 0
+        # Split buffer into single line with no "\n"
         while end >= 0 and running:
+            if cr_in_string:
+                delta = 1
             if end > 0:
-                str = full_str[0:end-1]
+                str = full_str[0:end-delta]
             else:
                 str = ''
             #print("{a}:{b}".format(a=end, b=str))
