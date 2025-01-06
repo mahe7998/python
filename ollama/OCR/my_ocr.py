@@ -1,5 +1,5 @@
 import sys
-from ollama_ocr import OCRProcessor
+from ollama_ocr import OCRProcessor # On iMac, brew install poppler first
 
 def get_file_name():
     # Check if there are any command line arguments
@@ -17,7 +17,7 @@ if file_name is not None:
     # Process an image
     result = ocr.process_image(
         image_path=file_name,
-        format_type="structured"  # Options: markdown, text, json, structured, key_value
+        format_type="text"  # Options: markdown, text, json, structured, key_value
     )
     print(result)
 else:
