@@ -9,4 +9,5 @@ transformers/pytorch_model.bin
 *.png
 *.pth
 *.pyc
+*.gz
 .DS_Store
