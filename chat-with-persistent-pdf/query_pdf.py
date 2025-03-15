@@ -74,8 +74,8 @@ chain = (
 )
 
 # Execute the pipeline
-print(chain.invoke(user_input))
-# response = chain.invoke(user_input, stream=True)
-# for output in response:
-#     print(output)
-
+#print(chain.invoke(user_input))
+response = chain.invoke(user_input, stream=True)
+for output in response:
+    print(output, end="")
+print("Done")

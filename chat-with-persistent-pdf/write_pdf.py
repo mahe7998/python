@@ -14,7 +14,7 @@ import argparse
 # Set up argument parser
 parser = argparse.ArgumentParser(description='Add PDF file content to Chroma DB.')
 parser.add_argument('--llm', type=str, required=False, help='The name of the language model to use.')
-parser.add_argument('--pdf', type=str, required=True, help='The PDF file to process.')
+parser.add_argument('--pdf', type=str, required=False, help='The PDF file to process.')
 parser.add_argument('--db', type=str, required=False, help='The directory to persist the Chroma database.')
 
 # Parse the arguments
