@@ -28,11 +28,6 @@ def check_dependencies():
     except ImportError:
         missing_deps.append("transformers")
     
-    try:
-        import qwen_vl_utils
-    except ImportError:
-        missing_deps.append("qwen_vl_utils")
-    
     if missing_deps:
         print(f"Error: Missing dependencies: {', '.join(missing_deps)}")
         print("Please install them using: pip install -r requirements.txt")
@@ -56,8 +51,10 @@ parser.add_argument('--model', type=str, default="Qwen/Qwen2-VL-2B-Instruct",
 args = parser.parse_args()
 
 # Network path for storing indexes
+device = "cuda" if torch.cuda.is_available() else "cpu"
 if sys.platform == "darwin":
     index_root = "/Users/Shared/colpali"
+    device = "mps"
 elif sys.platform == "linux":
     index_root = "/mnt/colpali"
 else:
@@ -79,7 +76,7 @@ if args.pdf:
     pdf_path = args.pdf
     print(f"Indexing PDF: {args.pdf} for project {args.project_name}")
     # Initialize RAG model
-    RAG = RAGMultiModalModel.from_pretrained("vidore/colpali", index_root=index_root)
+    RAG = RAGMultiModalModel.from_pretrained("vidore/colpali", index_root=index_root, device=device, verbose=1)
     RAG.index(
         input_path=args.pdf,
         index_name=args.project_name,  # index will be saved at index_root/project_name/
@@ -89,12 +86,12 @@ if args.pdf:
     print(f"Successfully indexed PDF to {project_index_path}")
     index_loaded = True
 
-def load_index(project_index_path):
+def load_index(project_index_path, device):
     global RAG
     loaded = False
     if os.path.exists(project_index_path):
         try:
-            RAG = RAGMultiModalModel.from_index(project_index_path)
+            RAG = RAGMultiModalModel.from_index(project_index_path, device=device)
             loaded = True
         except Exception as e:
             print(f"Error loading RAG model for session {args.project_name}")
@@ -103,7 +100,7 @@ def load_index(project_index_path):
     return loaded
 
 if not index_loaded:
-    index_loaded = load_index(project_index_path)
+    index_loaded = load_index(project_index_path, device)
     if not index_loaded:
         print(f"Index {args.project_name} not loaded")
         sys.exit(1)
@@ -138,37 +135,81 @@ def get_images(project_index_path, results):
     except Exception as e:
         return []# If results found, use the specific page from results
 
+def to_rgb(pil_image: Image.Image) -> Image.Image:
+      if pil_image.mode == 'RGBA':
+          white_background = Image.new("RGB", pil_image.size, (255, 255, 255))
+          white_background.paste(pil_image, mask=pil_image.split()[3])  # Use alpha channel as mask
+          return white_background
+      else:
+          return pil_image.convert("RGB")
+
 if results:
     image_index = results[0]["page_num"] - 1
     print(f"Found relevant information on page {image_index + 1}")
     images = get_images(project_index_path, results)
-    
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "image": images[0],
-                },
-                {
-                    "type": "text", 
-                    "text": args.query
-                },
-            ],
-        }
-    ]
+
     # Load the AI model regardless of results
     print(f"Loading model: {args.model}")
-    torch.cuda.empty_cache()
-    model = Qwen2VLForConditionalGeneration.from_pretrained(
-        args.model,  
-        trust_remote_code=True, 
-        torch_dtype=torch.bfloat16,
-        attn_implementation="flash_attention_2",
-        device_map="auto",
-    ).cuda().eval()
-    
+    if device == "cuda":
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "image": images[0] ,
+                    },
+                    {
+                        "type": "text", 
+                        "text": args.query
+                    }
+                ]
+            }
+        ]
+        torch.cuda.empty_cache()
+        model = Qwen2VLForConditionalGeneration.from_pretrained(
+            args.model,  
+            trust_remote_code=True, 
+            torch_dtype=torch.bfloat16,
+            attn_implementation="flash_attention_2",
+            device_map="auto",
+        ).cuda().eval()
+    else: # We are using MPS (already cleared)
+        # The code above gives an error with MPS (Apple Silicon), so we need
+        # to resize the image (memory issue with MPS)
+        image_obj = None
+        image_obj = Image.open(images[0])
+        image = to_rgb(image_obj)
+        width, height = image.size
+        keep_aspect_ratio_width = 1240
+        keep_aspect_ratio_height = int(keep_aspect_ratio_width * height / width)
+        image = image.resize((keep_aspect_ratio_width, keep_aspect_ratio_height))
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "image": image,
+                        "resized_height": keep_aspect_ratio_width,
+                        "resized_width": keep_aspect_ratio_height
+                    },
+                    {
+                        "type": "text", 
+                        "text": args.query
+                    }
+                ]
+            }
+        ]
+        torch.mps.empty_cache()
+        model = Qwen2VLForConditionalGeneration.from_pretrained(
+            args.model,  
+            trust_remote_code=True, 
+            torch_dtype=torch.bfloat16,
+            device_map="auto"
+        ).to("mps").eval()
+
     # Enable gradient checkpointing
     model.gradient_checkpointing_enable()
     
@@ -181,10 +222,13 @@ if results:
         return_dict=True,
         return_tensors="pt"
     )
-    inputs = inputs.to("cuda")
+    if device == "cuda":
+        torch.cuda.empty_cache()
+        inputs = inputs.to("cuda")
+    else: # We are using MPS
+        torch.cuda.empty_cache()
+        inputs = inputs.to("mps")
             
-    # Clear cache before generation
-    torch.cuda.empty_cache()
     
     with torch.inference_mode():
         output_ids = model.generate(**inputs, max_new_tokens=128)
