@@ -56,7 +56,13 @@ parser.add_argument('--model', type=str, default="Qwen/Qwen2-VL-2B-Instruct",
 args = parser.parse_args()
 
 # Network path for storing indexes
-index_root = "/mnt/colpali"
+if sys.platform == "darwin":
+    index_root = "/Users/Shared/colpali"
+elif sys.platform == "linux":
+    index_root = "/mnt/colpali"
+else:
+    print("Error: Unsupported platform")
+    sys.exit(1)
 
 # Check if the network mount is available
 if not os.path.exists(index_root):
