@@ -1,0 +1,22 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: ColPali Persist",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/colpaly_persist.py",
+            "console": "integratedTerminal",
+            "args": [
+                "${workspaceFolder}/colpali_persist.py",
+                "--pdf", "content/climate_youth_magazine.pdf",
+                "--query", "How much did the world temperature change so far?",
+                "climate"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "justMyCode": true
+        }
+    ]
+}
