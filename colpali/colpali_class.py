@@ -119,7 +119,7 @@ class ColpaliLocaRag:
             print(f"Error loading RAG model for project {self.project_name}: {e}")
             return False
     
-    def _get_images(self, results, max_k=3):
+    def _get_images(self, results):
         """
         Extract images from search results and store them in the project index path.
         
