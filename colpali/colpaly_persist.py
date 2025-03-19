@@ -49,7 +49,8 @@ import torch
 parser = argparse.ArgumentParser(description='ColPali - PDF RAG with multimodal capabilities')
 parser.add_argument('project_name', type=str, help='Name of the project (required)')
 parser.add_argument('--pdf', type=str, help='Path to PDF file to index (optional)')
-parser.add_argument('--query', type=str, help='Query to search in the PDF')
+parser.add_argument('--query', type=str, default="proide a summary of this document",
+                    help='Query to search in the PDF')
 parser.add_argument('--model', type=str, default="Qwen/Qwen2-VL-2B-Instruct", 
                     help='Model to use for analysis (default: Qwen/Qwen2-VL-2B-Instruct)')
 args = parser.parse_args()
@@ -74,9 +75,8 @@ if not os.path.exists(index_root):
 index_loaded = False
 project_index_path = os.path.join(index_root, args.project_name)
 
+RAG = None
 if args.pdf:
-    global RAG
-
     pdf_path = args.pdf
     print(f"Indexing PDF: {args.pdf} for project {args.project_name}")
     # Initialize RAG model
@@ -89,6 +89,8 @@ if args.pdf:
     )
     print(f"Successfully indexed PDF to {project_index_path}")
     index_loaded = True
+else:
+    print(f"No PDF provided, using existing index at {project_index_path}")
 
 def load_index(project_index_path, device):
     global RAG
