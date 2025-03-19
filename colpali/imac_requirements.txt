@@ -1,0 +1,26 @@
+git+https://github.com/illuin-tech/colpali
+Flask
+byaldi
+cmake
+pkgconfig
+python-poppler @ git+https://github.com/bzamecnik/python-poppler.git@fix_image_copy # Poppler 25.01 changed the signature of a bound function, and python-poppler upstream hasn't updated yet.
+#python-poppler
+#--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+#--extra-index-url https://download.pytorch.org/whl/cpu
+torchvision
+google-generativeai
+openai
+docx2pdf
+qwen-vl-utils
+--extra-index-url https://download.pytorch.org/whl/cpu
+vllm>=0.6.1.post1; #sys_platform != 'darwin'
+mistral_common>=1.4.1
+einops
+mistral_common[opencv]
+mistral_common
+#mistral_inference
+groq
+markdown
+hf_transfer
+ollama
