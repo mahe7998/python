@@ -1,14 +1,17 @@
-import argparse
 import sys
-from colpali_class import ColpaliLocaRag
 
 # Maximum number od images of results to return
 def check_dependencies():
     missing_deps = []
     try:
-        import pdf2image
+        from colpali_class import ColpaliLocaRag
     except ImportError:
-        missing_deps.append("pdf2image")
+        missing_deps.append("colpali_class")
+
+    try:
+        import argparse
+    except ImportError:
+        missing_deps.append("argparse")
     
     try:
         import byaldi
@@ -33,6 +36,9 @@ def check_dependencies():
 # Check dependencies before proceeding
 check_dependencies()
 
+from colpali_class import ColpaliLocaRag
+import argparse
+
 def main():
     """
     Example usage of the ColpaliLocaRag class.
@@ -41,13 +47,16 @@ def main():
     parser = argparse.ArgumentParser(description='ColPali - PDF RAG with multimodal capabilities')
     parser.add_argument('project_name', type=str, help='Name of the project (required)')
     parser.add_argument('--pdf', type=str, help='Path to PDF file to index (optional)')
-    parser.add_argument('--query', type=str, help='Query to search in the PDF')
+    parser.add_argument('--query', type=str, default="What is the document about?",
+                        help='Query to search in the PDF')
     parser.add_argument('--model', type=str, default="Qwen/Qwen2-VL-2B-Instruct", 
                       help='Model to use for analysis (default: Qwen/Qwen2-VL-2B-Instruct)')
+    parser.add_argument('--max_pages', type=int, default=3,
+                      help='Maximum number of pages to return in search results (default: 3)')
     args = parser.parse_args()
     
     # Create ColpaliLocaRag instance
-    rag = ColpaliLocaRag(args.project_name, model=args.model)
+    rag = ColpaliLocaRag(args.project_name, model=args.model, max_k=args.max_pages)
     
     # If PDF file is provided, add it to the index
     if args.pdf:
@@ -55,12 +64,9 @@ def main():
         if not success:
             sys.exit(1)
     
-    # If query is provided, search the index
-    if args.query:
-        response = rag.query(args.query, args.model)
-        print("\nAI model response:")
-        print(response)
-
+    response = rag.query(args.query)
+    print(f"{args.query}\nAI model response:")
+    print(response)
 
 if __name__ == "__main__":
     main()

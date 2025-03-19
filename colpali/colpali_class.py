@@ -11,7 +11,7 @@ from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
 import torch
 
 class ColpaliLocaRag:
-    def __init__(self, project_name, index_root=None, model=None):
+    def __init__(self, project_name, index_root=None, model=None, max_k=3):
         """
         Initialize the ColpaliLocaRag class.
         
@@ -19,12 +19,14 @@ class ColpaliLocaRag:
             project_name (str): Name of the project
             index_root (str, optional): Root directory for storing indexes. If None, platform-specific default is used.
             model (str, optional): LLM model name. Default is "Qwen/Qwen2-VL-2B-Instruct"
+            max_k (int, optional): Maximum number of results to return. Default is 3.
         """
         self.project_name = project_name
         self.model_name = model or "Qwen/Qwen2-VL-2B-Instruct"
         self.RAG = None
         self.index_loaded = False
         self.MAX_MPS_IMAGE_WIDTH = 840  # For Apple Silicon
+        self.max_k = max_k
         
         # Determine device and index root based on platform
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -158,7 +160,7 @@ class ColpaliLocaRag:
             print(f"Error retrieving images: {e}")
             return images
     
-    def query(self, query_text, model=None):
+    def query(self, query_text):
         """
         Query the RAG index and generate a response using the LLM.
         
@@ -169,8 +171,6 @@ class ColpaliLocaRag:
         Returns:
             str: Generated text response
         """
-        # Use specified model or default to one set during initialization
-        model_name = model or self.model_name
         
         # Ensure RAG is initialized and index is loaded
         if self.RAG is None:
@@ -179,7 +179,7 @@ class ColpaliLocaRag:
                 return "Error: No index loaded. Please add a PDF first."
         
         # Search the index
-        results = self.RAG.search(query_text, k=3)
+        results = self.RAG.search(query_text, k=self.max_k)
         
         if not results:
             print("No results found for the query.")
@@ -196,13 +196,13 @@ class ColpaliLocaRag:
         messages = [{"role": "user", "content": content}]
         
         # Load the LLM model
-        print(f"Loading model: {model_name}")
+        print(f"Loading model: {self.model_name}")
         try:
             # Clear cache before loading model
             if self.device == "cuda":
                 torch.cuda.empty_cache()
                 model = Qwen2VLForConditionalGeneration.from_pretrained(
-                    model_name,
+                    self.model_name,
                     trust_remote_code=True,
                     torch_dtype=torch.bfloat16,
                     attn_implementation="flash_attention_2",
@@ -211,14 +211,14 @@ class ColpaliLocaRag:
             elif self.device == "mps":
                 torch.mps.empty_cache()
                 model = Qwen2VLForConditionalGeneration.from_pretrained(
-                    model_name,
+                    self.model_name,
                     trust_remote_code=True,
                     torch_dtype=torch.bfloat16,
                     device_map="auto"
                 ).to("mps").eval()
             else:  # CPU
                 model = Qwen2VLForConditionalGeneration.from_pretrained(
-                    model_name,
+                    self.model_name,
                     trust_remote_code=True,
                     device_map="auto"
                 ).eval()
@@ -227,7 +227,7 @@ class ColpaliLocaRag:
             model.gradient_checkpointing_enable()
             
             # Load processor
-            processor = AutoProcessor.from_pretrained(model_name, trust_remote_code=True)
+            processor = AutoProcessor.from_pretrained(self.model_name, trust_remote_code=True)
             
             # Process inputs
             inputs = processor.apply_chat_template(
