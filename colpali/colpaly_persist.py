@@ -118,9 +118,8 @@ results = RAG.search(
 # Get the images from the index and store them in the images folder
 # Note that we don't use these stored immages;; it is only a referebce for debug 
 def get_images(project_index_path, results):
-    global keep_aspect_ratio_width, keep_aspect_ratio_height
+    images = []
     try:
-        images = []
         session_images_folder = os.path.join(project_index_path, 'images')
         os.makedirs(session_images_folder, exist_ok=True)
         
@@ -130,21 +129,22 @@ def get_images(project_index_path, results):
                 image = Image.open(BytesIO(image_data))
                 width, height = image.size
                 keep_aspect_ratio_width = width
-                keep_aspect_ratio_width = height
+                keep_aspect_ratio_height = height
                 if device == "mps":
                     keep_aspect_ratio_width = MAX_MPS_IMAGE_WIDTH
                     keep_aspect_ratio_height = int((keep_aspect_ratio_width * height) // width)
                     image = image.resize((keep_aspect_ratio_width, keep_aspect_ratio_height))
+
                 # Generate a unique filename based on the image content
                 image_hash = hashlib.md5(image_data).hexdigest()
                 image_filename = f"retrieved_{image_hash}.png"
                 image_path = os.path.join(session_images_folder, image_filename)
-                if not os.path.exists(image_path):
-                    image.save(image_path, format='PNG')
-                images.append((image, keep_aspect_ratio_width, keep_aspect_ratio_height))
+                # if not os.path.exists(image_path):
+                image.save(image_path, format='PNG')
+                images.append((image_path, keep_aspect_ratio_width, keep_aspect_ratio_height))
         return images
     except Exception as e:
-        return []# If results found, use the specific page from results
+        return images
 
 def to_rgb(pil_image: Image.Image) -> Image.Image:
       if pil_image.mode == 'RGBA':
@@ -155,10 +155,8 @@ def to_rgb(pil_image: Image.Image) -> Image.Image:
           return pil_image.convert("RGB")
 
 if results:
-    image_indexes = []
     for result in results:
         image_index = result["page_num"] - 1
-        image_indexes.append(image_index)
         print(f"Found relevant information on page {image_index}")
     images = get_images(project_index_path, results)
     # The code above gives an error with MPS (Apple Silicon), so we need
@@ -170,13 +168,10 @@ if results:
         }
     ]
     for image in images:
-        image_rgb = to_rgb(image[0])
         content.append( 
             {
                 "type": "image",
-                "image": image_rgb,
-                "resized_height": image[1],
-                "resized_width": image[2]
+                "image": image[0]
             }
         )
     messages = [
