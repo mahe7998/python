@@ -1,0 +1,20 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: pdf extract",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--model", "BAAI/bge-small-en-v1.5",
+                "--query", "What is the main idea of the paper?"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"ß
+            },
+            "justMyCode": true
+        }
+    ]
+}
