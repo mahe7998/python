@@ -11,7 +11,7 @@
                 "--url", "content/DocLayNet.pdf",
                 "--collection", "ai_research_papers",
                 "--model", "BAAI/bge-small-en-v1.5",
-                "--query", "Provide a summany of Colpali"
+                "--query", "What the six DocLayNet document categories used during training and their percentage?"
             ],
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"ß

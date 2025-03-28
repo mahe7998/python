@@ -5,13 +5,10 @@
             "name": "Python: docling RAG",
             "type": "python",
             "request": "launch",
-            "program": "${workspaceFolder}/main.py",
+            "program": "${workspaceFolder}/pymil.py",
             "console": "integratedTerminal",
             "args": [
-                "--url", "content/DocLayNet.pdf",
-                "--collection", "ai_research_papers",
-                "--model", "BAAI/bge-small-en-v1.5",
-                "--query", "Provide a summany of Colpali"
+                "docling_docs", "--rename", "ai_research_papers"
             ],
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"ß

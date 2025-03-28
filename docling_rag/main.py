@@ -7,27 +7,40 @@ config = dotenv_values(".env")
 print(f"config: {config}")
 
 from typing import List
+from pathlib import Path
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents import Document as LCDocument
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from docling.document_converter import DocumentConverter
-#from langchain_huggingface import HuggingFaceEndpoint
+from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
+from docling.datamodel.base_models import InputFormat
+from docling_core.types.doc import ImageRefMode, PictureItem, TableItem
+from docling.datamodel.pipeline_options import (
+    EasyOcrOptions,
+    OcrMacOptions,
+    PdfPipelineOptions,
+    RapidOcrOptions,
+    TesseractCliOcrOptions,
+    TesseractOcrOptions,
+)
+from docling.document_converter import DocumentConverter, PdfFormatOption#from langchain_huggingface import HuggingFaceEndpoint
 #from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama.llms import OllamaLLM
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
+from langchain_text_splitters import MarkdownHeaderTextSplitter
 from langchain_milvus import Milvus
-from tempfile import TemporaryDirectory
 from typing import Iterable, Dict, Any
 from langchain_milvus import Milvus
 import signal
 import sys
-
 import argparse
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Process a PDF URL or query existing vector store.")
+    parser.add_argument("--collection", type=str, default="docling_docs", help="The name of the collection to use")
     parser.add_argument("--url", type=str, help="The URL of the PDF to process (optional)")
     parser.add_argument("--model", type=str, default="BAAI/bge-small-en-v1.5", help="The model to use for embeddings")
     parser.add_argument("--query", type=str, default="What is the main idea of the paper?", 
@@ -121,11 +134,13 @@ def display_source_documents(docs: List[LCDocument], show_full_content: bool = F
         
         print("-"*40)
 
+def is_header(entry):
+    return entry.get("label") == "section_header"
+
 def main():
     # Configure Milvus connection to an external server
     MILVUS_HOST = "localhost"
     MILVUS_PORT = "9091"
-    COLLECTION_NAME = "docling_docs"
     
     # Initialize global variable to store retrieved documents
     global retrieved_docs
@@ -139,36 +154,119 @@ def main():
         # Determine if we're processing a new PDF or just querying existing data
         if args.url:
             print(f"Processing PDF from URL: {args.url}")
-            loader = DoclingPDFLoader()
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1000,
-                chunk_overlap=200,
+
+            # Important: For operating with page images, we must keep them, otherwise the DocumentConverter
+            # will destroy them for cleaning up memory.
+            # This is done by setting PdfPipelineOptions.images_scale, which also defines the scale of images.
+            # scale=1 correspond of a standard 72 DPI image
+            # The PdfPipelineOptions.generate_* are the selectors for the document elements which will be enriched
+            # with the image field
+            pipeline_options = PdfPipelineOptions()
+            pipeline_options.generate_page_images = True
+            pipeline_options.generate_picture_images = True
+
+            doc_converter = DocumentConverter(
+                format_options={
+                    InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+                }
             )
-            docs = loader.load(args.url)
-            splits = text_splitter.split_documents(docs)
+
+            conv_res = doc_converter.convert(args.url)
+
+            output_dir = Path("output")
+            current_folder = Path.cwd()
+            output_dir = current_folder / output_dir
+            output_dir.mkdir(parents=True, exist_ok=True)
+            doc_filename = conv_res.input.file.stem
+
+            # Save page images
+            for page_no, page in conv_res.document.pages.items():
+                page_no = page.page_no
+                page_image_filename = output_dir / f"{doc_filename}-{page_no}.png"
+                with page_image_filename.open("wb") as fp:
+                    page.image.pil_image.save(fp, format="PNG")
+
+            # Save images of figures
+            picture_counter = 0
+            for element, _ in conv_res.document.iterate_items():
+                if isinstance(element, PictureItem):
+                    picture_counter += 1
+                    element_image_filename = (
+                        output_dir / f"{doc_filename}-picture-{picture_counter}.png"
+                    )
+                    with element_image_filename.open("wb") as fp:
+                        element.get_image(conv_res.document).save(fp, "PNG")
+
+            # Save markdown with externally referenced pictures
+            md_filename = output_dir / f"{doc_filename}-with-image-refs.md"
+            conv_res.document.save_as_markdown(md_filename, image_mode=ImageRefMode.REFERENCED)
+            markdown_text = conv_res.document.export_to_markdown()
+
+            json_filename = output_dir / f"{doc_filename}-with-image-refs.json"
+            conv_res.document.save_as_json(json_filename, image_mode=ImageRefMode.REFERENCED)
+
+            # Load the JSON content we just saved
+            jason_file = open(json_filename)
+            # returns JSON object as a dictionary
+            json_content = json.load(jason_file)
+            json_metadata = []
+            try:
+                json_header_content = json_content["texts"]
+                json_header_content = [entry for entry in json_header_content if is_header(entry)]
+                json_picture_content = json_content["pictures"]
+                json_metadata.append({"url": args.url, "headers": json_header_content, "pictures": json_picture_content})
+                #json_content.append({"label": "url", "text": args.url})
+            except KeyError:
+                print("Error: 'texts' or 'pictures' entry does not exist in the JSON content.")
+            jason_file.close();
+
+            # Export markdown to local folder
+            output_folder = "output"
+            os.makedirs(output_folder, exist_ok=True)
+            output_file_path = os.path.join(output_folder, "document.json")
+            with open(output_file_path, "w") as outfile:
+                outfile.write(json.dumps(json_metadata, indent=4))
+                outfile.close();
+
+            # Split the markdown text into chunks
+            # See https://python.langchain.com/docs/how_to/markdown_header_metadata_splitter/
+            #loader = DoclingPDFLoader()
+            splitter = MarkdownHeaderTextSplitter(
+                headers_to_split_on=[
+                    ("#", "Header_1"),
+                    ("##", "Header_2"),
+                    ("###", "Header_3"),
+                ],
+            )
+            splits = splitter.split_text(markdown_text)
             print(f"Generated {len(splits)} document chunks")
-            
-            # Create Milvus vector store with new documents
+            file_name = Path(args.url).name
+            file_name = ''.join(e for e in file_name if e.isalnum() or e == '_')
             vectorstore = Milvus.from_documents(
                 documents=splits,
                 embedding=embeddings,
                 connection_args={"host": MILVUS_HOST, "port": MILVUS_PORT},
-                collection_name=COLLECTION_NAME,
+                collection_name=args.collection,
                 drop_old=True
             )
+            # Store vectorstore in global resources for cleanup
+            _resources_to_clean['vectorstore'] = vectorstore
             print("Added new documents to vector store")
+            print(f"Vector store: {vectorstore}")
+
         else:
             print("No URL provided. Connecting to existing vector store...")
             # Connect to existing Milvus collection
             vectorstore = Milvus(
                 embedding_function=embeddings,
-                collection_name=COLLECTION_NAME,
+                collection_name=args.collection,
                 connection_args={"host": MILVUS_HOST, "port": MILVUS_PORT}
             )
+            # Store vectorstore in global resources for cleanup
+            _resources_to_clean['vectorstore'] = vectorstore
             print("Connected to existing vector store")
+            print(f"Vector store: {vectorstore}")
         
-        # Store vectorstore in global resources for cleanup
-        _resources_to_clean['vectorstore'] = vectorstore
         
         OLLAMA_URI = "http://localhost:11434"
         ollama_llm = OllamaLLM(model="llama3.3:70b", base_url=OLLAMA_URI)
