@@ -1,0 +1,23 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: ColPali Persist",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/colpali_persist.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--root", "/Users/Shared/colqwen",
+                "--query", "What are the Performance of a Mask R-CNN R50 network with document-wise and page-wise split for different label set?",
+                "--llm_model", "alpindale/Llama-3.2-11B-Vision-Instruct",
+                "--pdf", "content/DocLayNet.pdf",
+                "doclaynet"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"ß
+            },
+            "justMyCode": true
+        }
+    ]
+}

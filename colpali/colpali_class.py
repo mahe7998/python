@@ -1,5 +1,19 @@
-import os
+# See https://github.com/illuin-tech/colpali for vision model indexers tested
+# vidore/colpali	        81.3	Gemma	    • Based on google/paligemma-3b-mix-448
+# vidore/colpali-v1.1	    81.5	Gemma	    • Based on google/paligemma-3b-mix-448
+# vidore/colpali-v1.2       83.9	Gemma	    • Similar to vidore/colpali-v1.1
+# vidore/colpali-v1.3	    84.8	Gemma	    • Similar to vidore/colpali-v1.2
+# vidore/colqwen2-v1.0	    89.3	Apache 2.0	• Similar to vidore/colqwen2-v0.1
+# vidore/colqwen2.5-v0.1	88.8	Apache 2.0	• Based on Qwen/Qwen2 5-VL-3B-Instruct # Not working
+# vidore/colqwen2.5-v0.2	89.4	Apache 2.0  • Similar to vidore/colqwen2.5-v0.1    # Not working
+
+# LLM Vision models tested
+# Qwen/Qwen2-VL-2B-Instruct		Apache 2.0	• Based on Qwen/Qwen2 5-VL-3B-Instruct
+# Qwen/Qwen2-VL-7B-Instruct		Apache 2.0	• Similar to Qwen/Qwen2-VL-2B-Instruct
+# alpindale/Llama-3.2-11B-Vision-Instruct	Not goog on table and slow
+
 import sys
+import os
 import base64
 import hashlib
 from io import BytesIO
@@ -8,37 +22,36 @@ from PIL import Image
 # Required modules
 from byaldi import RAGMultiModalModel
 from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+from transformers import MllamaForConditionalGeneration
 import torch
 
 class ColpaliLocaRag:
-    def __init__(self, project_name, index_root=None, model=None, max_k=3):
+    def __init__(self, project_name, index_root=".", indexer_model=None, llm_model=None, max_k=3):
         """
         Initialize the ColpaliLocaRag class.
         
         Args:
             project_name (str): Name of the project
             index_root (str, optional): Root directory for storing indexes. If None, platform-specific default is used.
-            model (str, optional): LLM model name. Default is "Qwen/Qwen2-VL-2B-Instruct"
+            llm_model (str, optional): LLM model name. Default is "Qwen/Qwen2-VL-2B-Instruct"
+            indexer_model (str, optional): Indexer model name. Default is "vidore/colpali"
             max_k (int, optional): Maximum number of results to return. Default is 3.
         """
         self.project_name = project_name
-        self.model_name = model or "Qwen/Qwen2-VL-2B-Instruct"
+        self.index_root = index_root
+        self.model_name = llm_model or "Qwen/Qwen2-VL-2B-Instruct"
+        self.indexer_model = indexer_model or "vidore/colpali"
+        self.MAX_MPS_IMAGE_SIZE = 1050000  # Obtained empirically
         self.RAG = None
         self.index_loaded = False
-        self.MAX_MPS_IMAGE_WIDTH = 840  # For Apple Silicon
+        self.MAX_MPS_IMAGE_WIDTH = 900  # For Apple Silicon
         self.max_k = max_k
         
         # Determine device and index root based on platform
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         if sys.platform == "darwin":
             self.device = "mps"
-            self.index_root = index_root or "/Users/Shared/colpali"
-        elif sys.platform == "linux":
-            self.index_root = index_root or "/mnt/colpali"
-        else:
-            print("Warning: Platform not explicitly supported. Using default index location.")
-            self.index_root = index_root or "./colpali_indexes"
-        
+       
         # Ensure index root exists
         if not os.path.exists(self.index_root):
             try:
@@ -78,7 +91,7 @@ class ColpaliLocaRag:
             # Initialize RAG model if not already initialized
             if self.RAG is None:
                 self.RAG = RAGMultiModalModel.from_pretrained(
-                    "vidore/colpali", 
+                    self.indexer_model, 
                     index_root=self.index_root, 
                     device=self.device, 
                     verbose=1
@@ -144,8 +157,13 @@ class ColpaliLocaRag:
                     keep_aspect_ratio_height = height
                     
                     if self.device == "mps":
-                        keep_aspect_ratio_width = self.MAX_MPS_IMAGE_WIDTH
-                        keep_aspect_ratio_height = int((keep_aspect_ratio_width * height) // width)
+                        total_size = width * height
+                        if total_size > self.MAX_MPS_IMAGE_SIZE:
+                            keep_aspect_ratio_width = int(((self.MAX_MPS_IMAGE_SIZE * width) / height) ** 0.5)
+                            keep_aspect_ratio_height = int(((self.MAX_MPS_IMAGE_SIZE * height) / width) ** 0.5)
+                        else:
+                            keep_aspect_ratio_width = width
+                            keep_aspect_ratio_height = height
                         image = image.resize((keep_aspect_ratio_width, keep_aspect_ratio_height))
                     
                     # Generate a unique filename based on the image content
@@ -180,6 +198,8 @@ class ColpaliLocaRag:
         
         # Search the index
         results = self.RAG.search(query_text, k=self.max_k)
+        for result in results:
+            print(f"Doc ID {result.doc_id}, page {result.page_num}, with score {result.score}")
         
         if not results:
             print("No results found for the query.")
@@ -210,12 +230,19 @@ class ColpaliLocaRag:
                 ).cuda().eval()
             elif self.device == "mps":
                 torch.mps.empty_cache()
-                model = Qwen2VLForConditionalGeneration.from_pretrained(
-                    self.model_name,
-                    trust_remote_code=True,
-                    torch_dtype=torch.bfloat16,
-                    device_map="auto"
-                ).to("mps").eval()
+                if self.model_name.startswith("Qwen"):
+                    model = Qwen2VLForConditionalGeneration.from_pretrained(
+                        self.model_name,
+                        trust_remote_code=True,
+                        torch_dtype=torch.bfloat16,
+                        device_map="auto"
+                    ).to("mps").eval()
+                elif self.model_name.startswith("alpindale"):
+                    model = MllamaForConditionalGeneration.from_pretrained(
+                        self.model_name,
+                        torch_dtype=torch.bfloat16,
+                        device_map="auto"
+                    ).to("mps").eval()
             else:  # CPU
                 model = Qwen2VLForConditionalGeneration.from_pretrained(
                     self.model_name,
@@ -243,7 +270,7 @@ class ColpaliLocaRag:
             
             # Generate output
             with torch.inference_mode():
-                output_ids = model.generate(**inputs, max_new_tokens=128)
+                output_ids = model.generate(**inputs, max_new_tokens=1024)
                 generated_ids = [output_ids[len(input_ids):] for input_ids, output_ids in zip(inputs.input_ids, output_ids)]
                 output_text = processor.batch_decode(generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True)
             
