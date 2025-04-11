@@ -11,6 +11,7 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 import os
 import wget
 import atexit
+import argparse
 
 # Configure Milvus connection to an external server
 MILVUS_HOST = "localhost"
@@ -30,11 +31,20 @@ def cleanup_resources():
 atexit.register(cleanup_resources)
 
 def main():
-    embeddings_model_path = "ibm-granite/granite-embedding-30m-english"
+    parser = argparse.ArgumentParser(description='Process some integers.')
+    parser.add_argument('--embedding_model', type=str, required=False, help='Path to the embedding model', 
+                        default="ibm-granite/granite-embedding-30m-english")
+    
+    # Parse the arguments
+    args = parser.parse_args()
+    
+    # Use the argument in your code
+    embedding_model_path = args.embedding_model
+    print(f'Using embedding model from: {embedding_model_path}')
     embeddings_model = HuggingFaceEmbeddings(
-        model_name=embeddings_model_path,
+        model_name=embedding_model_path,
     )
-    embeddings_tokenizer = AutoTokenizer.from_pretrained(embeddings_model_path)
+    embeddings_tokenizer = AutoTokenizer.from_pretrained(embedding_model_path)
     print("Tokenizer done")
 
     model = OllamaLLM(model="granite3.2:8b")
