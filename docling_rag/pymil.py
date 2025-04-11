@@ -2,7 +2,8 @@
 """
 Milvus collection management utility.
 Usage:
-  python pymil.py [collection_name] [--delete | --rename NEW_NAME]
+  python pymil.py [collection_name] [--delete NEW_NAME] [--list]
+  uv run pymil.py --list
 """
 
 import argparse
@@ -202,7 +203,7 @@ def main():
         parser.add_argument("collection_name", nargs="?", help="Name of the collection to operate on")
         parser.add_argument("--list", action="store_true", help="List all collections")
         parser.add_argument("--delete", action="store_true", help="Delete the specified collection")
-        parser.add_argument("--rename", type=str, help="Rename the collection to the specified new name")
+        #parser.add_argument("--rename", type=str, help="Rename the collection to the specified new name")   Not working
         parser.add_argument("--host", type=str, default="localhost", help="Milvus server host (default: localhost)")
         parser.add_argument("--port", type=str, default="19530", help="Milvus server port (default: 19530)")
         parser.add_argument("--uri", type=str, help="Milvus server URI (e.g., http://localhost:19530)")

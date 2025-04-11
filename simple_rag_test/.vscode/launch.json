@@ -1,0 +1,38 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": True,
+            "env": {},
+            "args": []
+        },
+        {
+            "name": "Python: main.py",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "justMyCode": False,
+            "env": {},
+            "args": []
+        },
+        {
+            "name": "Python: main.py with custom embedding model",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "justMyCode": False,
+            "env": {},
+            "args": [
+                "--embedding_model",
+                "ibm-granite/granite-embedding-30m-english"
+            ]
+        }
+    ]
+}

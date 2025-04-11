@@ -10,11 +10,25 @@
             "args": [
                 "--url", "content/DocLayNet.pdf",
                 "--collection", "ai_research_papers",
-                "--model", "BAAI/bge-small-en-v1.5",
-                "--query", "Provide a summany of Colpali"
+                "--model", "ibm-granite/granite-embedding-30m-english",
+                "--query", "Can you provide the different labels recognized and the percentage of the total?"
             ],
             "env": {
-                "PYTHONPATH": "${workspaceFolder}"ß
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "justMyCode": true
+        },
+        {
+            "name": "Python: pymil",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/pymil.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--list",
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
             },
             "justMyCode": true
         }

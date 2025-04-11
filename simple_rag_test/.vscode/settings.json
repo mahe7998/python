@@ -1,0 +1,31 @@
+{
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}"
+    ],
+    "python.linting.enabled": True,
+    "python.linting.pylintEnabled": True,
+    "python.formatting.provider": "black",
+    "editor.formatOnSave": True,
+    "python.terminal.activateEnvironment": True,
+    "python.testing.pytestEnabled": True,
+    "python.testing.unittestEnabled": False,
+    "python.testing.nosetestsEnabled": False,
+    "python.testing.pytestArgs": [
+        "tests"
+    ]
+}
+{
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.diagnosticMode": "workspace",
+    "python.analysis.autoSearchPaths": True,
+    "python.analysis.useLibraryCodeForTypes": True,
+    "python.analysis.indexing": True,
+    "python.analysis.indexingInterval": 1000,
+    "python.analysis.autoImportCompletions": True,
+    "python.analysis.completeFunctionCalls": True,
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.diagnosticMode": "workspace",
+    "python.analysis.autoSearchPaths": True,
+    "python.analysis.useLibraryCodeForTypes": True
+}

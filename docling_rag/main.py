@@ -1,3 +1,10 @@
+# Models tested:
+# - BAAI/bge-small-en-v1.5
+# - ibm-granite/granite-embedding-30m-english
+# Ollama model: 
+# - llama3.3:70b
+# - granite3.2:8b
+
 import os
 from dotenv import dotenv_values
 import atexit
@@ -23,8 +30,10 @@ from docling.datamodel.pipeline_options import (
     RapidOcrOptions,
     TesseractCliOcrOptions,
     TesseractOcrOptions,
+    AcceleratorOptions
 )
 from docling.document_converter import DocumentConverter, PdfFormatOption#from langchain_huggingface import HuggingFaceEndpoint
+from docling.datamodel.pipeline_options import granite_picture_description
 #from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama.llms import OllamaLLM
 from langchain_core.prompts import PromptTemplate
@@ -37,6 +46,7 @@ from langchain_milvus import Milvus
 import signal
 import sys
 import argparse
+import os
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Process a PDF URL or query existing vector store.")
@@ -155,6 +165,11 @@ def main():
         if args.url:
             print(f"Processing PDF from URL: {args.url}")
 
+            # Set the number of threads for parallel processing
+            os.environ["OMP_NUM_THREADS"] = "8"  # You can adjust the number of threads as needed
+            accelerator_options = AcceleratorOptions()
+            accelerator_options.num_threads = 8
+
             # Important: For operating with page images, we must keep them, otherwise the DocumentConverter
             # will destroy them for cleaning up memory.
             # This is done by setting PdfPipelineOptions.images_scale, which also defines the scale of images.
@@ -164,6 +179,11 @@ def main():
             pipeline_options = PdfPipelineOptions()
             pipeline_options.generate_page_images = True
             pipeline_options.generate_picture_images = True
+            pipeline_options.do_picture_classification = False
+            pipeline_options.do_picture_description = False
+            #pipeline_options.picture_description_options = granite_picture_description
+            pipeline_options.images_scale = 2
+            #pipeline_options.accelerator_options = accelerator_options
 
             doc_converter = DocumentConverter(
                 format_options={
@@ -227,6 +247,10 @@ def main():
             with open(output_file_path, "w") as outfile:
                 outfile.write(json.dumps(json_metadata, indent=4))
                 outfile.close();
+            output_markdown_file_path = os.path.join(output_folder, "document.txt")
+            with open(output_markdown_file_path, "w") as outfile:
+                outfile.write(markdown_text)
+                outfile.close();
 
             # Split the markdown text into chunks
             # See https://python.langchain.com/docs/how_to/markdown_header_metadata_splitter/
@@ -240,11 +264,11 @@ def main():
             )
             splits = splitter.split_text(markdown_text)
             print(f"Generated {len(splits)} document chunks")
-            file_name = Path(args.url).name
-            file_name = ''.join(e for e in file_name if e.isalnum() or e == '_')
+  
             vectorstore = Milvus.from_documents(
                 documents=splits,
                 embedding=embeddings,
+                enable_dynamic_field=True,
                 connection_args={"host": MILVUS_HOST, "port": MILVUS_PORT},
                 collection_name=args.collection,
                 drop_old=True
@@ -269,7 +293,7 @@ def main():
         
         
         OLLAMA_URI = "http://localhost:11434"
-        ollama_llm = OllamaLLM(model="llama3.3:70b", base_url=OLLAMA_URI)
+        ollama_llm = OllamaLLM(model="granite3.2:8b", base_url=OLLAMA_URI)
 
         # Set up the retriever with a higher k value to see more documents
         retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
