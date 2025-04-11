@@ -1,0 +1,14 @@
+[project]
+name = "docling-rag-test"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "langchain-community>=0.3.21",
+    "langchain-huggingface>=0.1.2",
+    "langchain-milvus>=0.1.9",
+    "langchain-ollama>=0.3.1",
+    "transformers>=4.51.2",
+    "wget>=3.2",
+]
