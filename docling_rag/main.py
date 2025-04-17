@@ -48,14 +48,25 @@ import sys
 import argparse
 import os
 
+default_ollama_uri = "http://localhost:11434"
+default_ollama_model = "granite3.2:8b"
+
 def parse_args():
+    global default_ollama_uri
+    global default_ollama_model
     parser = argparse.ArgumentParser(description="Process a PDF URL or query existing vector store.")
     parser.add_argument("--collection", type=str, default="docling_docs", help="The name of the collection to use")
     parser.add_argument("--url", type=str, help="The URL of the PDF to process (optional)")
     parser.add_argument("--model", type=str, default="BAAI/bge-small-en-v1.5", help="The model to use for embeddings")
-    parser.add_argument("--query", type=str, default="What is the main idea of the paper?", 
+    parser.add_argument("--query", type=str, default="Porvide a summary of the paper?", 
                        help="Query to use when searching the vector store")
+    parser.add_argument('--ollama-uri', type=str, default=default_ollama_uri, help='URI for the Ollama service')
+    parser.add_argument('--ollama-model', type=str, default=default_ollama_model, help='Model to use with the Ollama service')
     parser.add_argument("--show-sources", action="store_true", help="Show the full content of sources")
+    parser.add_argument("--debug", action="store_true", help="Show debug information")
+    parser.add_argument("--max-refs", type=int, default=5, 
+                       help="Maximum number of reference documents to retrieve (default: 5)")
+    parser.add_argument('--answer-length', type=int, help='Desired answer length in number of words')
     return parser.parse_args()
 
 args = parse_args()
@@ -328,14 +339,13 @@ def main():
                 
             vectorstore.add_documents(enhanced_splits)
         
-        OLLAMA_URI = "http://localhost:11434"
-        ollama_llm = OllamaLLM(model="granite3.2:8b", base_url=OLLAMA_URI)
+        ollama_llm = OllamaLLM(model=args.ollama_model, base_url=args.ollama_uri)
 
-        # Set up the retriever with a higher k value to see more documents
+        # Set up the retriever with the max_ref parameter from command line
         retriever = vectorstore.as_retriever(
             search_kwargs={
-                "k": 5,
-                "fetch_k": 10,  # Fetch more candidates before filtering
+                "k": args.max_refs,  # Use the max_ref argument here
+                "fetch_k": max(args.max_refs * 2, args.max_refs * 2),  # Fetch more candidates before filtering
                 "include_metadata": True  # Make sure to include all metadata
             }
         )
@@ -355,6 +365,8 @@ def main():
         )
 
         query = args.query
+        if args.answer_length:
+            query += f" Provide an answer using approximately {args.answer_length} words."
         print(f"\nQuerying: {query}")
         response = rag_chain.invoke(query)
         print("\nRAG Response:")
