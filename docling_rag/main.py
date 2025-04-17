@@ -9,6 +9,7 @@ import os
 from dotenv import dotenv_values
 import atexit
 import json
+import re
 
 config = dotenv_values(".env")
 print(f"config: {config}")
@@ -17,7 +18,6 @@ from typing import List
 from pathlib import Path
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents import Document as LCDocument
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from docling.document_converter import DocumentConverter
 from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
@@ -130,7 +130,7 @@ def display_source_documents(docs: List[LCDocument], show_full_content: bool = F
     
     for i, doc in enumerate(docs, 1):
         print(f"\nSource {i}:")
-        print(f"  Metadata: {json.dumps(doc.metadata, indent=2)}")
+        print(f"  Metadata: {json.dumps(doc.metadata, indent=4)}")
         
         if show_full_content:
             print("\n  Content:")
@@ -156,9 +156,21 @@ def main():
     global retrieved_docs
     retrieved_docs = []
     
-    print(f"Connecting to Milvus server at {MILVUS_HOST}:{MILVUS_PORT}")
-    
     embeddings = HuggingFaceEmbeddings(model_name=args.model)
+    
+    print(f"Connecting to Milvus server at {MILVUS_HOST}:{MILVUS_PORT}")
+    # Connect to existing Milvus collection
+    vectorstore = Milvus(
+        embedding_function=embeddings,
+        collection_name=args.collection,
+        connection_args={"host": MILVUS_HOST, "port": MILVUS_PORT},
+        auto_id=True,
+        index_params={"index_type": "AUTOINDEX"}
+    )
+    # Store vectorstore in global resources for cleanup
+    _resources_to_clean['vectorstore'] = vectorstore
+    print("Connected to existing vector store")
+    print(f"Vector store: {vectorstore}")
     
     try:
         # Determine if we're processing a new PDF or just querying existing data
@@ -183,7 +195,7 @@ def main():
             pipeline_options.do_picture_description = False
             #pipeline_options.picture_description_options = granite_picture_description
             pipeline_options.images_scale = 2
-            #pipeline_options.accelerator_options = accelerator_options
+            pipeline_options.accelerator_options = accelerator_options
 
             doc_converter = DocumentConverter(
                 format_options={
@@ -206,55 +218,55 @@ def main():
                 with page_image_filename.open("wb") as fp:
                     page.image.pil_image.save(fp, format="PNG")
 
-            # Save images of figures
-            picture_counter = 0
-            for element, _ in conv_res.document.iterate_items():
-                if isinstance(element, PictureItem):
-                    picture_counter += 1
-                    element_image_filename = (
-                        output_dir / f"{doc_filename}-picture-{picture_counter}.png"
-                    )
-                    with element_image_filename.open("wb") as fp:
-                        element.get_image(conv_res.document).save(fp, "PNG")
-
             # Save markdown with externally referenced pictures
-            md_filename = output_dir / f"{doc_filename}-with-image-refs.md"
+            md_filename = output_dir / f"{doc_filename}-with-complete-metadata.md"
             conv_res.document.save_as_markdown(md_filename, image_mode=ImageRefMode.REFERENCED)
-            markdown_text = conv_res.document.export_to_markdown()
+            with open(md_filename, "r") as readfile:
+                markdown_text = readfile.read()
+                readfile.close()
+            # Delete the markdown file with complete metadata as it's no longer needed
+            if md_filename.exists():
+                md_filename.unlink()
 
-            json_filename = output_dir / f"{doc_filename}-with-image-refs.json"
-            conv_res.document.save_as_json(json_filename, image_mode=ImageRefMode.REFERENCED)
+            # Convert markdown picture absolute references to relative references
+            def convert_to_relative_path(match):
+                absolute_path = match.group(1)
+                relative_path = os.path.relpath(absolute_path, output_dir)
+                return f"![Image]({relative_path})"
+            markdown_text = re.sub(r'!\[Image\]\((.*?)\)', convert_to_relative_path, markdown_text)
+
+            json_complete_metada_filename = output_dir / f"{doc_filename}-with_complete-metadata.json"
+            conv_res.document.save_as_json(json_complete_metada_filename, image_mode=ImageRefMode.REFERENCED)
 
             # Load the JSON content we just saved
-            jason_file = open(json_filename)
+            jason_complete_metadata_file = open(json_complete_metada_filename)
             # returns JSON object as a dictionary
-            json_content = json.load(jason_file)
-            json_metadata = []
+            json_content = json.load(jason_complete_metadata_file)
+            json_text_imageref_metadata = []
             try:
                 json_header_content = json_content["texts"]
                 json_header_content = [entry for entry in json_header_content if is_header(entry)]
                 json_picture_content = json_content["pictures"]
-                json_metadata.append({"url": args.url, "headers": json_header_content, "pictures": json_picture_content})
+                json_text_imageref_metadata.append({"url": args.url, "headers": json_header_content, "pictures": json_picture_content})
                 #json_content.append({"label": "url", "text": args.url})
             except KeyError:
                 print("Error: 'texts' or 'pictures' entry does not exist in the JSON content.")
-            jason_file.close();
+            jason_complete_metadata_file.close();
 
             # Export markdown to local folder
             output_folder = "output"
             os.makedirs(output_folder, exist_ok=True)
-            output_file_path = os.path.join(output_folder, "document.json")
-            with open(output_file_path, "w") as outfile:
-                outfile.write(json.dumps(json_metadata, indent=4))
-                outfile.close();
-            output_markdown_file_path = os.path.join(output_folder, "document.txt")
-            with open(output_markdown_file_path, "w") as outfile:
+            json_with_text_imagerefs_filename = output_dir / f"{doc_filename}-with-text_imagerefs.json"
+            with open(json_with_text_imagerefs_filename, "w") as outfile:
+                outfile.write(json.dumps(json_text_imageref_metadata, indent=4))
+                outfile.close()
+            output_markdown_file = output_dir / f"{doc_filename}-with-text_imagerefs.md"
+            with open(output_markdown_file, "w") as outfile:
                 outfile.write(markdown_text)
-                outfile.close();
+                outfile.close()
 
             # Split the markdown text into chunks
             # See https://python.langchain.com/docs/how_to/markdown_header_metadata_splitter/
-            #loader = DoclingPDFLoader()
             splitter = MarkdownHeaderTextSplitter(
                 headers_to_split_on=[
                     ("#", "Header_1"),
@@ -264,39 +276,69 @@ def main():
             )
             splits = splitter.split_text(markdown_text)
             print(f"Generated {len(splits)} document chunks")
-  
-            vectorstore = Milvus.from_documents(
-                documents=splits,
-                embedding=embeddings,
-                enable_dynamic_field=True,
-                connection_args={"host": MILVUS_HOST, "port": MILVUS_PORT},
-                collection_name=args.collection,
-                drop_old=True
-            )
-            # Store vectorstore in global resources for cleanup
-            _resources_to_clean['vectorstore'] = vectorstore
-            print("Added new documents to vector store")
-            print(f"Vector store: {vectorstore}")
 
-        else:
-            print("No URL provided. Connecting to existing vector store...")
-            # Connect to existing Milvus collection
-            vectorstore = Milvus(
-                embedding_function=embeddings,
-                collection_name=args.collection,
-                connection_args={"host": MILVUS_HOST, "port": MILVUS_PORT}
-            )
-            # Store vectorstore in global resources for cleanup
-            _resources_to_clean['vectorstore'] = vectorstore
-            print("Connected to existing vector store")
-            print(f"Vector store: {vectorstore}")
-        
+            # Now enhance the metadata of the splits before adding to vector store
+            enhanced_splits = []
+            for split in splits:
+                # Get existing metadata (which already contains headers from MarkdownHeaderTextSplitter)
+                metadata = split.metadata.copy()
+
+                # Add page number if available in the original document metadata
+                if hasattr(split, 'metadata'):
+                    # Try to determine page from content or header references
+                    # Default to page 1 if can't determine
+                    page = 1
+                    bbox = None
+                    page_match = False
+                    
+                    # If your headers contain page references (like "Chapter 1, Page 5"),
+                    # you could extract them here with regex
+                    for header_key in ["Header_1", "Header_2", "Header_3"]:
+                        if header_key in metadata and metadata[header_key]:
+                            header_title = metadata[header_key]
+                            # Replace "&amp;" with "&" in header title if it exists
+                            if "&amp;" in header_title:
+                                header_title = header_title.replace("&amp;", "&")
+
+                            # Example: Look for page numbers in headers
+                            for header_entry in json_text_imageref_metadata[0]['headers']:
+                                if header_entry['text'] == header_title:
+                                    page = header_entry['prov'][0]['page_no']
+                                    bbox = header_entry['prov'][0]['bbox']
+                                    page_match = True
+                                    break
+                            if not page_match:
+                                break
+
+                    metadata["file"] = doc_filename
+                    if page_match:
+                        metadata["page"] = page
+                        metadata["bbox"] = bbox
+                    else:
+                        metadata["page"] = 1
+                        metadata["bbox"] = { "l": 0, "t": 0, "r": 0, "b": 0, "coord_origin": "BOTTOMLEFT" }
+
+                # Create a new document with enhanced metadata
+                enhanced_splits.append(
+                    LCDocument(
+                        page_content=split.page_content,
+                        metadata=metadata
+                    )
+                )
+                
+            vectorstore.add_documents(enhanced_splits)
         
         OLLAMA_URI = "http://localhost:11434"
         ollama_llm = OllamaLLM(model="granite3.2:8b", base_url=OLLAMA_URI)
 
         # Set up the retriever with a higher k value to see more documents
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+        retriever = vectorstore.as_retriever(
+            search_kwargs={
+                "k": 5,
+                "fetch_k": 10,  # Fetch more candidates before filtering
+                "include_metadata": True  # Make sure to include all metadata
+            }
+        )
         
         prompt = PromptTemplate.from_template(
             "Context information is below.\n---------------------\n{context}\n---------------------\nGiven the context information and not prior knowledge, answer the query.\nQuery: {question}\nAnswer:\n"
