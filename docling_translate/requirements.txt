@@ -1,0 +1,7 @@
+docling 
+docling-core
+python-dotenv
+langchain
+langchain-core
+langchain_ollama
+markdown-pdf

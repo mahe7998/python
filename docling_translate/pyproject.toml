@@ -1,0 +1,15 @@
+[project]
+name = "docling-translate"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "docling>=2.30.0",
+    "docling-core>=2.27.0",
+    "langchain>=0.3.23",
+    "langchain-core>=0.3.55",
+    "langchain-ollama>=0.3.2",
+    "markdown-pdf>=1.7",
+    "python-dotenv>=1.1.0",
+]
