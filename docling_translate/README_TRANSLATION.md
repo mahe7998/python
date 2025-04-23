@@ -30,12 +30,12 @@ python main.py --markdown-file "path/to/your/file.md" --language "French" --olla
 Alternatively, use the provided helper script:
 
 ```bash
-python translate_markdown.py --file "path/to/your/file.md" --language "French" --model "granite3.2:8b"
+python translate_markdown.py "path/to/your/file.md" --language "French" --model "granite3.2:8b"
 ```
 
 ### Arguments
 
-- `--file` or `--markdown-file`: Path to the markdown file to translate (required)
+- `file`: Path to the markdown file to translate (required, positional argument)
 - `--language`: Target language for translation (default: "French")
 - `--model` or `--ollama-model`: Ollama model to use (default: "granite3.2:8b")
 
@@ -44,7 +44,7 @@ python translate_markdown.py --file "path/to/your/file.md" --language "French" -
 To translate the example lab report to French:
 
 ```bash
-python translate_markdown.py --file "output/Lucas TB report-with-text_imagerefs.md" --language "French"
+python translate_markdown.py "output/Lucas TB report-with-text_imagerefs.md" --language "French"
 ```
 
 The translated file will be saved as `output/Lucas TB report-with-text_imagerefs-french.md`.
