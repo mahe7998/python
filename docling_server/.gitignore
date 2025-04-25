@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Project specific
+output/
+backup/
+server.log
+test_result.json
+.vscode/
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+*.ipynb
+
+# Misc
+.idea/

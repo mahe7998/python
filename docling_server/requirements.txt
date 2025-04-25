@@ -1,3 +1,12 @@
-docling 
-docling-core
-markdown-pdf
+docling>=2.30.0
+docling-core>=2.28.0
+langchain>=0.3.24
+langchain-core>=0.3.55
+markdown-pdf>=1.7
+python-dotenv>=1.1.0
+fastapi>=0.104.0
+uvicorn>=0.23.2
+requests>=2.31.0
+python-multipart>=0.0.6
+torch>=2.0.0
+psutil>=5.9.5

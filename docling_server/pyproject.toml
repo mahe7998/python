@@ -1,7 +1,7 @@
 [project]
 name = "docling-server"
 version = "0.1.0"
-description = "Add your description here"
+description = "Docker-based server for processing PDF documents with Docling"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -12,4 +12,25 @@ dependencies = [
     "langchain-ollama>=0.3.2",
     "markdown-pdf>=1.7",
     "python-dotenv>=1.1.0",
+    "fastapi>=0.104.0",
+    "uvicorn>=0.23.2",
+    "paramiko>=3.3.1",
+    "requests>=2.31.0",
+    "python-multipart>=0.0.6",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "black>=23.3.0",
+    "isort>=5.12.0",
+    "mypy>=1.3.0",
+    "pytest>=7.3.1",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
