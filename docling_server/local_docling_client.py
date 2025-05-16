@@ -12,8 +12,8 @@ from typing import Dict, List, Any, Optional, Union
 class LocalDoclingClient:
     """Client library for the local Docling PDF processing service."""
     
-    def __init__(self, api_host="localhost", api_port=8008, 
-                 timeout=60, polling_interval=5, max_wait_time=600):
+    def __init__(self, api_host, api_port, 
+                 timeout=600, polling_interval=5, max_wait_time=600):
         """
         Initialize the Docling client for local operation.
         
@@ -181,7 +181,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Docling PDF processing client")
     parser.add_argument("--host", default="localhost", help="API server hostname")
     parser.add_argument("--port", type=int, default=8008, help="API server port")
-    parser.add_argument("--timeout", type=int, default=60, help="Request timeout in seconds")
+    parser.add_argument("--timeout", type=int, default=600, help="Request timeout in seconds")
     parser.add_argument("--polling-interval", type=int, default=5, help="Polling interval in seconds")
     parser.add_argument("--max-wait-time", type=int, default=600, help="Maximum wait time in seconds")
     
