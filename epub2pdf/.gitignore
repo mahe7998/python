@@ -1,0 +1,8 @@
+*.pdf
+*.epub
+build/
+*.egg-info/
+__pycache__/
+*.py[cod]
+*$py.class
+.DS_Store
