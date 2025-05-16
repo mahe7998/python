@@ -3,15 +3,18 @@
     "configurations": [
         {
             "name": "Python: docling RAG",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
             "console": "integratedTerminal",
             "args": [
-                "--url", "content/DocLayNet.pdf",
-                "--collection", "ai_research_papers",
+                "--url", "content/Baltimore Blues_Chinese.pdf",
+                "--collection", "baltimore_blues",
                 "--model", "ibm-granite/granite-embedding-30m-english",
-                "--query", "Can you provide the different labels recognized and the percentage of the total?"
+                "--ollama-model", "granite3.2:8b",
+                "--query", "Provide of Lucas TB report.",
+                "--answer-length", "100",
+                "--max-refs", "5"
             ],
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
@@ -20,12 +23,12 @@
         },
         {
             "name": "Python: pymil",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/pymil.py",
             "console": "integratedTerminal",
             "args": [
-                "--list",
+                "--delete", "lucas_tb_report",
             ],
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"

@@ -62,7 +62,7 @@ def capture_and_format_docs(docs: Iterable[LCDocument]) -> Dict[str, Any]:
 def is_header(entry):
     return entry.get("label") == "section_header"
 
-def process_pdf_document(pdf_path: str) -> List[Dict[str, Any]]:
+def process_pdf_document(pdf_path: str, chinese_simplified: bool = True) -> List[Dict[str, Any]]:
     """
     Process a PDF document and extract structured data.
     
@@ -121,6 +121,14 @@ def process_pdf_document(pdf_path: str) -> List[Dict[str, Any]]:
 
         # Configure pipeline options for optimal performance on local machine
         pipeline_options = PdfPipelineOptions()
+        ocr_options = None
+        # The OCR needs to select Traditional Chinese or Simplified Chinese
+        if chinese_simplified:
+            ocr_options = EasyOcrOptions(lang=['ch_sim','en'])  # Chinese is only compatible with English
+        else:
+            ocr_options = EasyOcrOptions(lang=['ch_tra','en'])
+        pipeline_options.ocr_options = ocr_options
+        pipeline_options.ocr_options.use_gpu = True
         pipeline_options.generate_page_images = False
         pipeline_options.generate_picture_images = True
         pipeline_options.do_picture_classification = False

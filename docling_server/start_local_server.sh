@@ -10,7 +10,7 @@ mkdir -p content
 mkdir -p output
 
 echo "Starting Docling local API server with Apple MPS acceleration..."
-echo "API will be available at http://localhost:8008"
+echo "API will be available at http://0.0.0.0:8008"
 echo "Press Ctrl+C to stop the server"
 echo ""
 echo "You can use the client library to interact with the API:"

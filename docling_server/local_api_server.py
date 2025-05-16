@@ -102,6 +102,7 @@ processing_tasks = {}
 
 class DocumentRequest(BaseModel):
     filename: str
+    chinese_simplified: bool = True  # Default to simplified Chinese
 
 class DocumentResponse(BaseModel):
     data: List[Dict[str, Any]]
@@ -111,8 +112,16 @@ class TaskStatusResponse(BaseModel):
     task_id: str
     message: str
 
-def process_document_task(task_id: str, file_path: str):
-    """Background task to process a document and save results"""
+def process_document_task(task_id: str, file_path: str, chinese_simplified_ocr: bool):
+    """
+    Background task to process a document and save results
+    
+    Parameters:
+    - task_id: Unique identifier for the processing task
+    - file_path: Path to the PDF file to process
+    - chinese_simplified_ocr: Boolean flag to specify whether to use simplified Chinese (True) or 
+                             traditional Chinese (False) for OCR processing
+    """
     try:
         print(f"Starting background task for document: {file_path} (Task ID: {task_id})")
         
@@ -131,21 +140,27 @@ def process_document_task(task_id: str, file_path: str):
         
         try:
             start_time = time.time()
-            result = process_pdf_document(file_path)
+            pdf_json_file_result = process_pdf_document(file_path, chinese_simplified=chinese_simplified_ocr)
             end_time = time.time()
             print(f"Document processing completed in {end_time - start_time:.2f} seconds (Task ID: {task_id})")
+            
+            # Ensure result is a list of dictionaries as expected by DocumentResponse
+            if not isinstance(pdf_json_file_result, list):
+                print(f"WARNING: Result from process_pdf_document is not a list. Type: {type(pdf_json_file_result)}")
+                # If result is not a list, wrap it in a list to match expected format
+                pdf_json_file_result = [pdf_json_file_result] if pdf_json_file_result is not None else []
             
             # Save result to JSON file
             result_file = RESULTS_DIR / f"{task_id}.json"
             with open(result_file, "w") as f:
-                json.dump(result, f)
+                json.dump(pdf_json_file_result, f)
             
             # Update status
             with open(status_file, "w") as f:
                 f.write("completed")
                 
             # Update in-memory status
-            processing_tasks[task_id] = {"status": "completed", "result": result, "error": None}
+            processing_tasks[task_id] = {"status": "completed", "result": pdf_json_file_result, "error": None}
             print(f"Updated task status to 'completed' (Task ID: {task_id})")
             
         except Exception as e:
@@ -198,6 +213,11 @@ async def submit_document(request: DocumentRequest, background_tasks: Background
     """
     Submit a PDF document for processing in the background.
     Returns a task ID that can be used to check the status.
+    
+    Parameters:
+    - filename: Name of the PDF file to process (must exist in the content directory)
+    - chinese_simplified: Boolean flag to specify whether to use simplified Chinese (True) or 
+                         traditional Chinese (False) for OCR processing. Defaults to True.
     """
     # Check if the file exists in the upload directory
     file_path = UPLOAD_DIR / request.filename
@@ -206,7 +226,7 @@ async def submit_document(request: DocumentRequest, background_tasks: Background
         raise HTTPException(status_code=404, detail=f"File {request.filename} not found in content directory")
     
     # Check file size
-    max_size_mb = 50  # 50 MB maximum file size
+    max_size_mb = 1000 # 1000 MB maximum file size
     file_size_mb = file_path.stat().st_size / (1024 * 1024)
     if file_size_mb > max_size_mb:
         raise HTTPException(
@@ -226,7 +246,7 @@ async def submit_document(request: DocumentRequest, background_tasks: Background
         f.write("submitted")
     
     # Add task to background tasks
-    background_tasks.add_task(process_document_task, task_id, str(file_path))
+    background_tasks.add_task(process_document_task, task_id, str(file_path), request.chinese_simplified)
     
     print(f"Submitted document for processing: {file_path} (Task ID: {task_id})")
     
@@ -313,8 +333,14 @@ async def get_result(task_id: str):
         try:
             with open(result_file, "r") as f:
                 data = json.load(f)
+            # Ensure data is a list of dictionaries as expected by DocumentResponse
+            if not isinstance(data, list):
+                print(f"WARNING: Data from {task_id}.json is not a list. Type: {type(data)}")
+                # If data is not a list, wrap it in a list to match expected format
+                data = [data] if data is not None else []
             return DocumentResponse(data=data)
         except Exception as e:
+            print(f"ERROR reading result file: {str(e)}")
             raise HTTPException(
                 status_code=500,
                 detail=f"Error reading result file: {str(e)}"
@@ -350,7 +376,13 @@ async def get_result(task_id: str):
         
         # In case the result is in memory
         if task["result"]:
-            return DocumentResponse(data=task["result"])
+            result_data = task["result"]
+            # Ensure in-memory data is a list of dictionaries as expected by DocumentResponse
+            if not isinstance(result_data, list):
+                print(f"WARNING: In-memory data for {task_id} is not a list. Type: {type(result_data)}")
+                # If data is not a list, wrap it in a list to match expected format
+                result_data = [result_data] if result_data is not None else []
+            return DocumentResponse(data=result_data)
         else:
             raise HTTPException(
                 status_code=500,
@@ -364,6 +396,11 @@ async def get_result(task_id: str):
 async def process_document(request: DocumentRequest):
     """
     Process a PDF document synchronously (legacy endpoint, may timeout for large documents)
+    
+    Parameters:
+    - filename: Name of the PDF file to process (must exist in the content directory)
+    - chinese_simplified: Boolean flag to specify whether to use simplified Chinese (True) or 
+                         traditional Chinese (False) for OCR processing. Defaults to True.
     """
     # Check if the file exists in the upload directory
     file_path = UPLOAD_DIR / request.filename
@@ -373,7 +410,14 @@ async def process_document(request: DocumentRequest):
     
     try:
         # Process the PDF document
-        result = process_pdf_document(str(file_path))
+        result = process_pdf_document(str(file_path), chinese_simplified=request.chinese_simplified)
+        
+        # Ensure result is a list of dictionaries as expected by DocumentResponse
+        if not isinstance(result, list):
+            print(f"WARNING: Result from process_pdf_document is not a list. Type: {type(result)}")
+            # If result is not a list, wrap it in a list to match expected format
+            result = [result] if result is not None else []
+            
         return DocumentResponse(data=result)
     except Exception as e:
         import traceback

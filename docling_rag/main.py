@@ -1,4 +1,4 @@
-# Models tested:
+# Embedded Models tested:
 # - BAAI/bge-small-en-v1.5
 # - ibm-granite/granite-embedding-30m-english
 # Ollama model: 
@@ -8,6 +8,7 @@
 import os
 from dotenv import dotenv_values
 import atexit
+import threading
 import json
 import re
 
@@ -67,6 +68,8 @@ def parse_args():
     parser.add_argument("--max-refs", type=int, default=5, 
                        help="Maximum number of reference documents to retrieve (default: 5)")
     parser.add_argument('--answer-length', type=int, help='Desired answer length in number of words')
+    parser.add_argument('--start-page', type=int, default=1, help='First page to process (default: 1)')
+    parser.add_argument('--end-page', type=int, help='Last page to process (default: process all pages)')
     return parser.parse_args()
 
 args = parse_args()
@@ -91,17 +94,40 @@ def cleanup_resources():
     # Clean up any other resources
     print("Cleanup complete")
 
+# Function to cleanup TQDM resources
+def cleanup_tqdm():
+    # Close any remaining tqdm instances
+    try:
+        tqdm._instances.clear()
+    except:
+        pass
+
 # Register the cleanup function to run on exit
 atexit.register(cleanup_resources)
+atexit.register(cleanup_tqdm)# Also handle termination signals
 
-# Also handle termination signals
 def signal_handler(sig, frame):
     print(f"Received signal {sig}, cleaning up...")
     cleanup_resources()
+    cleanup_tqdm()
     sys.exit(0)
 
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
+
+# Custom exception handler for threading errors during shutdown
+original_threading_excepthook = threading.excepthook
+
+def custom_threading_excepthook(args):
+    # If it's the shutdown error from tqdm, ignore it
+    if isinstance(args.exc_value, RuntimeError) and "can't create new thread at interpreter shutdown" in str(args.exc_value):
+        # Just suppress this specific error
+        return
+    # Otherwise, use the original handler
+    original_threading_excepthook(args)
+
+# Set our custom exception handler
+threading.excepthook = custom_threading_excepthook
 
 class DoclingPDFLoader(BaseLoader):
 
@@ -199,7 +225,10 @@ def main():
             # scale=1 correspond of a standard 72 DPI image
             # The PdfPipelineOptions.generate_* are the selectors for the document elements which will be enriched
             # with the image field
+            ocr_options = EasyOcrOptions(lang=['ch_tra', 'en'])  # Traditional Chinese with English
             pipeline_options = PdfPipelineOptions()
+            pipeline_options.ocr_options = ocr_options
+            pipeline_options.ocr_options.use_gpu = True
             pipeline_options.generate_page_images = True
             pipeline_options.generate_picture_images = True
             pipeline_options.do_picture_classification = False
@@ -207,6 +236,11 @@ def main():
             #pipeline_options.picture_description_options = granite_picture_description
             pipeline_options.images_scale = 2
             pipeline_options.accelerator_options = accelerator_options
+            
+            # Set page range if specified
+            if args.start_page > 1 or args.end_page is not None:
+                print(f"Processing pages from {args.start_page} to {args.end_page if args.end_page else 'end'}")
+                pipeline_options.page_range = (args.start_page, args.end_page) if args.end_page else (args.start_page, None)
 
             doc_converter = DocumentConverter(
                 format_options={
@@ -330,6 +364,15 @@ def main():
                         metadata["bbox"] = { "l": 0, "t": 0, "r": 0, "b": 0, "coord_origin": "BOTTOMLEFT" }
 
                 # Create a new document with enhanced metadata
+                # Check if the content is only an image reference
+                content = split.page_content.strip()
+                # Skip documents that only contain image references (like "![Image](path/to/image.png)")
+                if re.match(r'^!\[.*?\]\(.*?\)$', content):
+                    print(f"Skipping image-only content: {content[:50]}...")
+                    continue
+                if re.match(r'^\s*!\[.*?\]\(.*?\)\s*$', content):
+                    print(f"Skipping image-only content with whitespace: {content[:50]}...")
+                    continue
                 enhanced_splits.append(
                     LCDocument(
                         page_content=split.page_content,
@@ -385,3 +428,4 @@ if __name__ == "__main__":
     finally:
         # Ensure resources are cleaned up even if main() raises an exception
         cleanup_resources()
+        cleanup_tqdm()

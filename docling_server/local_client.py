@@ -60,13 +60,14 @@ class LocalDoclingClient:
         
         return response.json()
     
-    def process_document_async(self, filename: str, wait_for_completion=True) -> Dict[str, Any]:
+    def process_document_async(self, filename: str, wait_for_completion=True, chinese_simplified=True) -> Dict[str, Any]:
         """
         Process a PDF document asynchronously through the Docling service.
         
         Args:
             filename: Name of the PDF file to process (must already be in the content directory)
             wait_for_completion: Whether to wait for processing to complete
+            chinese_simplified: Whether to use simplified Chinese (True) or traditional Chinese (False) for OCR
             
         Returns:
             Task status object (if wait_for_completion=False) or processing results (if wait_for_completion=True)
@@ -74,7 +75,7 @@ class LocalDoclingClient:
         # Submit the document for processing
         response = requests.post(
             f"{self.api_url}/process/submit",
-            json={"filename": filename},
+            json={"filename": filename, "chinese_simplified": chinese_simplified},
             timeout=self.timeout
         )
         response.raise_for_status()
@@ -113,25 +114,26 @@ class LocalDoclingClient:
             # Wait before checking again
             time.sleep(self.polling_interval)
     
-    def process_document(self, filename: str) -> List[Dict[str, Any]]:
+    def process_document(self, filename: str, chinese_simplified=True) -> List[Dict[str, Any]]:
         """
         Process a PDF document synchronously (simpler but may timeout for large documents).
         
         Args:
             filename: Name of the PDF file (must already be in the content directory)
+            chinese_simplified: Whether to use simplified Chinese (True) or traditional Chinese (False) for OCR
             
         Returns:
             List of dictionaries containing processing results
         """
         # Try the async endpoint with wait_for_completion=True
         try:
-            return self.process_document_async(filename, wait_for_completion=True)
+            return self.process_document_async(filename, wait_for_completion=True, chinese_simplified=chinese_simplified)
         except Exception as e:
             # If that fails for any reason, try the synchronous endpoint
             print(f"Async processing failed, falling back to sync endpoint: {str(e)}")
             response = requests.post(
                 f"{self.api_url}/process",
-                json={"filename": filename},
+                json={"filename": filename, "chinese_simplified": chinese_simplified},
                 timeout=self.max_wait_time  # Use longer timeout for sync processing
             )
             response.raise_for_status()
@@ -197,6 +199,8 @@ if __name__ == "__main__":
     process_parser.add_argument("file", help="Name of the PDF file to process")
     process_parser.add_argument("--async", dest="async_mode", action="store_true", help="Process asynchronously")
     process_parser.add_argument("--output", help="Path to save the results to (JSON)")
+    process_parser.add_argument("--traditional-chinese", dest="traditional_chinese", action="store_true", 
+                               help="Use traditional Chinese instead of simplified Chinese for OCR")
     
     # Get task status command
     status_parser = subparsers.add_parser("status", help="Check the status of a processing task")
@@ -233,15 +237,20 @@ if __name__ == "__main__":
             print(f"Upload complete: {result['message']}")
         
         elif args.command == "process":
+            # Determine Chinese OCR mode
+            chinese_simplified = not args.traditional_chinese
+            
             if args.async_mode:
-                result = client.process_document_async(args.file, wait_for_completion=False)
+                result = client.process_document_async(args.file, wait_for_completion=False, 
+                                                      chinese_simplified=chinese_simplified)
                 print(f"Processing task submitted: {result['task_id']}")
                 print(f"Status: {result['status']}")
                 print(f"Check status with: python local_client.py status {result['task_id']}")
                 print(f"Get results with: python local_client.py result {result['task_id']}")
             else:
                 print(f"Processing document: {args.file}")
-                result = client.process_document(args.file)
+                print(f"Using {'simplified' if chinese_simplified else 'traditional'} Chinese for OCR")
+                result = client.process_document(args.file, chinese_simplified=chinese_simplified)
                 if args.output:
                     with open(args.output, "w") as f:
                         json.dump(result, f, indent=2)
