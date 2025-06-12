@@ -5,9 +5,6 @@
 
 import os
 from dotenv import dotenv_values
-import atexit
-import threading
-import json
 import re
 
 config = dotenv_values(".env")
@@ -51,8 +48,7 @@ def parse_args():
     global default_ollama_uri
     global default_ollama_model
     parser = argparse.ArgumentParser(description="Translate a PDF URL or markdown file.")
-    parser.add_argument("--url", type=str, help="The URL of the PDF to process (optional)")
-    parser.add_argument("--markdown-file", type=str, help="Path to the markdown file to translate (optional)")
+    parser.add_argument("file", type=str, help="Path to the markdown file to translate")
     parser.add_argument("--language", type=str, default="French", help="Target language for translation")
     parser.add_argument('--ollama-uri', type=str, default=default_ollama_uri, help='URI for the Ollama service')
     parser.add_argument('--ollama-model', type=str, default=default_ollama_model, help='Ollama Model to use with the translation')
@@ -100,8 +96,8 @@ def main():
     
     try:
         # Determine if we're processing a new PDF or just querying existing data
-        if args.url:
-            print(f"Processing PDF from URL: {args.url}")
+        if args.file:
+            print(f"Processing PDF from URL: {args.file}")
 
             # Set the number of threads for parallel processing
             os.environ["OMP_NUM_THREADS"] = "8"  # You can adjust the number of threads as needed
@@ -129,7 +125,7 @@ def main():
                 }
             )
 
-            conv_res = doc_converter.convert(args.url)
+            conv_res = doc_converter.convert(args.file)
 
             output_dir = Path("output")
             current_folder = Path.cwd()
@@ -172,9 +168,25 @@ def main():
         if args.markdown_file:
             print(f"Translating markdown file: {args.markdown_file}")
             
-            # Read the markdown file
-            with open(args.markdown_file, "r", encoding="utf-8") as file:
-                markdown_text = file.read()
+            # Read the markdown file with error handling for different encodings
+            markdown_text = ""
+            encodings_to_try = ["utf-8", "latin-1", "windows-1252", "iso-8859-1"]
+            
+            for encoding in encodings_to_try:
+                try:
+                    with open(args.markdown_file, "r", encoding=encoding) as file:
+                        markdown_text = file.read()
+                    print(f"Successfully read file using {encoding} encoding")
+                    break
+                except UnicodeDecodeError:
+                    print(f"Failed to read file with {encoding} encoding, trying next...")
+                    if encoding == encodings_to_try[-1]:
+                        # If we've tried all encodings and none worked, raise an error
+                        raise ValueError(f"Could not read file {args.markdown_file} with any of the attempted encodings: {encodings_to_try}")
+            
+            if not markdown_text:
+                print(f"Error: Could not read file {args.markdown_file}")
+                return
             
             # Create a translation prompt
             prompt_template = ChatPromptTemplate.from_messages(

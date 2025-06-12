@@ -11,7 +11,7 @@
                 "docling_docs", "--delete", "ai_research_papers"
             ],
             "env": {
-                "PYTHONPATH": "${workspaceFolder}"ß
+                "PYTHONPATH": "${workspaceFolder}"
             },
             "justMyCode": true
         }

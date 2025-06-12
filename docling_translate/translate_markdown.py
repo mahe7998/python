@@ -39,7 +39,7 @@ def main():
     # Build the command
     cmd = [
         "python", "main.py",
-        "--markdown-file", str(file_path),
+        args.file,
         "--language", args.language,
         "--ollama-model", args.model
     ]

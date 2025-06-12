@@ -5,11 +5,11 @@
             "name": "Python: docling translate",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/main.py",
+            "program": "${workspaceFolder}/translate_markdown.py",
             "console": "integratedTerminal",
             "args": [
-                "--url", "content/colpali.pdf",
-                "--ollama-model", "granite3.2:8b",
+                "content/colpali.pdf",
+                "--model", "granite3.2:8b",
             ],
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
