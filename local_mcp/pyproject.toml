@@ -1,0 +1,15 @@
+[project]
+name = "local-mcp"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp>=2.10.6",
+    "mcp>=1.12.0",
+    "ollama>=0.5.1",
+    "praisonaiagents[llm]>=0.0.144",
+    "pydantic>=2.11.7",
+    "yfinance>=0.2.65",
+    "litellm>=1.0.0",
+]
