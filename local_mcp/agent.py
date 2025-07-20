@@ -3,8 +3,8 @@ import asyncio
 from fastmcp import Client
 import ollama
 
-async def get_stock_price_with_llm(symbol: str = "AAPL"):
-    """Get stock price using MCP server and Ollama LLM"""
+async def get_realtime_data(user_query: str):
+    """Get real-time data using MCP server and Ollama LLM for any request"""
     
     # Connect to the MCP server
     client = Client("stock_server.py")
@@ -27,12 +27,12 @@ async def get_stock_price_with_llm(symbol: str = "AAPL"):
             }
             ollama_tools.append(ollama_tool)
         
-        # Get response from LLM with tools
+        # Get response from LLM with tools - let Ollama decide if tools are needed
         initial_response = ollama.chat(
             model="llama3.3:70b",
             messages=[{
                 "role": "user", 
-                "content": f"Get the current stock price for {symbol}. You must use the get_stock_price tool to get real-time data. Do not provide outdated information from your training data."
+                "content": f"{user_query}. If this requires real-time data that you have tools for, use the appropriate tool instead of relying on your training data."
             }],
             tools=ollama_tools,
         )
@@ -56,7 +56,7 @@ async def get_stock_price_with_llm(symbol: str = "AAPL"):
                     final_response = ollama.chat(
                         model="llama3.3:70b",
                         messages=[
-                            {"role": "user", "content": f"Get the current stock price for {symbol}. You must use the get_stock_price tool."},
+                            {"role": "user", "content": f"{user_query}. If this requires real-time data that you have tools for, use the appropriate tool."},
                             initial_response.message,
                             {
                                 "role": "tool", 
@@ -76,8 +76,8 @@ async def get_stock_price_with_llm(symbol: str = "AAPL"):
             return f"Warning: LLM responded without using tools: {initial_response.message.content}"
 
 async def main():
-    print("Stock Price Assistant - Getting Apple stock price using MCP server...")
-    result = await get_stock_price_with_llm("AAPL")
+    print("Real-time Data Assistant - Processing query using MCP server...")
+    result = await get_realtime_data("Get the AAPL stock price")
     print(f"\n=== FINAL RESULT ===")
     print(result)
 
