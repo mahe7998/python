@@ -455,6 +455,42 @@ async def upload_file(file: UploadFile = File(...)):
         print(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Error uploading file: {str(e)}")
 
+@app.post("/v1alpha/convert/file")
+async def convert_file_openwebui(file: UploadFile = File(...)):
+    """
+    Open-WebUI compatible endpoint that uploads and processes a PDF file synchronously.
+    This endpoint matches the Open-WebUI expected API format.
+    """
+    try:
+        print(f"Open-WebUI file conversion request: {file.filename}")
+        
+        # Save the uploaded file
+        file_path = UPLOAD_DIR / file.filename
+        print(f"Saving file to: {file_path}")
+        
+        with open(file_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+        
+        print(f"File uploaded successfully: {file.filename}")
+        
+        # Process the PDF document immediately
+        result = process_pdf_document(str(file_path), chinese_simplified=True)
+        
+        # Ensure result is a list of dictionaries as expected
+        if not isinstance(result, list):
+            print(f"WARNING: Result from process_pdf_document is not a list. Type: {type(result)}")
+            result = [result] if result is not None else []
+        
+        print(f"Document processed successfully: {file.filename}")
+        return {"data": result}
+        
+    except Exception as e:
+        print(f"ERROR in Open-WebUI file conversion: {str(e)}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Error converting file: {str(e)}")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8008)

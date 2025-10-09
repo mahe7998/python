@@ -10,7 +10,7 @@ mkdir -p content
 mkdir -p output
 
 echo "Starting Docling local API server with Apple MPS acceleration..."
-echo "API will be available at http://0.0.0.0:8008"
+echo "API will be available at http://100.82.156.64:8008"
 echo "Press Ctrl+C to stop the server"
 echo ""
 echo "You can use the client library to interact with the API:"
@@ -46,9 +46,9 @@ if [ -d ".venv" ]; then
     
     # Start the server directly with the activated environment
     echo "Starting server with activated environment..."
-    uvicorn local_api_server:app --host 0.0.0.0 --port 8008 --reload
+    uvicorn local_api_server:app --host 100.82.156.64 --port 8008 --reload
 else
     echo "No virtual environment found at .venv, using system Python..."
     # Fall back to uv run if no virtual environment is available
-    uv run python -c "import uvicorn; uvicorn.run('local_api_server:app', host='0.0.0.0', port=8008, reload=True)"
+    uv run python -c "import uvicorn; uvicorn.run('local_api_server:app', host='100.82.156.64', port=8008, reload=True)"
 fi
