@@ -1,10 +1,8 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## Project Overview
 
 This is a Python project that integrates Ollama with web search capabilities using the `gpt-oss` library. The project enables AI models to perform web searches and browse web content through a custom browser interface.
+
+Most of teh code from https://ai.plainenglish.io/testing-ollama-web-search-and-a-thinking-model-8367a706642d
 
 ## Architecture
 
