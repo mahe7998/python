@@ -2,7 +2,10 @@
 
 This is a Python project that integrates Ollama with web search capabilities using the `gpt-oss` library. The project enables AI models to perform web searches and browse web content through a custom browser interface.
 
-Most of teh code from https://ai.plainenglish.io/testing-ollama-web-search-and-a-thinking-model-8367a706642d
+Most of the code from https://ai.plainenglish.io/testing-ollama-web-search-and-a-thinking-model-8367a706642d
+
+This code relies on Ollama free Web browsing feature and has max number of queries (per day?). You need to create an account on Ollama web site (https://ollama.com/) and create a key and add it to your environment
+   export OLLAMA_API_KEY="your_key"
 
 ## Architecture
 
