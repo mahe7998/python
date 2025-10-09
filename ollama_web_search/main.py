@@ -11,22 +11,16 @@
 # requires-python = ">=3.11",
 # requires-gpt-oss>=0.0.8",
 # requires-ollama>=0.6.0",
-# requires-python-dotenv>=1.1.1",
 # dependencies = [
 #     "ollama",
 #     "gpt-oss",
-#     "python-dotenv",
 # ]
 # ///
 import sys
 from typing import Any, Dict, List
-from dotenv import load_dotenv
 from web_search_gpt_oss_helper import Browser
 
 from ollama import Client
-
-# Load environment variables from .env file
-load_dotenv()
 
 
 def main() -> None:
