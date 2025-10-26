@@ -1,5 +1,16 @@
 # Change Log
 
+## Changes in version 0.0.28
+
+### Fixes:
+
+* [xxx](https://github.com/pymupdf/RAG/issues/xxx) - 
+
+### Other Changes:
+
+* xxx
+
+
 ## Changes in version 0.0.27
 
 ### Fixes:
