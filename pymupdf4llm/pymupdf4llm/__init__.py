@@ -14,7 +14,7 @@ __version__ = VERSION
 version = VERSION
 version_tuple = tuple(map(int, version.split(".")))
 
-if not callable(pymupdf._get_layout):
+if pymupdf._get_layout is None:
     from .helpers.pymupdf_rag import IdentifyHeaders, TocHeaders, to_markdown
 
     pymupdf._warn_layout_once()  # recommend pymupdf_layout

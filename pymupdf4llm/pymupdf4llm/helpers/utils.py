@@ -514,25 +514,34 @@ def extract_cells(textpage, cell, markdown=False):
     Returns:
         A string with the text extracted from the cell.
     """
+
+    def outside_cell(bbox, cell):
+        return (
+            0
+            or bbox[0] >= cell[2]
+            or bbox[2] <= cell[0]
+            or bbox[1] >= cell[3]
+            or bbox[3] <= cell[1]
+        )
+
     text = ""
     for block in textpage.extractRAWDICT()["blocks"]:
         if block["type"] != 0:
             continue
+        if outside_cell(block["bbox"], cell):
+            continue
         for line in block["lines"]:
-            new_line = True
+            if outside_cell(line["bbox"], cell):
+                continue
             if text:  # must be a new line in the cell
-                if text.endswith("$"):
-                    text += " "
-                elif text.endswith("$ "):
-                    pass
-                else:
-                    text += "<br>" if markdown else "\n"
+                text += "<br>" if markdown else "\n"
 
             # strikeout detection only works with horizontal text
             horizontal = line["dir"] == (0, 1) or line["dir"] == (1, 0)
 
             for span in line["spans"]:
-                sbbox = span["bbox"]
+                if outside_cell(span["bbox"], cell):
+                    continue
                 # only include chars with more than 50% bbox overlap
                 span_text = ""
                 for char in span["chars"]:
@@ -576,7 +585,7 @@ def extract_cells(textpage, cell, markdown=False):
                         text += " "
                     else:
                         text += prefix + span_text + suffix
-
+    text = text.replace("$<br>", "$ ").replace(" $ <br>", "$ ")
     return text.strip()
 
 
@@ -635,3 +644,19 @@ def table_to_markdown(textpage, table_item, markdown=True):
         line += "\n"
         output += line
     return output + "\n"
+
+
+def table_extract(textpage, table_item):
+    table = table_item.table
+    row_count = table["row_count"]
+    col_count = table["col_count"]
+    cell_boxes = table["cells"]
+    # make empty cell text list
+    cells = [[None for i in range(col_count)] for j in range(row_count)]
+
+    for i, row in enumerate(cell_boxes):
+        for j, cell in enumerate(row):
+            if cell is not None:
+                cells[i][j] = extract_cells(textpage, cell_boxes[i][j], markdown=False)
+
+    return cells
