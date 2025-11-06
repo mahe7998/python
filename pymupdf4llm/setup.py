@@ -14,7 +14,7 @@ classifiers = [
     "Topic :: Utilities",
 ]
 
-version = "0.1.7"
+version = "0.1.8"
 requires = ["pymupdf>=1.26.6", "tabulate"]
 
 text = requires[0].split("=")[1]

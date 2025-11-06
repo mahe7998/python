@@ -764,23 +764,31 @@ def parse_document(
                         if pymupdf.table._iou(tab.bbox, clip) > 0.6
                     ][0]
                     cells = [[c for c in row.cells] for row in table.rows]
-
+                    row_count = table.row_count
                     if table.header.external:  # if the header ioutside table
                         cells.insert(0, table.header.cells)  # insert a row
-                        table.row_count += 1  # increase row count
+                        row_count += 1  # increase row count
 
                     layoutbox.table = {
                         "bbox": list(table.bbox),
-                        "row_count": table.row_count,
+                        "row_count": row_count,
                         "col_count": table.col_count,
                         "cells": cells,
-                        "extract": table.extract(),
                     }
-                    layoutbox.table["markdown"] = utils.table_to_markdown(
-                        textpage, layoutbox, markdown=True
+
+                    layoutbox.table["extract"] = utils.table_extract(
+                        textpage,
+                        layoutbox,
                     )
+
+                    layoutbox.table["markdown"] = utils.table_to_markdown(
+                        textpage,
+                        layoutbox,
+                        markdown=True,
+                    )
+
                 except Exception as e:
-                    print(f"table detection error '{e}'")
+                    print(f"table detection error '{e}' on page {page.number+1}")
                     # table structure not detected: treat like an image
                     pix = page.get_pixmap(clip=clip, dpi=document.image_dpi)
                     layoutbox.image = pix.tobytes(document.image_format)
