@@ -221,11 +221,31 @@ def cluster_stripes(boxes, vertical_gap: float = 12):
     Returns:
         List of disjoint horizontal stripes. Each stripe is a list of boxes.
     """
+
+    def is_multi_column_layout(boxes):
+        sorted_boxes = sorted(boxes, key=lambda b: b[0])
+        columns = []
+        current_column = [sorted_boxes[0]]
+        for box in sorted_boxes[1:]:
+            prev_right = max([b[2] for b in current_column])
+            if box[0] - prev_right > 3:
+                columns.append(current_column)
+                current_column = [box]
+            else:
+                current_column.append(box)
+        columns.append(current_column)
+        return len(columns) > 1
+
     # Sort top to bottom
     sorted_boxes = sorted(boxes, key=lambda b: b[1])
     stripes = []
     if not sorted_boxes:
         return stripes
+
+    # Early exit for clean multi-column layouts
+    if is_multi_column_layout(sorted_boxes):
+        return [boxes]
+
     current_stripe = [sorted_boxes[0]]
 
     for box in sorted_boxes[1:]:
@@ -257,7 +277,7 @@ def cluster_columns_in_stripe(stripe: list):
 
     for box in sorted_boxes[1:]:
         prev_right = max([b[2] for b in current_column])
-        if box[0] - prev_right >= -1:
+        if box[0] - prev_right > 1:
             columns.append(sorted(current_column, key=lambda b: b[3]))
             current_column = [box]
         else:
@@ -292,14 +312,15 @@ def compute_reading_order(boxes, vertical_gap: float = 12):
     return ordered
 
 
-def find_reading_order(boxes, vertical_gap: float = 12) -> list:
+def find_reading_order(boxes, vertical_gap: float = 36) -> list:
     """Given page layout information, return the boxes in reading order.
 
     Args:
         boxes: List of classified bounding boxes with class info as defined
                by pymupdf_layout: (x0, y0, x1, y1, "class").
         vertical_gap: Minimum vertical gap to separate stripes. The default
-                      value of 12 works well for most documents.
+                      value of 36 works well for most documents. It roughly
+                      corresponds to 2 -3 text line heights
 
     Returns:
         List of boxes in reading order.
