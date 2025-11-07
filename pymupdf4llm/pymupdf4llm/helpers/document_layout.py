@@ -8,10 +8,11 @@ from pathlib import Path
 import pymupdf
 import tabulate
 from pymupdf4llm.helpers.get_text_lines import get_raw_lines
-from pymupdf4llm.helpers import utils, check_ocr
+from pymupdf4llm.helpers import utils
 
 try:
     import cv2
+    from pymupdf4llm.helpers import check_ocr
 except ImportError:
     cv2 = None
 

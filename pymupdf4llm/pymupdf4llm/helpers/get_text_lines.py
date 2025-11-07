@@ -93,8 +93,12 @@ def get_raw_lines(
             if s0["bbox"].x1 + delta < s1["bbox"].x0 or (
                 s0["flags"],
                 s0["char_flags"] & ~2,
-                s0["size"],
-            ) != (s1["flags"], s1["char_flags"] & ~2, s1["size"]):
+                # s0["size"],
+            ) != (
+                s1["flags"],
+                s1["char_flags"] & ~2,
+                # s1["size"],
+            ):
                 continue  # no joining
             # We need to join bbox and text of two consecutive spans
             # On occasion, spans may also be duplicated.
