@@ -1,7 +1,4 @@
-try:
-    import pymupdf.layout
-except ImportError:
-    import pymupdf
+import pymupdf
 
 from .versions_file import MINIMUM_PYMUPDF_VERSION, VERSION
 

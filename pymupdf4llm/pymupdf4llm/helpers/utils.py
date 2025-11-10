@@ -210,12 +210,12 @@ The main function is "find_reading_order()".
 """
 
 
-def cluster_stripes(boxes, vertical_gap: float = 12):
+def cluster_stripes(boxes, joined_boxes, vectors, vertical_gap=12):
     """
     Divide page into horizontal stripes based on vertical gaps.
 
     Args:
-        boxes (list): List of bounding boxes, each defined as (x0, y0, x1, y1).
+        boxes (list): List of bounding boxes.
         vertical_gap (float): Minimum vertical gap to separate stripes.
 
     Returns:
@@ -223,6 +223,10 @@ def cluster_stripes(boxes, vertical_gap: float = 12):
     """
 
     def is_multi_column_layout(boxes):
+        """Check if the boxes have a clean multi-column layout.
+
+        Used to early exit from stripe clustering.
+        """
         sorted_boxes = sorted(boxes, key=lambda b: b[0])
         columns = []
         current_column = [sorted_boxes[0]]
@@ -236,40 +240,68 @@ def cluster_stripes(boxes, vertical_gap: float = 12):
         columns.append(current_column)
         return len(columns) > 1
 
+    def divider(y, box, vertical_gap):
+        """Create a rectangle of box width and vertical_gap height below y."""
+        r = pymupdf.Rect(box[0], y, box[2], y + vertical_gap)
+        return r
+
     # Sort top to bottom
-    sorted_boxes = sorted(boxes, key=lambda b: b[1])
+    sorted_boxes = sorted(boxes, key=lambda b: b[3])
     stripes = []
+
+    # exit if no boxes
     if not sorted_boxes:
         return stripes
 
-    # Early exit for clean multi-column layouts
-    if is_multi_column_layout(sorted_boxes):
+    # Exit if clean multi-column layout: treat full page as single stripe.
+    if is_multi_column_layout(boxes):
         return [boxes]
 
-    current_stripe = [sorted_boxes[0]]
+    # y-borders of horizontal stripes
+    y_values = {joined_boxes.y1}
+    for box in sorted_boxes:
+        # find empty horizontal dividers of minimum height 'vertical_gap'
+        y = box[3]
+        if y >= joined_boxes.y1:
+            continue
+        div = divider(y, joined_boxes, vertical_gap)
+        if not any(div.intersects(pymupdf.Rect(b[:4])) for b in boxes):
+            # look for next bbox below the divider
+            y0 = min(b[1] for b in sorted_boxes if b[1] >= div.y1)
+            div.y1 = y0  # divider has this bottom now
+            inter_count = 0  # counts intersections with vectors
 
-    for box in sorted_boxes[1:]:
-        prev_bottom = max(b[3] for b in current_stripe)
-        if box[1] - prev_bottom > vertical_gap:
+            # if divider is fully contained in more than one vector's stripe
+            # we don't consider it.
+            for vr in vectors:
+                if div.intersects(vr) and vr.y0 <= div.y0 and div.y1 <= vr.y1:
+                    inter_count += 1
+            if inter_count <= 1:
+                y_values.add(div.y1)
+    y_values = sorted(y_values)
+    current_stripe = []
+    for y in y_values:
+        while sorted_boxes and sorted_boxes[0][3] <= y:
+            current_stripe.append(sorted_boxes.pop(0))
+        if current_stripe:
             stripes.append(current_stripe)
-            current_stripe = [box]
-        else:
-            current_stripe.append(box)
-
-    stripes.append(current_stripe)
+            current_stripe = []
     return stripes
 
 
-def cluster_columns_in_stripe(stripe: list):
+def cluster_columns_in_stripe(stripe):
     """
     Within a stripe, group boxes into columns based on horizontal proximity.
 
+    We use a small horizontal gap threshold to decide when a new column starts.
+
     Args:
-        stripe (list): List of boxes within a stripe.
+        stripe (list): List of boxes we look at here.
 
     Returns:
         list: List of columns, each column is a list of boxes.
     """
+    HORIZONTAL_GAP = 1  # allowable gap to start a new column
     # Sort left to right
     sorted_boxes = sorted(stripe, key=lambda b: b[0])
     columns = []
@@ -277,17 +309,17 @@ def cluster_columns_in_stripe(stripe: list):
 
     for box in sorted_boxes[1:]:
         prev_right = max([b[2] for b in current_column])
-        if box[0] - prev_right > 1:
-            columns.append(sorted(current_column, key=lambda b: b[3]))
+        if box[0] - prev_right > HORIZONTAL_GAP:
+            columns.append(sorted(current_column, key=lambda b: b[1]))
             current_column = [box]
         else:
             current_column.append(box)
 
-    columns.append(sorted(current_column, key=lambda b: b[3]))
+    columns.append(sorted(current_column, key=lambda b: b[1]))
     return columns
 
 
-def compute_reading_order(boxes, vertical_gap: float = 12):
+def compute_reading_order(boxes, joined_boxes, vectors, vertical_gap=12):
     """
     Compute reading order of boxes delivered by PyMuPDF-Layout.
 
@@ -298,12 +330,12 @@ def compute_reading_order(boxes, vertical_gap: float = 12):
     Returns:
         list: List of boxes in reading order.
     """
-    # compute adequate vertical_gap based height of union of bboxes
-    temp = pymupdf.EMPTY_RECT()
-    for b in boxes:
-        temp |= pymupdf.Rect(b[:4])
-    this_vertical_gap = vertical_gap * temp.height / 800
-    stripes = cluster_stripes(boxes, vertical_gap=this_vertical_gap)
+    stripes = cluster_stripes(
+        boxes,
+        joined_boxes,
+        vectors,
+        vertical_gap=vertical_gap,
+    )
     ordered = []
     for stripe in stripes:
         columns = cluster_columns_in_stripe(stripe)
@@ -312,7 +344,7 @@ def compute_reading_order(boxes, vertical_gap: float = 12):
     return ordered
 
 
-def find_reading_order(boxes, vertical_gap: float = 36) -> list:
+def find_reading_order(page_rect, blocks, boxes, vertical_gap: float = 12) -> list:
     """Given page layout information, return the boxes in reading order.
 
     Args:
@@ -325,6 +357,9 @@ def find_reading_order(boxes, vertical_gap: float = 36) -> list:
     Returns:
         List of boxes in reading order.
     """
+
+    # compute adequate vertical_gap based on the height the page rectangle
+    this_vertical_gap = vertical_gap * page_rect.height / 800
 
     def is_contained(inner, outer) -> bool:
         """Check if inner box is fully contained within outer box."""
@@ -369,9 +404,28 @@ def find_reading_order(boxes, vertical_gap: float = 36) -> list:
         else:
             body_boxes.append(box)
 
-    # bring body into reading order
-    ordered = compute_reading_order(body_boxes, vertical_gap=vertical_gap)
+    # compute joined boxes of body
+    joined_boxes = pymupdf.Rect(
+        min(b[0] for b in body_boxes),
+        min(b[1] for b in body_boxes),
+        max(b[2] for b in body_boxes),
+        max(b[3] for b in body_boxes),
+    )
 
+    # extract vectors contained in the TextPage
+    min_bbox_height = min(b[3] - b[1] for b in body_boxes)
+    vectors = [
+        pymupdf.Rect(b["bbox"])
+        for b in blocks
+        if b["bbox"][3] - b["bbox"][1] >= min_bbox_height and b["bbox"] in joined_boxes
+    ]
+    # bring body into reading order
+    ordered = compute_reading_order(
+        body_boxes,
+        joined_boxes,
+        vectors,
+        vertical_gap=this_vertical_gap,
+    )
     # Final full boxes list. We do simple sorts for non-body boxes.
     final = (
         sorted(page_headers, key=lambda r: (r[1], r[0]))
@@ -382,6 +436,8 @@ def find_reading_order(boxes, vertical_gap: float = 36) -> list:
 
 
 def simplify_vectors(vectors):
+    """Join vectors that are horizontally adjacent and vertically aligned."""
+    Y_TOLERANCE = 1  # allowable top / bottom  difference
     new_vectors = []
     if not vectors:
         return new_vectors
@@ -390,8 +446,8 @@ def simplify_vectors(vectors):
         last_v = new_vectors[-1]
         if (
             1
-            and abs(v["bbox"][1] - last_v["bbox"][1]) < 1
-            and abs(v["bbox"][3] - last_v["bbox"][3]) < 1
+            and abs(v["bbox"][1] - last_v["bbox"][1]) < Y_TOLERANCE
+            and abs(v["bbox"][3] - last_v["bbox"][3]) < Y_TOLERANCE
             and v["bbox"][0] <= last_v["bbox"][2] + 1
         ):
             # merge horizontally
@@ -408,7 +464,14 @@ def simplify_vectors(vectors):
 
 
 def find_virtual_lines(page, table_bbox, words, vectors, link_rects):
-    """Return virtual lines for a given table bbox."""
+    """Return virtual lines for a given table bbox.
+
+    This utility looks for:
+    * horizontal non-stroke vectors and uses their top and bottom edges
+      as virtual lines. Should work for tables with alternating row colors.
+    * horizontal thin lines and uses their left x-coordinate as column
+      borders.
+    """
 
     def make_vertical(table_bbox, line_bbox, word_boxes):
         # default top and bottom point of vertical line
