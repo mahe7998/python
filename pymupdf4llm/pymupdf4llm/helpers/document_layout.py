@@ -713,7 +713,9 @@ def parse_document(
         utils.clean_pictures(page, blocks)
         utils.add_image_orphans(page, blocks)
         utils.clean_tables(page, blocks)
-        page.layout_information = utils.find_reading_order(page.layout_information)
+        page.layout_information = utils.find_reading_order(
+            page.rect, blocks, page.layout_information
+        )
 
         # identify vector graphics to help find tables
         all_lines, all_boxes = utils.complete_table_structure(page)
