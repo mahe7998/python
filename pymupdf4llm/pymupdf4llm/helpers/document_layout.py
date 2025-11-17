@@ -1,15 +1,19 @@
 import base64
 import json
 import os
-from binascii import b2a_base64
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Union
 from pathlib import Path
+from typing import Dict, List, Optional, Union
+
 import pymupdf
 import tabulate
-from pymupdf4llm.helpers.get_text_lines import get_raw_lines
 from pymupdf4llm.helpers import utils
+from pymupdf4llm.helpers.get_text_lines import get_raw_lines
 
+try:
+    from tqdm import tqdm as ProgressBar
+except ImportError:
+    from pymupdf4llm.helpers.progress import ProgressBar
 try:
     import cv2
     from pymupdf4llm.helpers import check_ocr
@@ -33,7 +37,7 @@ FLAGS = (
 
 def omit_if_pua_char(text):
     """Check if character is in the Private Use Area (PUA) of Unicode."""
-    if len(text) > 1:
+    if len(text) > 1:  # only single characters are checked
         return text
     o = ord(text)
     if (
@@ -46,8 +50,7 @@ def omit_if_pua_char(text):
 
 
 def create_list_item_levels(layout_info):
-    """Create a dictionary that maps the box number of each list-item to
-    its hierarchy level.
+    """Map the layout box number of each list-item to its hierarchy level.
 
     Args:
         layout_info (list): the bbox list "page.layout_information"
@@ -59,10 +62,10 @@ def create_list_item_levels(layout_info):
     segment = []  # current segment
 
     # Create segments of contiguous list items. Each non-list-item finishes
-    # the current segment. Also, if two list-items belong to different page
-    # text columns ends a segment.
+    # the current segment. Also, two list-items in a row belonging to different
+    # page text columns end the segment after the first item.
     for i, item in enumerate(layout_info):
-        if item.boxclass != "list-item":  # bbox class is not list-item
+        if item.boxclass != "list-item":  # bbox class is no list-item
             if segment:  # end and save the current segment
                 segments.append(segment)
                 segment = []
@@ -83,7 +86,7 @@ def create_list_item_levels(layout_info):
 
     # walk through segments and assign levels
     for i, s in enumerate(segments):
-        if not s:
+        if not s:  # skip empty segments
             continue
         s.sort(key=lambda x: x[1].x0)  # sort by x0 coordinate of the bbox
 
@@ -119,16 +122,15 @@ def is_monospaced(textlines):
 
 def is_superscripted(line):
     spans = line["spans"]
+    line_bbox = line["bbox"]
     if not spans:
         return False
-    if spans[0]["flags"] & 1:  # check for superscript
+    span0 = spans[0]
+    if span0["flags"] & 1:  # check for superscript flag
         return True
-    if len(spans) < 2:
+    if len(spans) < 2:  # single span line: skip
         return False
-    if (
-        spans[0]["origin"][1] < spans[1]["origin"][1]
-        and spans[0]["size"] < spans[1]["size"]
-    ):
+    if spans0["origin"][1] < spans[1]["origin"][1] and span0["size"] < spans[1]["size"]:
         return True
     return False
 
@@ -138,18 +140,18 @@ def get_plain_text(spans):
     Parameter is a list of span dictionaries. The spans may come from
     one or more original "textlines" items.
     Returns the text string of the boundary box.
-    The text string always ends with the suffix and a space
     """
     output = ""
     for i, s in enumerate(spans):
-        span_text = s["text"].strip()  # remove leading/trailing spaces
         superscript = s["flags"] & 1
-        span_text = s["text"].strip()
+        span_text = s["text"].strip()  # remove leading/trailing spaces
         if superscript:
+            # enclose superscripted text in brackets if first span
             if i == 0:
                 span_text = f"[{span_text}] "
             elif output.endswith(" "):
                 output = output[:-1]
+        # resolve hyphenation
         if output.endswith("- ") and len(output.split()[-1]) > 2:
             output = output[:-2]
         output += span_text + " "
@@ -160,7 +162,7 @@ def list_item_to_text(textlines, level):
     """
     Convert "list-item" bboxes to text.
     """
-    indent = "   " * (level - 1)
+    indent = "   " * (level - 1)  # indentation based on level
     output = indent
     line = textlines[0]
     x0 = line["bbox"][0]  # left of first line
@@ -195,11 +197,13 @@ def footnote_to_text(textlines):
     """
     Convert "footnote" bboxes to text.
     """
+    # we render footnotes as blockquotes
     output = "> "
     line = textlines[0]
     spans = line["spans"]
 
     for line in textlines[1:]:
+        # superscripted line starts a new footnote line
         if is_superscripted(line):
             line_output = get_plain_text(spans)
             output += line_output
@@ -214,7 +218,10 @@ def footnote_to_text(textlines):
 
 
 def code_block_to_text(textlines):
-    """Output a code block in plain text format."""
+    """Output a code block in plain text format.
+
+    Basic difference is that lines are separated by line breaks.
+    """
     output = ""
     for line in textlines:
         line_text = ""
@@ -228,15 +235,17 @@ def code_block_to_text(textlines):
 
 def text_to_text(textlines, ignore_code: bool = False):
     """
-    Convert "text" bboxes to plain text, as well as other boxclasses
+    Convert "text" bboxes to plain text, as well as boxclasses
     not specifically handled elsewhere.
-    The line text is written without line breaks. At the end,
-    two newlines are added to separate from the next block.
+    The text of all spans of all lines is written without line breaks.
+    At the end, two newlines are added to separate from the next block.
     """
     if not textlines:
         return ""
     if is_superscripted(textlines[0]):  # check for superscript
+        # handle mis-classified text boundary box
         return footnote_to_text(textlines)
+    # handle completely mnonospaced textlines as code block
     if not ignore_code and is_monospaced(textlines):
         return code_block_to_text(textlines)
 
@@ -247,6 +256,47 @@ def text_to_text(textlines, ignore_code: bool = False):
             spans.append(s)
     output = get_plain_text(spans)
     return output + "\n\n"
+
+
+def picture_text_to_text(textlines, ignore_code: bool = False, clip=None):
+    """
+    Convert text extracted from images to plain text format.
+    """
+    output = "----- Start of picture text -----\n"
+    for tl in textlines:
+        line_text = " ".join([s["text"] for s in tl["spans"]])
+        output += line_text.rstrip() + "\n"
+    output += "----- End of picture text -----\n"
+    return output + "\n"
+
+
+def fallback_text_to_text(textlines, ignore_code: bool = False, clip=None):
+    """Convert text extracted from unrecognized tables.
+
+    We hope for some sort of table structure being present in the text spans:
+    The maximum span count in the lines is assumed to equal column count.
+    """
+    span_count = max(len(tl["spans"]) for tl in textlines)
+    lines = []
+    output = ""
+    for tl in textlines:
+        spans = tl["spans"]
+        # prepare a row with empty strings in each cell
+        line = [""] * span_count
+        if len(spans) < span_count and spans[0]["bbox"][0] > clip[0] + 10:
+            i = 1
+        else:
+            i = 0
+        for j, s in enumerate(spans, start=i):
+            line[j] = s["text"].strip()
+        lines.append(line)
+    tab_text = tabulate.tabulate(
+        lines,
+        tablefmt="grid",
+        maxcolwidths=int(100 / span_count),
+    )
+    output += tab_text + "\n"
+    return output + "\n"
 
 
 def get_styled_text(spans):
@@ -325,7 +375,7 @@ def list_item_to_md(textlines, level):
     This post-layout heuristics helps cover cases where more than
     one list item is contained in a single bbox.
     """
-    indent = "   " * (level - 1)
+    indent = "   " * (level - 1)  # indentation based on level
     line = textlines[0]
     x0 = line["bbox"][0]  # left of first line
     spans = line["spans"]
@@ -337,6 +387,7 @@ def list_item_to_md(textlines, level):
         starter = "1. "
 
     if not omit_if_pua_char(span0["text"].strip()):
+        # bullet was a PUA char: remove it
         spans.pop(0)
         if spans:
             x0 = spans[0]["bbox"][0]
@@ -452,6 +503,33 @@ def text_to_md(textlines, ignore_code: bool = False):
     return output + "\n\n"
 
 
+def picture_text_to_md(textlines, ignore_code: bool = False, clip=None):
+    """
+    Convert text extracted from images to markdown format.
+    """
+    output = "**----- Start of picture text -----**<br>\n"
+    for tl in textlines:
+        line_text = " ".join([s["text"] for s in tl["spans"]])
+        output += line_text.rstrip() + "<br>"
+    output += "**----- End of picture text -----**<br>\n"
+    return output + "\n\n"
+
+
+def fallback_text_to_md(textlines, ignore_code: bool = False, clip=None):
+    """
+    Convert text extracted from images to markdown format.
+    """
+    span_count = max(len(tl["spans"]) for tl in textlines)
+    output = "**----- Start of picture text -----**<br>\n"
+    output += "|" * (span_count + 1) + "\n"
+    output += "|" + "|".join(["---"] * span_count) + "|\n"
+    for tl in textlines:
+        ltext = "|" + "|".join([s["text"].strip() for s in tl["spans"]]) + "|\n"
+        output += ltext
+    output += "**----- End of picture text -----**<br>\n"
+    return output + "\n\n"
+
+
 @dataclass
 class LayoutBox:
     x0: float
@@ -502,42 +580,68 @@ class ParsedDocument:
         write_images: bool = False,
         embed_images: bool = False,
         ignore_code: bool = False,
+        show_progress: bool = False,
     ) -> str:
         """
         Serialize ParsedDocument to markdown text.
         """
         output = ""
-        for page in self.pages:
+        if show_progress and len(self.pages) > 5:
+            print(f"Generating markdown text...")
+            this_iterator = ProgressBar(self.pages)
+        else:
+            this_iterator = self.pages
+        for page in this_iterator:
 
-            # make mapping: box number to list item level
+            # Make a mapping: box number -> list item hierarchy level
             list_item_levels = create_list_item_levels(page.boxes)
+
             for i, box in enumerate(page.boxes):
                 clip = pymupdf.IRect(box.x0, box.y0, box.x1, box.y1)
                 btype = box.boxclass
+
+                # skip headers/footers if requested
                 if btype == "page-header" and header is False:
                     continue
                 if btype == "page-footer" and footer is False:
                     continue
-                if btype in ("picture", "formula") and box.image:
-                    img_filename = f"{self.filename}-{page.page_number:04d}-{i:02d}.{self.image_format}"
-                    if write_images:
-                        filename = os.path.basename(self.filename).replace(" ", "-")
-                        image_filename = os.path.join(
-                            self.image_path,
-                            f"{filename}-{page.page_number:04d}-{i:02d}.{self.image_format}",
-                        )
-                        Path(image_filename).write_bytes(box.image)
 
-                        output += GRAPHICS_TEXT % img_filename
+                # pictures and formulas: either write image file or embed
+                if btype in ("picture", "formula", "fallback"):
+                    if box.image:
+                        if write_images:
+                            img_filename = f"{self.filename}-{page.page_number:04d}-{i:02d}.{self.image_format}"
+                            filename = os.path.basename(self.filename).replace(" ", "-")
+                            image_filename = os.path.join(
+                                self.image_path,
+                                f"{filename}-{page.page_number:04d}-{i:02d}.{self.image_format}",
+                            )
+                            Path(image_filename).write_bytes(box.image)
 
-                    elif embed_images:
-                        # make a base64 encoded string of the image
-                        data = b2a_base64(box.image).decode()
-                        data = f"data:image/{self.image_format};base64," + data
-                        output += GRAPHICS_TEXT % data + "\n\n"
+                            output += GRAPHICS_TEXT % img_filename
 
+                        elif embed_images:
+                            # make a base64 encoded string of the image
+                            data = base64.b64encode(box.image).decode()
+                            data = f"data:image/{self.image_format};base64," + data
+                            output += GRAPHICS_TEXT % data + "\n\n"
                     else:
-                        output += f"**==> {btype} [{clip.width} x {clip.height}] intentionally omitted <==**\n\n"
+                        output += f"**==> picture [{clip.width} x {clip.height}] intentionally omitted <==**\n\n"
+
+                    # output text in image if requested
+                    if box.textlines:
+                        if btype == "picture":
+                            output += picture_text_to_md(
+                                box.textlines,
+                                ignore_code=ignore_code or page.ocrpage,
+                                clip=clip,
+                            )
+                        elif btype == "fallback":
+                            output += fallback_text_to_md(
+                                box.textlines,
+                                ignore_code=ignore_code or page.ocrpage,
+                                clip=clip,
+                            )
                     continue
                 if btype == "table":
                     output += box.table["markdown"] + "\n\n"
@@ -564,7 +668,7 @@ class ParsedDocument:
 
         return output
 
-    def to_json(self) -> str:
+    def to_json(self, show_progress=False) -> str:
         # Serialize to JSON
         class LayoutEncoder(json.JSONEncoder):
             def default(self, s):
@@ -593,13 +697,19 @@ class ParsedDocument:
         header: bool = True,
         footer: bool = True,
         ignore_code: bool = False,
+        show_progress: bool = False,
     ) -> str:
         """
         Serialize ParsedDocument to plain text. Optionally omit page headers or footers.
         """
         # Flatten all text boxes into plain text
         output = ""
-        for page in self.pages:
+        if show_progress and len(self.pages) > 5:
+            print(f"Generating plain text ..")
+            this_iterator = ProgressBar(self.pages)
+        else:
+            this_iterator = self.pages
+        for page in this_iterator:
             list_item_levels = create_list_item_levels(page.boxes)
             for i, box in enumerate(page.boxes):
                 clip = pymupdf.IRect(box.x0, box.y0, box.x1, box.y1)
@@ -608,8 +718,21 @@ class ParsedDocument:
                     continue
                 if btype == "page-footer" and footer is False:
                     continue
-                if btype in ("picture", "formula"):
-                    output += f"==> {btype} [{clip.width} x {clip.height}] <==\n\n"
+                if btype in ("picture", "formula", "fallback"):
+                    output += f"==> picture [{clip.width} x {clip.height}] <==\n\n"
+                    if box.textlines:
+                        if btype == "picture":
+                            output += picture_text_to_text(
+                                box.textlines,
+                                ignore_code=ignore_code or page.ocrpage,
+                                clip=clip,
+                            )
+                        elif btype == "fallback":
+                            output += fallback_text_to_text(
+                                box.textlines,
+                                ignore_code=ignore_code or page.ocrpage,
+                                clip=clip,
+                            )
                     continue
                 if btype == "table":
                     output += (
@@ -637,6 +760,9 @@ def parse_document(
     image_format="png",
     image_path="",
     pages=None,
+    show_progress=False,
+    output_images=True,
+    force_text=False,
 ) -> ParsedDocument:
     if isinstance(doc, pymupdf.Document):
         mydoc = doc
@@ -651,6 +777,7 @@ def parse_document(
     document.image_format = image_format
     document.image_path = image_path
     document.pages = []
+    document.force_text = force_text
     try:
         reason = "OpenCV not installed"
         assert cv2 is not None
@@ -677,6 +804,9 @@ def parse_document(
         raise ValueError(
             "'pages' parameter must be None, int, or a sequence of ints less than page count"
         )
+    if show_progress and len(page_filter) > 5:
+        print(f"Parsing {len(page_filter)} pages of '{document.filename}'...")
+        page_filter = ProgressBar(page_filter)
     for pno in page_filter:
         page = mydoc.load_page(pno)
 
@@ -687,28 +817,36 @@ def parse_document(
             decision = {"should_ocr": False}
         if decision["should_ocr"]:
             print(f"Performing OCR on {page.number=}[{page.number+1}]...")
-            pix = decision["pixmap"]  # retrieve the Pixmap
-            pdf_data = pix.pdfocr_tobytes()  # OCR it
-            ocr_pdf = pymupdf.open("pdf", pdf_data)  # get the OCR'd PDF
-            ocrpage = ocr_pdf[0]  # this is its OCR'd page
-            # remove everything except the text
-            ocrpage.add_redact_annot(ocrpage.rect)
-            ocrpage.apply_redactions(
-                images=pymupdf.PDF_REDACT_IMAGE_REMOVE,
-                graphics=pymupdf.PDF_REDACT_LINE_ART_NONE,
-                text=pymupdf.PDF_REDACT_TEXT_NONE,
-            )
-            # copy text over to original page
-            page.show_pdf_page(page.rect, ocr_pdf, 0)
-            ocr_pdf.close()  # discard temporary OCR PDF
-            del ocr_pdf
+            if not decision.get("has_text"):
+                pix = decision["pixmap"]  # retrieve the Pixmap
+                pdf_data = pix.pdfocr_tobytes()  # OCR it
+                ocr_pdf = pymupdf.open("pdf", pdf_data)  # get the OCR'd PDF
+                ocrpage = ocr_pdf[0]  # this is its OCR'd page
+                # remove everything except the text
+                ocrpage.add_redact_annot(ocrpage.rect)
+                ocrpage.apply_redactions(
+                    images=pymupdf.PDF_REDACT_IMAGE_REMOVE,
+                    graphics=pymupdf.PDF_REDACT_LINE_ART_NONE,
+                    text=pymupdf.PDF_REDACT_TEXT_NONE,
+                )
+                # copy text over to original page
+                page.show_pdf_page(page.rect, ocr_pdf, 0)
+                ocr_pdf.close()  # discard temporary OCR PDF
+                del ocr_pdf
+                textpage = page.get_textpage(flags=FLAGS)
+                blocks = textpage.extractDICT()["blocks"]
+            else:
+                textpage = page.get_textpage(flags=FLAGS)
+                blocks = textpage.extractDICT()["blocks"]
+                blocks = check_ocr.repair_blocks(blocks, page)
+        else:
+            textpage = page.get_textpage(flags=FLAGS)
+            blocks = textpage.extractDICT()["blocks"]
 
         bboxlog = page.get_bboxlog()
-        ocrpage = decision["should_ocr"] or (
+        ocrpage = (
             set([b[0] for b in bboxlog if b[0] == "ignore-text"]) == CHECK_OCR_TEXT
         )
-        textpage = page.get_textpage(flags=FLAGS)
-        blocks = textpage.extractDICT()["blocks"]
         page.get_layout()
         utils.clean_pictures(page, blocks)
         utils.add_image_orphans(page, blocks)
@@ -749,8 +887,23 @@ def parse_document(
             clip = pymupdf.Rect(box[:4])
 
             if layoutbox.boxclass in ("picture", "formula"):
-                pix = page.get_pixmap(clip=clip, dpi=document.image_dpi)
-                layoutbox.image = pix.tobytes(document.image_format)
+                if output_images:
+                    pix = page.get_pixmap(clip=clip, dpi=document.image_dpi)
+                    layoutbox.image = pix.tobytes(document.image_format)
+                else:
+                    layoutbox.image = None
+                if layoutbox.boxclass == "picture" and document.force_text:
+                    # extract any text within the image box
+                    layoutbox.textlines = [
+                        {"bbox": l[0], "spans": l[1]}
+                        for l in get_raw_lines(
+                            textpage=None,
+                            blocks=pagelayout.fulltext,
+                            clip=clip,
+                            ignore_invisible=not ocrpage,
+                            only_horizontal=False,
+                        )
+                    ]
 
             elif layoutbox.boxclass == "table":
                 # This is either a table detected by native TableFinder or by
@@ -791,11 +944,23 @@ def parse_document(
                     )
 
                 except Exception as e:
-                    print(f"table detection error '{e}' on page {page.number+1}")
+                    # print(f"table detection error '{e}' on page {page.number+1}")
+                    layoutbox.boxclass = "fallback"
                     # table structure not detected: treat like an image
-                    pix = page.get_pixmap(clip=clip, dpi=document.image_dpi)
-                    layoutbox.image = pix.tobytes(document.image_format)
-                    layoutbox.boxclass = "picture"
+                    if output_images:
+                        pix = page.get_pixmap(clip=clip, dpi=document.image_dpi)
+                        layoutbox.image = pix.tobytes(document.image_format)
+                    else:
+                        layoutbox.image = None
+                    layoutbox.textlines = [
+                        {"bbox": l[0], "spans": l[1]}
+                        for l in get_raw_lines(
+                            textpage=None,
+                            blocks=pagelayout.fulltext,
+                            clip=clip,
+                            ignore_invisible=not ocrpage,
+                        )
+                    ]
             else:
                 # Handle text-like box classes:
                 # Extract text line information within the box.

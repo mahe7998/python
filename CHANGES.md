@@ -1,15 +1,53 @@
 # Change Log
 
-## Changes in version 0.0.28
+## Changes in version 0.2.1
 
 ### Fixes:
 
-* [xxx](https://github.com/pymupdf/RAG/issues/xxx) - 
+* [320](https://github.com/pymupdf/RAG/issues/320) - [Bug] ValueError: min() iterable argument is empty ...
+* [319](https://github.com/pymupdf/RAG/issues/319) - [Bug] ValueError: min() arg is an empty sequence 
 
 ### Other Changes:
 
-* xxx
+* OCR invocation now differentiates between full-page OCR and text-only OCR: If the page does contain text but the percentage of unreadable characters exceeds a certain threshold (90%), we only OCR text span boundary boxes and replace span text with OCR'ed text where necessary.
 
+------
+
+## Changes in version 0.2.0
+
+This version introduces full support of the [PyMuPDF-Layout](https://pypi.org/project/pymupdf-layout/) package. This entails a radically new approach for detecting the layout of document pages using the AI-based features of the layout package.
+
+Improvements include:
+
+* Greatly improved table detection
+* Support of list item hierachy levels
+* Detection of page headers and footers
+* Improved detection of text paragraphs, titles and section headers
+* New output options beyond Markdown: plain text and JSON
+* Automatically detect whether a page needs OCR and invoke Tesseract if both, Tesseract is installed and OpenCV (package [opencv-python](https://pypi.org/project/opencv-python/)) is available. Invocation criteria include absence of readable text, full-page coverage with images, presence of many character-sized vector graphics.
+
+The PyMuPDF-Layout package is not open-source and has its own license, which is different from PyMuPDF4LLM. It also is dependent on a number of other, fairly large packages like [onnxruntime](https://pypi.org/project/onnxruntime/), [numpy](https://pypi.org/project/numpy/), [sympy](https://pypi.org/project/sympy/) and [OpenCV](https://pypi.org/project/opencv-python/), which each in turn have their own dependencies.
+
+We therefore keep the use of the layout feature optional. To activate PyMuPDF-Layout support the following import statement **_must be included before_** importing PyMuPDF4LLM itself:
+
+```python
+import pymupdf.layout
+import pymupdf4llm
+```
+
+Thereafter, PyMuPDF's namespace is available. The known method `pymupdf4llm.to_markdown()` automatically works with AI-based empowerment.
+In addition, two new methods become available:
+* `pymupdf4llm.to_text()` - which works much like markdown output but produces plain text.
+* `pymupdf4llm.to_json()` - which outputs the document's metadata and the selected pages in JSON format.
+
+### Fixes:
+
+
+### Other Changes:
+
+* If `show_progress=True`, Python package [tqdm](https://pypi.org/project/tqdm/) is automatically used when available to display a progress bar. If tqdm is not installed, our own text-based progress bar is used.
+
+------
 
 ## Changes in version 0.0.27
 

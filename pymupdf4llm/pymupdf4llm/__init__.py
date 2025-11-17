@@ -26,6 +26,9 @@ else:
         image_format="png",
         image_path="",
         pages=None,
+        output_images=True,
+        show_progress=False,
+        force_text=True,
     ):
         return DL.parse_document(
             doc,
@@ -34,6 +37,9 @@ else:
             image_format=image_format,
             image_path=image_path,
             pages=pages,
+            output_images=output_images,
+            show_progress=show_progress,
+            force_text=force_text,
         )
 
     def to_markdown(
@@ -75,6 +81,9 @@ else:
             image_format=image_format,
             image_path=image_path,
             pages=pages,
+            output_images=embed_images or write_images,
+            show_progress=show_progress,
+            force_text=force_text,
         )
         return parsed_doc.to_markdown(
             header=header,
@@ -82,6 +91,7 @@ else:
             write_images=write_images,
             embed_images=embed_images,
             ignore_code=ignore_code,
+            show_progress=show_progress,
         )
 
     def to_json(
@@ -92,6 +102,9 @@ else:
         image_format="png",
         image_path="",
         pages=None,
+        output_images=False,
+        show_progress=False,
+        force_text=True,
     ):
         parsed_doc = parse_document(
             doc,
@@ -99,6 +112,9 @@ else:
             image_format=image_format,
             image_path=image_path,
             pages=pages,
+            output_images=output_images,
+            show_progress=show_progress,
+            force_text=force_text,
         )
         return parsed_doc.to_json()
 
@@ -109,6 +125,8 @@ else:
         footer=True,
         pages=None,
         ignore_code=False,
+        show_progress=False,
+        force_text=True,
     ):
         parsed_doc = parse_document(
             doc,
@@ -117,11 +135,15 @@ else:
             image_format="png",
             image_path="",
             pages=pages,
+            output_images=False,
+            show_progress=show_progress,
+            force_text=force_text,
         )
         return parsed_doc.to_text(
             header=header,
             footer=footer,
             ignore_code=ignore_code,
+            show_progress=show_progress,
         )
 
 

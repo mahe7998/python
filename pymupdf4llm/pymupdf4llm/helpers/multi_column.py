@@ -60,9 +60,8 @@ Copyright 2024 Artifex Software, Inc.
 License GNU Affero GPL 3.0
 """
 
-import string
-
 import pymupdf
+from pymupdf4llm.helpers.utils import WHITE_CHARS
 
 pymupdf.TOOLS.unset_quad_corrections(True)
 
@@ -88,11 +87,10 @@ def column_boxes(
         paths: use these drawings instead of extracting here
         avoid: ignore text in any of these areas
     """
-    WHITE = set(string.whitespace)
 
     def is_white(text):
         """Check for relevant text."""
-        return WHITE.issuperset(text)
+        return WHITE_CHARS.issuperset(text)
 
     def in_bbox(bb, bboxes):
         """Return 1-based number if a bbox contains bb, else return 0."""

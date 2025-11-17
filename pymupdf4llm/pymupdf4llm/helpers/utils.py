@@ -1,6 +1,38 @@
 import pymupdf
 
-white_spaces = set([chr(i) for i in range(33)]) | {0xA0, 0x2002, 0x2003, 0x2009, 0x202F}
+WHITE_CHARS = set(
+    [chr(i) for i in range(33)]
+    + [
+        "\u00a0",  # Non-breaking space
+        "\u2000",  # En quad
+        "\u2001",  # Em quad
+        "\u2002",  # En space
+        "\u2003",  # Em space
+        "\u2004",  # Three-per-em space
+        "\u2005",  # Four-per-em space
+        "\u2006",  # Six-per-em space
+        "\u2007",  # Figure space
+        "\u2008",  # Punctuation space
+        "\u2009",  # Thin space
+        "\u200a",  # Hair space
+        "\u202f",  # Narrow no-break space
+        "\u205f",  # Medium mathematical space
+        "\u3000",  # Ideographic space
+    ]
+)
+
+BULLETS = set(
+    [
+        chr(0xB6),
+        chr(0xB7),
+        chr(0x2020),
+        chr(0x2021),
+        chr(0x2022),
+        chr(0xF0A7),
+        chr(0xF0B7),
+    ]
+    + list(map(chr, range(0x25A0, 0x2600)))
+)
 
 
 def table_cleaner(page, blocks, tbbox):
@@ -156,18 +188,28 @@ def add_image_orphans(page, blocks):
     images = []
     for img in page.get_image_info():
         r = page.rect & img["bbox"]
+        if r.width <= 3 or r.height <= 3:
+            continue
         if r.is_empty or abs(r) >= area_limit:
             continue
         images.append(r)
 
     paths = []
-    for b in blocks:
-        if b["type"] != 3:
-            continue
-        r = page.rect & b["bbox"]
+    vectors = sorted(
+        [
+            page.rect & b["bbox"]
+            for b in blocks
+            if b["type"] == 3
+            and b["bbox"][3] - b["bbox"][1] > 3
+            and b["bbox"][2] - b["bbox"][0] > 3
+        ],
+        key=lambda v: abs(v),
+        reverse=True,
+    )
+    vectors = vectors[:500]
+
+    for r in vectors:
         if abs(r) >= area_limit:
-            continue
-        if r.width < 3 and r.height < 3:
             continue
         r_low_limit = 0.1 * abs(r)
         r_hi_limit = 0.8 * abs(r)
@@ -186,7 +228,7 @@ def add_image_orphans(page, blocks):
 
     # resolve mutual containment of images and vectors
     imgs = sorted(images + vectors, key=lambda r: abs(r), reverse=True)
-
+    imgs = imgs[:500]
     filtered_imgs = []
     for r in imgs:
         if not any(r in fr for fr in filtered_imgs):
@@ -405,27 +447,35 @@ def find_reading_order(page_rect, blocks, boxes, vertical_gap: float = 12) -> li
             body_boxes.append(box)
 
     # compute joined boxes of body
-    joined_boxes = pymupdf.Rect(
-        min(b[0] for b in body_boxes),
-        min(b[1] for b in body_boxes),
-        max(b[2] for b in body_boxes),
-        max(b[3] for b in body_boxes),
-    )
+    if not body_boxes:
+        joined_boxes = pymupdf.EMPTY_RECT()
+    else:
+        joined_boxes = pymupdf.Rect(
+            min(b[0] for b in body_boxes),
+            min(b[1] for b in body_boxes),
+            max(b[2] for b in body_boxes),
+            max(b[3] for b in body_boxes),
+        )
 
     # extract vectors contained in the TextPage
-    min_bbox_height = min(b[3] - b[1] for b in body_boxes)
-    vectors = [
-        pymupdf.Rect(b["bbox"])
-        for b in blocks
-        if b["bbox"][3] - b["bbox"][1] >= min_bbox_height and b["bbox"] in joined_boxes
-    ]
-    # bring body into reading order
-    ordered = compute_reading_order(
-        body_boxes,
-        joined_boxes,
-        vectors,
-        vertical_gap=this_vertical_gap,
-    )
+    if not joined_boxes.is_empty:
+        min_bbox_height = min(b[3] - b[1] for b in body_boxes)
+        vectors = [
+            pymupdf.Rect(b["bbox"])
+            for b in blocks
+            if b["bbox"][3] - b["bbox"][1] >= min_bbox_height
+            and b["bbox"] in joined_boxes
+        ]
+        # bring body into reading order
+        ordered = compute_reading_order(
+            body_boxes,
+            joined_boxes,
+            vectors,
+            vertical_gap=this_vertical_gap,
+        )
+    else:
+        ordered = []
+
     # Final full boxes list. We do simple sorts for non-body boxes.
     final = (
         sorted(page_headers, key=lambda r: (r[1], r[0]))
@@ -633,7 +683,7 @@ def extract_cells(textpage, cell, markdown=False):
                     bbox = pymupdf.Rect(char["bbox"])
                     if abs(bbox & cell) > 0.5 * abs(bbox):
                         span_text += this_char
-                    elif this_char in white_spaces:
+                    elif this_char in WHITE_CHARS:
                         span_text += " "
 
                 if not span_text:

@@ -12,17 +12,16 @@ Copyright 2024 Artifex Software, Inc.
 License GNU Affero GPL 3.0
 """
 
-import string
 import sys
 
 import pymupdf
+from pymupdf4llm.helpers.utils import WHITE_CHARS
 
-WHITE = set(string.whitespace)
 TYPE3_FONT_NAME = "Unnamed-T3"
 
 
 def is_white(text):
-    return WHITE.issuperset(text)
+    return WHITE_CHARS.issuperset(text)
 
 
 def get_raw_lines(
@@ -31,6 +30,7 @@ def get_raw_lines(
     clip=None,
     tolerance=3,
     ignore_invisible=True,
+    only_horizontal=True,
 ):
     """Extract the text spans from a TextPage in natural reading sequence.
 
@@ -124,7 +124,10 @@ def get_raw_lines(
     spans = []  # all spans in TextPage here
     for bno, b in enumerate(blocks):  # the numbered blocks
         for lno, line in enumerate(b["lines"]):  # the numbered lines
-            if abs(1 - line["dir"][0]) > 1e-3:  # only accept horizontal text
+            line_dir = line["dir"]
+            if (
+                only_horizontal and abs(1 - line_dir[0]) > 1e-3
+            ):  # only accept horizontal text
                 continue
             for sno, s in enumerate(line["spans"]):  # the numered spans
                 sbbox = pymupdf.Rect(s["bbox"])  # span bbox as a Rect
@@ -150,12 +153,13 @@ def get_raw_lines(
                 # include line/block numbers to facilitate separator insertion
                 s["line"] = lno
                 s["block"] = bno
+                s["dir"] = line_dir
                 spans.append(s)
 
     if not spans:  # no text at all
         return []
 
-    spans.sort(key=lambda s: s["bbox"].y1)  # sort spans by bottom coord
+    spans.sort(key=lambda s: (-s["dir"][0], s["bbox"].y1))  # sort spans by bottom coord
     nlines = []  # final result
     line = [spans[0]]  # collects spans with fitting vertical coordinates
     lrect = spans[0]["bbox"]  # rectangle joined from span rectangles
