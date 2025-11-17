@@ -10,7 +10,7 @@ import asyncio
 import threading
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -455,17 +455,53 @@ async def upload_file(file: UploadFile = File(...)):
         print(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Error uploading file: {str(e)}")
 
-@app.post("/v1alpha/convert/file")
-async def convert_file_openwebui(file: UploadFile = File(...)):
+@app.post("/v1/convert/file")
+async def convert_file_openwebui(request: Request, files: Optional[UploadFile] = File(None)):
     """
     Open-WebUI compatible endpoint that uploads and processes a PDF file synchronously.
-    This endpoint matches the Open-WebUI expected API format.
+    This endpoint matches the Open-WebUI expected API format and handles multiple request formats.
+    Updated to use /v1/convert/file (instead of /v1alpha/convert/file) for Docling 2.31.0+ compatibility.
     """
     try:
-        print(f"Open-WebUI file conversion request: {file.filename}")
+        print(f"Open-WebUI file conversion request received")
+        print(f"Content-Type: {request.headers.get('content-type', 'Not specified')}")
         
-        # Save the uploaded file
-        file_path = UPLOAD_DIR / file.filename
+        # Try to get form data first
+        form_data = await request.form()
+        print(f"Form data keys: {list(form_data.keys())}")
+        
+        file = None
+        
+        # Check various possible field names for the file
+        for field_name in ['files', 'file']:
+            if field_name in form_data:
+                potential_file = form_data[field_name]
+                if hasattr(potential_file, 'filename') and potential_file.filename:
+                    file = potential_file
+                    print(f"Found file in form data field '{field_name}': {file.filename}")
+                    break
+        
+        # Also check the direct parameter
+        if file is None and files is not None:
+            file = files
+            print(f"Found file in direct parameter: {file.filename}")
+        
+        if file is None or not hasattr(file, 'filename') or not file.filename:
+            available_fields = list(form_data.keys())
+            raise HTTPException(
+                status_code=422, 
+                detail=f"No valid file found. Available form fields: {available_fields}. Expected 'files' or 'file' field with uploaded file."
+            )
+            
+        print(f"Processing file: {file.filename}")
+        
+        # Extract just the filename from the path (Open-WebUI sends full paths)
+        import os
+        clean_filename = os.path.basename(file.filename) if file.filename else "uploaded_file.pdf"
+        print(f"Clean filename: {clean_filename}")
+        
+        # Save the uploaded file to our content directory
+        file_path = UPLOAD_DIR / clean_filename
         print(f"Saving file to: {file_path}")
         
         with open(file_path, "wb") as f:
@@ -477,19 +513,70 @@ async def convert_file_openwebui(file: UploadFile = File(...)):
         # Process the PDF document immediately
         result = process_pdf_document(str(file_path), chinese_simplified=True)
         
-        # Ensure result is a list of dictionaries as expected
-        if not isinstance(result, list):
-            print(f"WARNING: Result from process_pdf_document is not a list. Type: {type(result)}")
-            result = [result] if result is not None else []
-        
         print(f"Document processed successfully: {file.filename}")
-        return {"data": result}
         
+        # Try to read the generated markdown file for Open-WebUI
+        base_filename = clean_filename.rsplit('.', 1)[0] if '.' in clean_filename else clean_filename
+        markdown_file = RESULTS_DIR / f"{base_filename}-with-text_image.md"
+        
+        markdown_content = ""
+        if markdown_file.exists():
+            try:
+                with open(markdown_file, 'r', encoding='utf-8') as f:
+                    markdown_content = f.read()
+                print(f"Read markdown content: {len(markdown_content)} characters")
+            except Exception as e:
+                print(f"Error reading markdown file: {e}")
+        else:
+            print(f"Markdown file not found: {markdown_file}")
+        
+        # Return content in the format that matches official Docling-serve API
+        if markdown_content:
+            # Return in the official Docling-serve response format
+            return {
+                "document": {
+                    "md_content": markdown_content,
+                    "json_content": result[0] if result and len(result) > 0 else {},
+                    "html_content": "",
+                    "text_content": markdown_content,  # Use markdown as text fallback
+                    "doctags_content": ""
+                },
+                "status": "success",
+                "processing_time": 0.0,  # We could track this if needed
+                "timings": {},
+                "errors": []
+            }
+        else:
+            # Return error format when no content is available
+            return {
+                "document": {
+                    "md_content": "",
+                    "json_content": {},
+                    "html_content": "",
+                    "text_content": "",
+                    "doctags_content": ""
+                },
+                "status": "failure",
+                "processing_time": 0.0,
+                "timings": {},
+                "errors": ["Failed to generate markdown content from document"]
+            }
+        
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"ERROR in Open-WebUI file conversion: {str(e)}")
         import traceback
         print(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Error converting file: {str(e)}")
+
+@app.post("/v1alpha/convert/file")
+async def convert_file_openwebui_legacy(request: Request, files: Optional[UploadFile] = File(None)):
+    """
+    Legacy endpoint for backward compatibility.
+    Redirects to the new /v1/convert/file endpoint.
+    """
+    return await convert_file_openwebui(request, files)
 
 if __name__ == "__main__":
     import uvicorn
