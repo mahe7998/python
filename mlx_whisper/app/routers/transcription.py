@@ -425,15 +425,15 @@ async def delete_transcription(
         if not transcription:
             raise HTTPException(status_code=404, detail="Transcription not found")
 
-        # Copy to deleted_transcriptions table
+        # Copy to deleted_transcriptions table (only keep current content, not history)
         deleted = DeletedTranscription(
             id=transcription.id,
             created_at=transcription.created_at,
             updated_at=transcription.updated_at,
             title=transcription.title,
-            content_md=transcription.content_md,
-            current_content_md=transcription.current_content_md,
-            current_diff_id=transcription.current_diff_id,
+            content_md=transcription.current_content_md,  # Save latest version as original
+            current_content_md=transcription.current_content_md,  # Save latest version
+            current_diff_id=None,  # Don't keep diff reference
             last_modified_at=transcription.last_modified_at,
             audio_file_path=transcription.audio_file_path,
             duration_seconds=transcription.duration_seconds,
@@ -445,7 +445,20 @@ async def delete_transcription(
         )
         db.add(deleted)
 
-        # Delete from transcriptions (diffs will cascade delete)
+        # Clear current_diff_id to avoid circular foreign key constraint
+        transcription.current_diff_id = None
+        await db.flush()
+
+        # Explicitly delete all diffs first (CASCADE not working as expected)
+        result = await db.execute(
+            select(TranscriptionDiff).where(TranscriptionDiff.transcription_id == transcription_id)
+        )
+        diffs = result.scalars().all()
+        for diff in diffs:
+            await db.delete(diff)
+        await db.flush()
+
+        # Now delete the transcription
         await db.delete(transcription)
 
         await db.commit()
