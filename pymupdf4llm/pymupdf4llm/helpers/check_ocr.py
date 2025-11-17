@@ -184,9 +184,6 @@ def should_ocr_page(
 
     if decision["has_text"]:
         # early exit if any text exists
-        print(
-            f"{decision['has_text']=}, {decision['readable_text']=}, {decision['should_ocr']=}"
-        )
         return decision
 
     # Check for image coverage
