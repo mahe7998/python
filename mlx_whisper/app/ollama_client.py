@@ -129,23 +129,31 @@ class OllamaClient:
         )
         return await self.rewrite_text(text, instruction, model)
 
-    async def summarize(self, text: str, model: Optional[str] = None) -> str:
+    async def summarize(self, text: str, model: Optional[str] = None, max_length: int = 100) -> str:
         """
         Create a concise summary of text
 
         Args:
             text: Text to summarize
             model: Model to use
+            max_length: Maximum length of summary in characters (default: 100)
 
         Returns:
-            Summary of the text
+            Summary of the text (limited to max_length characters)
         """
         instruction = (
-            "Create a concise summary of the following text. "
-            "Capture the key points and main ideas. Keep it brief but informative. "
-            "Only output the summary, nothing else."
+            f"Create a very concise summary of the following text in maximum {max_length} characters. "
+            f"Capture the key points and main ideas in a single phrase or sentence. "
+            f"IMPORTANT: Your response must be {max_length} characters or less. "
+            f"Only output the summary, nothing else."
         )
-        return await self.rewrite_text(text, instruction, model)
+        summary = await self.rewrite_text(text, instruction, model)
+
+        # Enforce character limit (in case LLM doesn't follow)
+        if len(summary) > max_length:
+            summary = summary[:max_length - 3] + "..."
+
+        return summary
 
     async def improve_text(self, text: str, model: Optional[str] = None) -> str:
         """
