@@ -6,7 +6,7 @@ setup_py_cwd = os.path.dirname(__file__)
 with open(os.path.join(setup_py_cwd, "README.md"), encoding="utf-8") as f:
     readme = f.read()
 
-version = "0.2.0"
+version = "0.2.1"
 
 classifiers = [
     "Development Status :: 5 - Production/Stable",

@@ -45,26 +45,17 @@ import pymupdf
 from pymupdf import mupdf
 from pymupdf4llm.helpers.get_text_lines import get_raw_lines, is_white
 from pymupdf4llm.helpers.multi_column import column_boxes
-from pymupdf4llm.helpers.progress import ProgressBar
+from pymupdf4llm.helpers.utils import BULLETS
+
+try:
+    from tqdm import tqdm as ProgressBar
+except ImportError:
+    from pymupdf4llm.helpers.progress import ProgressBar
 
 pymupdf.TOOLS.unset_quad_corrections(True)
 
-# Characters recognized as bullets when starting a line.
-bullet = tuple(
-    [
-        "- ",
-        "* ",
-        "> ",
-        chr(0xB6),
-        chr(0xB7),
-        chr(8224),
-        chr(8225),
-        chr(8226),
-        chr(0xF0A7),
-        chr(0xF0B7),
-    ]
-    + list(map(chr, range(9632, 9680)))
-)
+# Characters assumed as bullets when starting a line.
+bullet = tuple(BULLETS | {"- ", "* ", "> "})
 
 GRAPHICS_TEXT = "\n![](%s)\n"
 
@@ -1116,16 +1107,16 @@ def to_markdown(
             # layout analysis. Treat whole page as one text block.
             text_rects = [parms.clip]
         else:
-        text_rects = column_boxes(
-            parms.page,
-            paths=parms.actual_paths,
-            no_image_text=not force_text,
-            textpage=parms.textpage,
-            avoid=parms.tab_rects0 + parms.vg_clusters0,
-            footer_margin=margins[3],
-            header_margin=margins[1],
-            ignore_images=IGNORE_IMAGES,
-        )
+            text_rects = column_boxes(
+                parms.page,
+                paths=parms.actual_paths,
+                no_image_text=not force_text,
+                textpage=parms.textpage,
+                avoid=parms.tab_rects0 + parms.vg_clusters0,
+                footer_margin=margins[3],
+                header_margin=margins[1],
+                ignore_images=IGNORE_IMAGES,
+            )
 
         """
         ------------------------------------------------------------------

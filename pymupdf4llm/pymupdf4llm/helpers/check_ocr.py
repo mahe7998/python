@@ -1,28 +1,42 @@
-import pymupdf  # PyMuPDF
-import numpy as np
 import cv2
+import numpy as np
+import pymupdf  # PyMuPDF
+from pymupdf4llm.helpers.utils import WHITE_CHARS
 
 
-WHITE_CHARS = set(
-    [chr(i) for i in range(33)]
-    + [
-        "\u00a0",  # Non-breaking space
-        "\u2000",  # En quad
-        "\u2001",  # Em quad
-        "\u2002",  # En space
-        "\u2003",  # Em space
-        "\u2004",  # Three-per-em space
-        "\u2005",  # Four-per-em space
-        "\u2006",  # Six-per-em space
-        "\u2007",  # Figure space
-        "\u2008",  # Punctuation space
-        "\u2009",  # Thin space
-        "\u200a",  # Hair space
-        "\u202f",  # Narrow no-break space
-        "\u205f",  # Medium mathematical space
-        "\u3000",  # Ideographic space
-    ]
-)
+def get_tessocr(page, bbox, dpi=300):
+    """Return OCR-ed span text using Tesseract.
+
+    Args:
+        page: pymupdf Page
+        bbox: pymupdf Rect or its sequence
+        dpi: resolution for OCR image
+    Returns:
+        The OCR-ed text of the bbox.
+    """
+    # Step 1: Make a high-resolution image of the bbox.
+    pix = page.get_pixmap(dpi=dpi, clip=bbox)
+    ocrpdf = pymupdf.open("pdf", pix.pdfocr_tobytes())
+    ocrpage = ocrpdf[0]
+    text = ocrpage.get_text()
+    text = text.replace("\n", " ").strip()
+    return text
+
+
+def repair_blocks(input_blocks, page):
+    repaired_blocks = []
+    for block in input_blocks:
+        if block["type"] == 0:  # text block
+            for line in block["lines"]:
+                for span in line["spans"]:
+                    if not chr(0xFFFD) in span["text"]:
+                        continue
+                    text = get_tessocr(page, span["bbox"])
+                    span["text"] = text
+            repaired_blocks.append(block)
+        else:
+            repaired_blocks.append(block)
+    return repaired_blocks
 
 
 def detect_qr_codes(img):
@@ -152,23 +166,38 @@ def should_ocr_page(
     # Check for text
     text = page.get_text(flags=0)
     decision["has_text"] = not WHITE_CHARS.issuperset(text)
-    if decision["has_text"]:
-        not_readable_count = len([c for c in text if c == chr(0xFFFD)])
-        readability = 1 - not_readable_count / len(text)
-        decision["readable_text"] = readability >= text_readability_thresh
 
     all_text_bboxes = [b for b in page.get_bboxlog() if "text" in b[0]]
     ocr_text_bboxes = [b for b in all_text_bboxes if b[0] == "ignore-text"]
     decision["has_ocr_text"] = bool(ocr_text_bboxes)
+
+    if decision["has_text"]:
+        unreadable_count = len([c for c in text if c == chr(0xFFFD)])
+        readability = 1 - unreadable_count / len(text)
+        decision["readable_text"] = readability >= text_readability_thresh
+
+    if decision["has_text"] and not decision["readable_text"]:
+        decision["should_ocr"] = True
+        decision["image"], decision["transform"], decision["pixmap"] = get_page_image(
+            page, dpi=dpi
+        )
+
+    if decision["has_text"]:
+        # early exit if any text exists
+        print(
+            f"{decision['has_text']=}, {decision['readable_text']=}, {decision['should_ocr']=}"
+        )
+        return decision
+
     # Check for image coverage
-    image_rects=[page_rect&img["bbox"] for img in page.get_image_info()]
-    image_rect=pymupdf.EMPTY_RECT()
+    image_rects = [page_rect & img["bbox"] for img in page.get_image_info()]
+    image_rect = pymupdf.EMPTY_RECT()
     for r in image_rects:
-        image_rect|=r
-    image_area=abs(image_rect)
+        image_rect |= r
+    image_area = abs(image_rect)
     if image_area:
         images_cover = image_area / page_area
-    else:        
+    else:
         images_cover = 0.0
     decision["image_covers_page"] = images_cover >= image_coverage_thresh
 
@@ -189,16 +218,11 @@ def should_ocr_page(
 
     # Final decision
     if (
-        1
-        and not decision["has_text"]
-        and not decision["readable_text"]
-        and (
-            0
-            or decision["image_covers_page"]
-            or decision["has_vector_drawings"]
-            or decision["edge_density"] > edge_thresh
-        )
+        0
+        or decision["image_covers_page"]
+        or decision["has_vector_drawings"]
+        or decision["edge_density"] > edge_thresh
     ):
         decision["should_ocr"] = True
-    
+
     return decision
