@@ -130,7 +130,7 @@ def is_superscripted(line):
         return True
     if len(spans) < 2:  # single span line: skip
         return False
-    if spans0["origin"][1] < spans[1]["origin"][1] and span0["size"] < spans[1]["size"]:
+    if span0["origin"][1] < spans[1]["origin"][1] and span0["size"] < spans[1]["size"]:
         return True
     return False
 
