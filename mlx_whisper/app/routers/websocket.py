@@ -17,6 +17,7 @@ import io
 
 from app.whisper_service import get_whisper_service
 from app.models import TranscriptionSegment
+from app.wav_utils import create_wav_header, update_wav_header, get_wav_data_size
 
 logger = logging.getLogger(__name__)
 
@@ -312,40 +313,41 @@ def align_and_deduplicate_text(previous_text: str, new_text: str, overlap_thresh
 class AudioBuffer:
     """
     Buffer for accumulating audio chunks with ffmpeg-based sliding window transcription
+    Accumulates WebM chunks into a single file, extracts time ranges for transcription
     """
 
-    def __init__(self, sample_rate: int = 16000, audio_dir: Path = None):
-        self.chunks: List[tuple[bytes, float]] = []  # Store (audio_data, duration) tuples
+    def __init__(self, sample_rate: int = 16000, audio_dir: Path = None, session_id: str = None):
         self.sample_rate = sample_rate
         self.total_duration = 0.0  # Duration since last transcription trigger
         self.absolute_duration = 0.0  # Total duration of all audio
-        self.chunk_duration_threshold = 4.0  # Transcribe every 4 seconds
-        self.window_seconds = 6.0  # Only transcribe last 6 seconds (using ffmpeg)
-        self.max_buffer_seconds = 300.0  # Keep max 5 minutes in memory
-        self.overlap_seconds = 2.0  # 2 seconds overlap (6s window - 4s trigger = 2s overlap)
+        self.chunk_duration_threshold = 6.0  # Transcribe every 6 seconds
+        self.window_seconds = 9.0  # Only transcribe last 9 seconds (using ffmpeg)
         self.last_transcription_text = ""  # Store last transcription for deduplication
         self.audio_dir = audio_dir or Path.home() / "projects" / "python" / "mlx_whisper" / "audio"
-        self._lock = asyncio.Lock()  # Prevent concurrent access to chunks
+        self._lock = asyncio.Lock()  # Prevent concurrent access to file
+        self.session_id = session_id
+        self.webm_path = None  # Path to the growing WebM file
+        if session_id:
+            self.webm_path = self.audio_dir / f"{session_id}_recording.webm"
 
     async def add_chunk(self, audio_data: bytes, duration: float):
         """
-        Add audio chunk to buffer and cleanup old chunks
+        Append WebM chunk bytes to growing WebM file
 
         Args:
-            audio_data: Audio bytes
+            audio_data: WebM audio bytes (streaming format)
             duration: Duration of chunk in seconds
         """
         async with self._lock:
-            self.chunks.append((audio_data, duration))
+            # Append WebM bytes to the growing file
+            with open(self.webm_path, 'ab') as f:
+                f.write(audio_data)
+
+            # Update duration tracking
             self.total_duration += duration
             self.absolute_duration += duration
 
-            # Cleanup old chunks to prevent unlimited memory growth (keep last 5 minutes)
-            total_buffered = sum(d for _, d in self.chunks)
-            while total_buffered > self.max_buffer_seconds and len(self.chunks) > 10:
-                _, removed_duration = self.chunks.pop(0)
-                total_buffered -= removed_duration
-                logger.info(f"Removed old chunk ({removed_duration}s), buffer now: {total_buffered:.1f}s")
+            logger.info(f"Appended {len(audio_data)} bytes WebM, total duration: {self.absolute_duration:.1f}s")
 
     def should_transcribe(self) -> bool:
         """
@@ -367,74 +369,51 @@ class AudioBuffer:
         Returns:
             Path to the extracted audio file (last window_seconds only)
         """
-        # Make a snapshot of chunks while holding the lock
         async with self._lock:
-            if not self.chunks:
+            # Check if WebM file exists
+            if not self.webm_path or not self.webm_path.exists():
                 return None
 
-            # Copy chunks data and duration for processing
-            chunks_snapshot = list(self.chunks)  # Make a copy
+            total_duration = self.absolute_duration
 
-        # Process the snapshot (without holding the lock)
-        # Save full audio file with all chunks (valid WebM with header)
-        full_path = self.audio_dir / f"{session_id}_full_temp.webm"
-        combined = b"".join(audio_data for audio_data, _ in chunks_snapshot)
+        # Output will be WAV format (convert from WebM)
+        output_path = self.audio_dir / f"{session_id}_chunk{chunk_counter}.wav"
 
-        with open(full_path, "wb") as f:
-            f.write(combined)
-
-        # Calculate start time for sliding window (last N seconds)
-        total_duration = sum(d for _, d in chunks_snapshot)
-
-        # If total duration is less than window, transcribe all
+        # If total duration is less than window, extract all
         if total_duration <= self.window_seconds:
-            output_path = self.audio_dir / f"{session_id}_chunk{chunk_counter}.webm"
-            # Just copy the full file
-            with open(output_path, "wb") as f:
-                f.write(combined)
-            # Cleanup temp file
-            full_path.unlink(missing_ok=True)
-            return str(output_path)
-
-        # Extract last window_seconds using ffmpeg
-        start_time = max(0, total_duration - self.window_seconds)
-        output_path = self.audio_dir / f"{session_id}_chunk{chunk_counter}.webm"
+            start_time = 0
+            duration = total_duration
+        else:
+            # Extract last window_seconds
+            start_time = max(0, total_duration - self.window_seconds)
+            duration = self.window_seconds
 
         try:
-            # Use ffmpeg to extract the sliding window
+            # Use ffmpeg to extract the sliding window from WebM and convert to WAV
             result = subprocess.run([
                 'ffmpeg', '-y',  # Overwrite output file
-                '-i', str(full_path),
+                '-i', str(self.webm_path),
                 '-ss', str(start_time),  # Start time
-                '-t', str(self.window_seconds),  # Duration
-                '-c', 'copy',  # Copy codec (no re-encoding, fast!)
+                '-t', str(duration),  # Duration
+                '-ar', str(self.sample_rate),  # Sample rate
+                '-ac', '1',  # Mono
                 '-loglevel', 'error',  # Only show errors
                 str(output_path)
-            ], capture_output=True, text=True, timeout=10)
+            ], capture_output=True, timeout=10)
 
             if result.returncode != 0:
-                logger.error(f"ffmpeg extraction failed: {result.stderr}")
-                # Fallback: use full file
-                with open(output_path, "wb") as f:
-                    f.write(combined)
-            else:
-                logger.info(f"Extracted sliding window: {start_time:.1f}s to {start_time + self.window_seconds:.1f}s")
+                logger.error(f"ffmpeg extraction failed: {result.stderr.decode()}")
+                return None
+
+            logger.info(f"Extracted sliding window: {start_time:.1f}s to {start_time + duration:.1f}s from WebM")
+            return str(output_path)
 
         except subprocess.TimeoutExpired:
             logger.error("ffmpeg extraction timeout")
-            # Fallback: use full file
-            with open(output_path, "wb") as f:
-                f.write(combined)
+            return None
         except Exception as e:
             logger.error(f"ffmpeg extraction error: {e}")
-            # Fallback: use full file
-            with open(output_path, "wb") as f:
-                f.write(combined)
-        finally:
-            # Cleanup temp file
-            full_path.unlink(missing_ok=True)
-
-        return str(output_path)
+            return None
 
     def mark_transcribed(self, transcription_text: str):
         """
@@ -449,10 +428,14 @@ class AudioBuffer:
 
     def clear(self):
         """Clear buffer for new recording session"""
-        self.chunks = []
         self.total_duration = 0.0
         self.absolute_duration = 0.0
         self.last_transcription_text = ""
+
+        # Delete WebM file if it exists
+        if self.webm_path and self.webm_path.exists():
+            self.webm_path.unlink()
+            logger.info(f"Deleted WebM file: {self.webm_path}")
 
 
 @router.websocket("/ws/transcribe")
@@ -478,8 +461,8 @@ async def websocket_transcribe(websocket: WebSocket):
     audio_dir = Path.home() / "projects" / "python" / "mlx_whisper" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
 
-    audio_buffer = AudioBuffer(audio_dir=audio_dir)
     session_id = str(uuid.uuid4())
+    audio_buffer = AudioBuffer(audio_dir=audio_dir, session_id=session_id)
     chunk_counter = 0  # Track unique filenames for each transcription
 
     try:
@@ -646,7 +629,9 @@ async def websocket_transcribe(websocket: WebSocket):
                     logger.info(f"Received audio chunk: {len(audio_bytes)} bytes, {duration}s")
 
                     # Check if we should transcribe
-                    if audio_buffer.should_transcribe():
+                    # Skip first transcription until we have at least window_seconds of audio
+                    # to avoid duplication at the beginning
+                    if audio_buffer.should_transcribe() and audio_buffer.absolute_duration >= audio_buffer.window_seconds:
                         await websocket.send_json({
                             "type": "status",
                             "message": "Transcribing..."
@@ -676,13 +661,23 @@ async def websocket_transcribe(websocket: WebSocket):
 
                             # Only send if there's actually new text
                             if new_text.strip():
+                                # Clean trailing punctuation (remove last char if not alphanumeric or space)
+                                cleaned_text = new_text.strip()
+                                if cleaned_text and not (cleaned_text[-1].isalnum() or cleaned_text[-1].isspace()):
+                                    cleaned_text = cleaned_text[:-1]
+
                                 # Create simplified segments without speaker info
                                 # Find which original segments contain the new text
                                 new_segments = []
                                 for seg in segments:
-                                    if seg.text.strip() and seg.text.strip() in new_text:
+                                    seg_text = seg.text.strip()
+                                    # Clean trailing punctuation from segment text too
+                                    if seg_text and not (seg_text[-1].isalnum() or seg_text[-1].isspace()):
+                                        seg_text = seg_text[:-1]
+
+                                    if seg_text and seg_text in cleaned_text:
                                         new_segments.append({
-                                            "text": seg.text.strip(),
+                                            "text": seg_text,
                                             "start": seg.start,
                                             "end": seg.end,
                                         })
@@ -690,7 +685,7 @@ async def websocket_transcribe(websocket: WebSocket):
                                 # If no segments matched, send the new text as a single segment
                                 if not new_segments:
                                     new_segments = [{
-                                        "text": new_text.strip(),
+                                        "text": cleaned_text,
                                         "start": max(0, audio_buffer.absolute_duration - audio_buffer.total_duration),
                                         "end": audio_buffer.absolute_duration,
                                     }]
@@ -699,7 +694,7 @@ async def websocket_transcribe(websocket: WebSocket):
                                     "type": "transcription",
                                     "segments": new_segments,
                                     "streaming": True,
-                                    "text": new_text.strip(),
+                                    "text": cleaned_text,
                                 })
 
                                 logger.info(f"Sent streaming transcription: {len(new_segments)} segments, new text: '{new_text[:50]}...'")
@@ -716,6 +711,11 @@ async def websocket_transcribe(websocket: WebSocket):
                                 "type": "error",
                                 "message": f"Transcription failed: {str(e)}"
                             })
+                        finally:
+                            # Clean up temporary extraction file
+                            if audio_path and Path(audio_path).exists():
+                                Path(audio_path).unlink()
+                                logger.info(f"Deleted temporary extraction file: {audio_path}")
 
                 except Exception as e:
                     logger.error(f"Error processing audio chunk: {e}")
@@ -736,7 +736,7 @@ async def websocket_transcribe(websocket: WebSocket):
                 # Process any remaining audio in buffer
                 logger.info("End recording signal received")
 
-                if audio_buffer.chunks:
+                if audio_buffer.webm_path and audio_buffer.webm_path.exists():
                     await websocket.send_json({
                         "type": "status",
                         "message": "Processing final audio..."
@@ -771,12 +771,22 @@ async def websocket_transcribe(websocket: WebSocket):
 
                             # Send final transcription message (with new text if any)
                             if new_text.strip():
+                                # Clean trailing punctuation (remove last char if not alphanumeric or space)
+                                cleaned_text = new_text.strip()
+                                if cleaned_text and not (cleaned_text[-1].isalnum() or cleaned_text[-1].isspace()):
+                                    cleaned_text = cleaned_text[:-1]
+
                                 # Create simplified segments without speaker info
                                 new_segments = []
                                 for seg in segments:
-                                    if seg.text.strip() and seg.text.strip() in new_text:
+                                    seg_text = seg.text.strip()
+                                    # Clean trailing punctuation from segment text too
+                                    if seg_text and not (seg_text[-1].isalnum() or seg_text[-1].isspace()):
+                                        seg_text = seg_text[:-1]
+
+                                    if seg_text and seg_text in cleaned_text:
                                         new_segments.append({
-                                            "text": seg.text.strip(),
+                                            "text": seg_text,
                                             "start": seg.start,
                                             "end": seg.end,
                                         })
@@ -784,7 +794,7 @@ async def websocket_transcribe(websocket: WebSocket):
                                 # If no segments matched, send the new text as a single segment
                                 if not new_segments:
                                     new_segments = [{
-                                        "text": new_text.strip(),
+                                        "text": cleaned_text,
                                         "start": max(0, audio_buffer.absolute_duration - audio_buffer.total_duration),
                                         "end": audio_buffer.absolute_duration,
                                     }]
@@ -794,7 +804,7 @@ async def websocket_transcribe(websocket: WebSocket):
                                     "segments": new_segments,
                                     "final": True,
                                     "streaming": False,
-                                    "text": new_text.strip(),
+                                    "text": cleaned_text,
                                 })
 
                                 logger.info(f"Sent final transcription: {len(new_segments)} segments, new text: '{new_text[:50]}...'")
@@ -815,6 +825,11 @@ async def websocket_transcribe(websocket: WebSocket):
                                 "type": "error",
                                 "message": f"Final transcription failed: {str(e)}"
                             })
+                        finally:
+                            # Clean up temporary extraction file
+                            if audio_path and Path(audio_path).exists():
+                                Path(audio_path).unlink()
+                                logger.info(f"Deleted temporary final extraction file: {audio_path}")
 
                 # Send completion message
                 await websocket.send_json({
