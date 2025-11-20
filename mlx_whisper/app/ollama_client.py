@@ -51,9 +51,23 @@ class OllamaClient:
         Returns:
             List of text chunks
         """
-        # Split into sentences (at periods followed by space or end of string)
+        # Split into sentences using a more careful approach
+        # Match sentences ending with period (including cases like "50%.")
         import re
-        sentences = re.split(r'\.(?:\s+|$)', text)
+        # Split on period+space or period+end, but capture what comes before the period
+        sentence_pattern = r'([^.]+\.)\s*'
+        sentences = re.findall(sentence_pattern, text)
+
+        # If no sentences found (no periods), return the whole text
+        if not sentences:
+            return [text]
+
+        # Also check if there's remaining text after the last period
+        last_period_pos = text.rfind('.')
+        if last_period_pos >= 0 and last_period_pos < len(text) - 1:
+            remaining = text[last_period_pos + 1:].strip()
+            if remaining:
+                sentences.append(remaining)
 
         chunks = []
         current_chunk = []
@@ -64,9 +78,7 @@ class OllamaClient:
             if not sentence:
                 continue
 
-            # Add period back (except for last sentence if it didn't have one)
-            sentence_with_period = sentence + '.'
-            sentence_words = len(sentence_with_period.split())
+            sentence_words = len(sentence.split())
 
             # If adding this sentence would exceed limit, start new chunk
             if current_word_count + sentence_words > max_words and current_chunk:
@@ -74,7 +86,7 @@ class OllamaClient:
                 current_chunk = []
                 current_word_count = 0
 
-            current_chunk.append(sentence_with_period)
+            current_chunk.append(sentence)
             current_word_count += sentence_words
 
         # Add remaining chunk

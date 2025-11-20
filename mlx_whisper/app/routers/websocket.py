@@ -320,6 +320,7 @@ class AudioBuffer:
         self.sample_rate = sample_rate
         self.total_duration = 0.0  # Duration since last transcription trigger
         self.absolute_duration = 0.0  # Total duration of all audio
+        self.last_transcribed_position = 0.0  # Track the last position transcribed (for final extraction)
         self.chunk_duration_threshold = 6.0  # Transcribe every 6 seconds
         self.window_seconds = 9.0  # Only transcribe last 9 seconds (using ffmpeg)
         self.last_transcription_text = ""  # Store last transcription for deduplication
@@ -415,6 +416,109 @@ class AudioBuffer:
             logger.error(f"ffmpeg extraction error: {e}")
             return None
 
+    async def extract_complete_audio(self, session_id: str) -> str:
+        """
+        Extract only the remaining untranscribed audio from WebM to WAV for final transcription.
+        This ensures we only transcribe the end portion that wasn't covered by sliding window.
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            Path to the extracted remaining audio file, or None if extraction fails
+        """
+        async with self._lock:
+            # Check if WebM file exists
+            if not self.webm_path or not self.webm_path.exists():
+                logger.error(f"WebM file not found for session {session_id}")
+                return None
+
+            total_duration = self.absolute_duration
+            start_position = self.last_transcribed_position
+
+        # Calculate the remaining duration to transcribe
+        remaining_duration = total_duration - start_position
+
+        # If there's less than 0.5 seconds remaining, skip it
+        if remaining_duration < 0.5:
+            logger.info(f"Only {remaining_duration:.1f}s remaining, skipping final transcription")
+            return None
+
+        # Output will be WAV format (convert from WebM)
+        output_path = self.audio_dir / f"{session_id}_final.wav"
+
+        try:
+            # Use ffmpeg to extract only the remaining portion from WebM and convert to WAV
+            result = subprocess.run([
+                'ffmpeg', '-y',  # Overwrite output file
+                '-i', str(self.webm_path),
+                '-ss', str(start_position),  # Start from last transcribed position
+                '-t', str(remaining_duration),  # Extract only remaining duration
+                '-ar', str(self.sample_rate),  # Sample rate
+                '-ac', '1',  # Mono
+                '-loglevel', 'error',  # Only show errors
+                str(output_path)
+            ], capture_output=True, timeout=30)
+
+            if result.returncode != 0:
+                logger.error(f"ffmpeg final extraction failed: {result.stderr.decode()}")
+                return None
+
+            logger.info(f"Extracted final audio: {remaining_duration:.1f}s (from {start_position:.1f}s to {total_duration:.1f}s)")
+            return str(output_path)
+
+        except subprocess.TimeoutExpired:
+            logger.error("ffmpeg final extraction timeout")
+            return None
+        except Exception as e:
+            logger.error(f"ffmpeg final extraction error: {e}")
+            return None
+
+    async def fix_webm_duration(self):
+        """
+        Fix WebM file duration metadata using ffmpeg
+
+        MediaRecorder creates WebM files without duration metadata,
+        which prevents browsers from determining file length for seeking.
+        This decodes and re-encodes the file to add proper duration metadata.
+        """
+        if not self.webm_path or not self.webm_path.exists():
+            logger.warning("No WebM file to fix")
+            return
+
+        try:
+            # Create temporary output file
+            temp_output = self.webm_path.parent / f"{self.webm_path.stem}_fixed.webm"
+
+            # Decode and re-encode to add duration metadata
+            # We need to re-encode because simple remuxing doesn't work with MediaRecorder WebM files
+            result = subprocess.run([
+                'ffmpeg', '-y',
+                '-i', str(self.webm_path),
+                '-c:a', 'libopus',  # Re-encode audio as Opus
+                '-b:a', '128k',     # Audio bitrate
+                '-f', 'webm',       # Force WebM output format
+                '-loglevel', 'error',
+                str(temp_output)
+            ], capture_output=True, timeout=60)
+
+            if result.returncode != 0:
+                logger.error(f"ffmpeg WebM fix failed: {result.stderr.decode()}")
+                # Don't fail silently - keep original file
+                return
+
+            # Only replace if output file was created and has content
+            if temp_output.exists() and temp_output.stat().st_size > 0:
+                temp_output.replace(self.webm_path)
+                logger.info(f"Fixed WebM duration metadata: {self.webm_path}")
+            else:
+                logger.error(f"ffmpeg produced empty output file")
+
+        except subprocess.TimeoutExpired:
+            logger.error("ffmpeg WebM fix timeout")
+        except Exception as e:
+            logger.error(f"ffmpeg WebM fix error: {e}")
+
     def mark_transcribed(self, transcription_text: str):
         """
         Mark transcription as complete and reset trigger timer
@@ -423,6 +527,9 @@ class AudioBuffer:
             transcription_text: The transcribed text from this segment (for deduplication)
         """
         self.last_transcription_text = transcription_text
+        # Track the last position we transcribed, minus 2s overlap to capture partial words
+        # This ensures we don't miss word boundaries at the end
+        self.last_transcribed_position = max(0, self.absolute_duration - 2.0)
         # Reset the trigger timer to transcribe again after 5 more seconds
         self.total_duration = 0.0
 
@@ -430,12 +537,13 @@ class AudioBuffer:
         """Clear buffer for new recording session"""
         self.total_duration = 0.0
         self.absolute_duration = 0.0
+        self.last_transcribed_position = 0.0
         self.last_transcription_text = ""
 
-        # Delete WebM file if it exists
-        if self.webm_path and self.webm_path.exists():
-            self.webm_path.unlink()
-            logger.info(f"Deleted WebM file: {self.webm_path}")
+        # Keep WebM file for audio playback
+        # if self.webm_path and self.webm_path.exists():
+        #     self.webm_path.unlink()
+        #     logger.info(f"Deleted WebM file: {self.webm_path}")
 
 
 @router.websocket("/ws/transcribe")
@@ -652,10 +760,13 @@ async def websocket_transcribe(websocket: WebSocket):
                             # Extract full text from all segments
                             full_text = " ".join(seg.text.strip() for seg in segments if seg.text.strip())
 
+                            # Remove any trailing punctuation
+                            full_text_trimmed = full_text.rstrip('.,;:!?-')
+
                             # Deduplicate against previous transcription
                             new_text = align_and_deduplicate_text(
                                 audio_buffer.last_transcription_text,
-                                full_text,
+                                full_text_trimmed,
                                 overlap_threshold=15
                             )
 
@@ -712,10 +823,10 @@ async def websocket_transcribe(websocket: WebSocket):
                                 "message": f"Transcription failed: {str(e)}"
                             })
                         finally:
-                            # Clean up temporary extraction file
+                            # Clean up temporary WAV extraction files (keep WebM)
                             if audio_path and Path(audio_path).exists():
                                 Path(audio_path).unlink()
-                                logger.info(f"Deleted temporary extraction file: {audio_path}")
+                                logger.info(f"Deleted temporary WAV extraction file: {audio_path}")
 
                 except Exception as e:
                     logger.error(f"Error processing audio chunk: {e}")
@@ -737,16 +848,20 @@ async def websocket_transcribe(websocket: WebSocket):
                 logger.info("End recording signal received")
 
                 if audio_buffer.webm_path and audio_buffer.webm_path.exists():
+                    # Fix WebM duration metadata for proper seeking in browser
+                    await audio_buffer.fix_webm_duration()
+
                     await websocket.send_json({
                         "type": "status",
                         "message": "Processing final audio..."
                     })
 
-                    # Extract sliding window audio for final transcription
-                    audio_path = await audio_buffer.get_sliding_window_audio(session_id, 999)  # Use 999 for final
+                    # Extract COMPLETE audio for final transcription (not sliding window)
+                    # This ensures we capture all audio from the entire recording
+                    audio_path = await audio_buffer.extract_complete_audio(session_id)
 
                     if not audio_path:
-                        logger.error("Failed to extract final sliding window audio")
+                        logger.error("Failed to extract complete audio for final transcription")
                         # Send empty final message
                         await websocket.send_json({
                             "type": "transcription",
@@ -762,10 +877,13 @@ async def websocket_transcribe(websocket: WebSocket):
                             # Extract full text from all segments
                             full_text = " ".join(seg.text.strip() for seg in segments if seg.text.strip())
 
+                            # Remove any trailing punctuation
+                            full_text_trimmed = full_text.rstrip('.,;:!?-')
+
                             # Deduplicate against previous transcription
                             new_text = align_and_deduplicate_text(
                                 audio_buffer.last_transcription_text,
-                                full_text,
+                                full_text_trimmed,
                                 overlap_threshold=15
                             )
 
@@ -826,19 +944,26 @@ async def websocket_transcribe(websocket: WebSocket):
                                 "message": f"Final transcription failed: {str(e)}"
                             })
                         finally:
-                            # Clean up temporary extraction file
+                            # Clean up temporary WAV extraction files (keep WebM)
                             if audio_path and Path(audio_path).exists():
                                 Path(audio_path).unlink()
-                                logger.info(f"Deleted temporary final extraction file: {audio_path}")
+                                logger.info(f"Deleted temporary WAV extraction file: {audio_path}")
 
-                # Send completion message
+                # Send completion message with audio file URL
+                final_audio_url = None
+                if audio_buffer.webm_path and audio_buffer.webm_path.exists():
+                    # Keep the WebM file and send its path to frontend
+                    final_audio_url = f"/api/audio/{audio_buffer.webm_path.name}"
+                    logger.info(f"Final audio file available at: {final_audio_url}")
+
                 await websocket.send_json({
                     "type": "status",
-                    "message": "Recording completed. Transcription finished."
+                    "message": "Recording completed. Transcription finished.",
+                    "audio_url": final_audio_url
                 })
 
-                # Clear buffer for next recording session
-                audio_buffer.clear()
+                # Clear buffer for next recording session (but keep WebM file)
+                # audio_buffer.clear()
 
             elif message_type == "ping":
                 # Keepalive ping
