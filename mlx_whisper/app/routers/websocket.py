@@ -397,7 +397,7 @@ class AudioBuffer:
                 '-ss', str(start_time),  # Start time
                 '-t', str(duration),  # Duration
                 '-ar', str(self.sample_rate),  # Sample rate
-                '-ac', '1',  # Mono
+                '-ac', '2',  # Stereo (preserve channels for channel selection)
                 '-loglevel', 'error',  # Only show errors
                 str(output_path)
             ], capture_output=True, timeout=10)
@@ -455,7 +455,7 @@ class AudioBuffer:
                 '-ss', str(start_position),  # Start from last transcribed position
                 '-t', str(remaining_duration),  # Extract only remaining duration
                 '-ar', str(self.sample_rate),  # Sample rate
-                '-ac', '1',  # Mono
+                '-ac', '2',  # Stereo (preserve channels for channel selection)
                 '-loglevel', 'error',  # Only show errors
                 str(output_path)
             ], capture_output=True, timeout=30)
