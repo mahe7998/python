@@ -316,7 +316,7 @@ class AudioBuffer:
     Accumulates WebM chunks into a single file, extracts time ranges for transcription
     """
 
-    def __init__(self, sample_rate: int = 16000, audio_dir: Path = None, session_id: str = None):
+    def __init__(self, sample_rate: int = 16000, audio_dir: Path = None, session_id: str = None, channel_selection: str = 'both'):
         self.sample_rate = sample_rate
         self.total_duration = 0.0  # Duration since last transcription trigger
         self.absolute_duration = 0.0  # Total duration of all audio
@@ -328,6 +328,7 @@ class AudioBuffer:
         self._lock = asyncio.Lock()  # Prevent concurrent access to file
         self.session_id = session_id
         self.webm_path = None  # Path to the growing WebM file
+        self.channel_selection = channel_selection  # Audio channel selection ('left', 'right', or 'both')
         if session_id:
             self.webm_path = self.audio_dir / f"{session_id}_recording.webm"
 
@@ -390,17 +391,63 @@ class AudioBuffer:
             duration = self.window_seconds
 
         try:
-            # Use ffmpeg to extract the sliding window from WebM and convert to WAV
-            result = subprocess.run([
-                'ffmpeg', '-y',  # Overwrite output file
+            # Use TWO ffmpeg calls: first extract channel, then resample
+            # Step 1: Extract channel to temp file at original sample rate
+            temp_path = output_path.with_suffix('.temp.wav')
+
+            logger.info(f"=== TWO-STEP FFMPEG DEBUG ===")
+            logger.info(f"Channel selection: {self.channel_selection}")
+            logger.info(f"Temp path: {temp_path}")
+
+            ffmpeg_cmd1 = [
+                'ffmpeg', '-y',
                 '-i', str(self.webm_path),
-                '-ss', str(start_time),  # Start time
-                '-t', str(duration),  # Duration
-                '-ar', str(self.sample_rate),  # Sample rate
-                '-ac', '2',  # Stereo (preserve channels for channel selection)
-                '-loglevel', 'error',  # Only show errors
+                '-ss', str(start_time),
+                '-t', str(duration),
+            ]
+
+            # Add channel selection (no resampling yet)
+            if self.channel_selection == 'left':
+                # Extract left channel only
+                ffmpeg_cmd1.extend(['-af', 'pan=1c|c0=c0'])
+            elif self.channel_selection == 'right':
+                # Extract right channel only
+                ffmpeg_cmd1.extend(['-af', 'pan=1c|c0=c1'])
+            else:
+                # Mix both channels to mono
+                ffmpeg_cmd1.extend(['-af', 'pan=1c|c0=0.5*c0+0.5*c1'])
+
+            ffmpeg_cmd1.extend(['-loglevel', 'error', str(temp_path)])
+
+            logger.info(f"Step 1 command: {' '.join(ffmpeg_cmd1)}")
+            result = subprocess.run(ffmpeg_cmd1, capture_output=True, timeout=10)
+            logger.info(f"Step 1 complete, returncode: {result.returncode}, temp file exists: {temp_path.exists()}")
+
+            if result.returncode != 0:
+                logger.error(f"ffmpeg channel extraction failed: {result.stderr.decode()}")
+                raise RuntimeError(f"Channel extraction failed: {result.stderr.decode()}")
+
+            # Verify temp file was created before proceeding
+            if not temp_path.exists():
+                logger.error(f"Temp file was not created: {temp_path}")
+                raise RuntimeError(f"Temp file was not created: {temp_path}")
+
+            # Step 2: Resample to target sample rate (subprocess.run() waits for completion)
+            ffmpeg_cmd2 = [
+                'ffmpeg', '-y',
+                '-i', str(temp_path),
+                '-ar', str(self.sample_rate),
+                '-loglevel', 'error',
                 str(output_path)
-            ], capture_output=True, timeout=10)
+            ]
+
+            logger.info(f"Step 2 command: {' '.join(ffmpeg_cmd2)}")
+            result = subprocess.run(ffmpeg_cmd2, capture_output=True, timeout=10)
+            logger.info(f"Step 2 complete, returncode: {result.returncode}, output file exists: {output_path.exists()}")
+
+            # Clean up temp file
+            temp_path.unlink(missing_ok=True)
+            logger.info(f"Temp file cleaned up")
 
             if result.returncode != 0:
                 logger.error(f"ffmpeg extraction failed: {result.stderr.decode()}")
@@ -448,17 +495,63 @@ class AudioBuffer:
         output_path = self.audio_dir / f"{session_id}_final.wav"
 
         try:
-            # Use ffmpeg to extract only the remaining portion from WebM and convert to WAV
-            result = subprocess.run([
-                'ffmpeg', '-y',  # Overwrite output file
+            # Use TWO ffmpeg calls: first extract channel, then resample
+            # Step 1: Extract channel to temp file at original sample rate
+            temp_path = output_path.with_suffix('.temp.wav')
+
+            logger.info(f"=== FINAL EXTRACTION TWO-STEP FFMPEG DEBUG ===")
+            logger.info(f"Channel selection: {self.channel_selection}")
+            logger.info(f"Temp path: {temp_path}")
+
+            ffmpeg_cmd1 = [
+                'ffmpeg', '-y',
                 '-i', str(self.webm_path),
-                '-ss', str(start_position),  # Start from last transcribed position
-                '-t', str(remaining_duration),  # Extract only remaining duration
-                '-ar', str(self.sample_rate),  # Sample rate
-                '-ac', '2',  # Stereo (preserve channels for channel selection)
-                '-loglevel', 'error',  # Only show errors
+                '-ss', str(start_position),
+                '-t', str(remaining_duration),
+            ]
+
+            # Add channel selection (no resampling yet)
+            if self.channel_selection == 'left':
+                # Extract left channel only
+                ffmpeg_cmd1.extend(['-af', 'pan=1c|c0=c0'])
+            elif self.channel_selection == 'right':
+                # Extract right channel only
+                ffmpeg_cmd1.extend(['-af', 'pan=1c|c0=c1'])
+            else:
+                # Mix both channels to mono
+                ffmpeg_cmd1.extend(['-af', 'pan=1c|c0=0.5*c0+0.5*c1'])
+
+            ffmpeg_cmd1.extend(['-loglevel', 'error', str(temp_path)])
+
+            logger.info(f"FINAL Step 1 command: {' '.join(ffmpeg_cmd1)}")
+            result = subprocess.run(ffmpeg_cmd1, capture_output=True, timeout=30)
+            logger.info(f"FINAL Step 1 complete, returncode: {result.returncode}, temp file exists: {temp_path.exists()}")
+
+            if result.returncode != 0:
+                logger.error(f"ffmpeg channel extraction failed: {result.stderr.decode()}")
+                raise RuntimeError(f"Channel extraction failed: {result.stderr.decode()}")
+
+            # Verify temp file was created before proceeding
+            if not temp_path.exists():
+                logger.error(f"Temp file was not created: {temp_path}")
+                raise RuntimeError(f"Temp file was not created: {temp_path}")
+
+            # Step 2: Resample to target sample rate (subprocess.run() waits for completion)
+            ffmpeg_cmd2 = [
+                'ffmpeg', '-y',
+                '-i', str(temp_path),
+                '-ar', str(self.sample_rate),
+                '-loglevel', 'error',
                 str(output_path)
-            ], capture_output=True, timeout=30)
+            ]
+
+            logger.info(f"FINAL Step 2 command: {' '.join(ffmpeg_cmd2)}")
+            result = subprocess.run(ffmpeg_cmd2, capture_output=True, timeout=30)
+            logger.info(f"FINAL Step 2 complete, returncode: {result.returncode}, output file exists: {output_path.exists()}")
+
+            # Clean up temp file
+            temp_path.unlink(missing_ok=True)
+            logger.info(f"FINAL Temp file cleaned up")
 
             if result.returncode != 0:
                 logger.error(f"ffmpeg final extraction failed: {result.stderr.decode()}")
@@ -725,7 +818,11 @@ async def websocket_transcribe(websocket: WebSocket):
                     channel = "both"
 
                 selected_channel = channel
-                logger.info(f"Client selected channel: {channel}")
+                # Update audio buffer's channel selection
+                audio_buffer.channel_selection = channel
+                logger.info(f"[CHANNEL DEBUG] Client selected channel: {channel}")
+                logger.info(f"[CHANNEL DEBUG] selected_channel variable set to: {selected_channel}")
+                logger.info(f"[CHANNEL DEBUG] audio_buffer.channel_selection set to: {audio_buffer.channel_selection}")
 
                 await websocket.send_json({
                     "type": "status",
@@ -843,9 +940,12 @@ async def websocket_transcribe(websocket: WebSocket):
                             })
                         finally:
                             # Clean up temporary WAV extraction files (keep WebM)
+                            # DISABLED: Keep WAV files for inspection
+                            # if audio_path and Path(audio_path).exists():
+                            #     Path(audio_path).unlink()
+                            #     logger.info(f"Deleted temporary WAV extraction file: {audio_path}")
                             if audio_path and Path(audio_path).exists():
-                                Path(audio_path).unlink()
-                                logger.info(f"Deleted temporary WAV extraction file: {audio_path}")
+                                logger.info(f"Kept temporary WAV extraction file for inspection: {audio_path}")
 
                 except Exception as e:
                     logger.error(f"Error processing audio chunk: {e}")
@@ -964,9 +1064,12 @@ async def websocket_transcribe(websocket: WebSocket):
                             })
                         finally:
                             # Clean up temporary WAV extraction files (keep WebM)
+                            # DISABLED: Keep WAV files for inspection
+                            # if audio_path and Path(audio_path).exists():
+                            #     Path(audio_path).unlink()
+                            #     logger.info(f"Deleted temporary WAV extraction file: {audio_path}")
                             if audio_path and Path(audio_path).exists():
-                                Path(audio_path).unlink()
-                                logger.info(f"Deleted temporary WAV extraction file: {audio_path}")
+                                logger.info(f"Kept temporary WAV extraction file for inspection: {audio_path}")
 
                 # Send completion message with audio file URL
                 final_audio_url = None
