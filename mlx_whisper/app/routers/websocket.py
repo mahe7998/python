@@ -565,6 +565,7 @@ async def websocket_transcribe(websocket: WebSocket):
     # Will be set when client sends model selection
     whisper_service = None
     selected_model = None
+    selected_channel = None  # Will be set when client sends channel selection ('left', 'right', 'both', or None)
     # Use host-based audio directory (same as whisper_service.py)
     audio_dir = Path.home() / "projects" / "python" / "mlx_whisper" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
@@ -713,6 +714,24 @@ async def websocket_transcribe(websocket: WebSocket):
                         "message": f"Failed to load model: {str(e)}"
                     })
 
+            elif message_type == "set_channel":
+                # Set the audio channel for this session
+                channel = data.get("channel", "both")
+
+                # Validate channel selection
+                valid_channels = ["left", "right", "both"]
+                if channel not in valid_channels:
+                    logger.warning(f"Invalid channel selection: {channel}, defaulting to 'both'")
+                    channel = "both"
+
+                selected_channel = channel
+                logger.info(f"Client selected channel: {channel}")
+
+                await websocket.send_json({
+                    "type": "status",
+                    "message": f"Channel set to: {channel}"
+                })
+
             elif message_type == "audio_chunk":
                 # Ensure model is selected
                 if whisper_service is None:
@@ -755,7 +774,7 @@ async def websocket_transcribe(websocket: WebSocket):
 
                         # Transcribe the sliding window
                         try:
-                            segments = await whisper_service.transcribe_audio(audio_path)
+                            segments = await whisper_service.transcribe_audio(audio_path, channel=selected_channel)
 
                             # Extract full text from all segments
                             full_text = " ".join(seg.text.strip() for seg in segments if seg.text.strip())
@@ -872,7 +891,7 @@ async def websocket_transcribe(websocket: WebSocket):
                         })
                     else:
                         try:
-                            segments = await whisper_service.transcribe_audio(audio_path)
+                            segments = await whisper_service.transcribe_audio(audio_path, channel=selected_channel)
 
                             # Extract full text from all segments
                             full_text = " ".join(seg.text.strip() for seg in segments if seg.text.strip())
