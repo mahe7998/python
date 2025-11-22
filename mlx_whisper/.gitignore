@@ -1,0 +1,16 @@
+# Virtual Environment
+venv/
+
+# Environment Variables (Secrets)
+.env
+
+# System Files
+.DS_Store
+**/.DS_Store
+
+# Python Bytecode Cache
+__pycache__/
+*.pyc
+
+# Audio Recordings (Data)
+audio/

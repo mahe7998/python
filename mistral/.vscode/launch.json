@@ -1,0 +1,17 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: ColPali Persist",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/test_mistral.py",
+            "console": "integratedTerminal",
+            "args": [],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"ß
+            },
+            "justMyCode": true
+        }
+    ]
+}
