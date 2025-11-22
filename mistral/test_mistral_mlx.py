@@ -10,12 +10,18 @@ For smaller models that fit in less memory, you can change the model_name below.
 
 import os
 
-# Enable faster, more reliable downloads using hf_transfer
-# This avoids issues with the default parallel download mechanism
-os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+# Disable HuggingFace hub caching for more reliable downloads
+# This downloads directly without the parallel mechanism that can stall
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 
+from pathlib import Path
+from huggingface_hub import snapshot_download
 from mlx_lm import load, generate
 import mlx.core as mx
+
+# Local directory to store models (avoids cache issues)
+LOCAL_MODEL_DIR = Path(__file__).parent / "models"
 
 # Choose a model - options:
 # - "mlx-community/Mistral-7B-Instruct-v0.3-4bit" (requires ~4GB RAM)
@@ -27,12 +33,36 @@ import mlx.core as mx
 MODEL_NAME = "mlx-community/Mistral-7B-Instruct-v0.3-4bit"
 
 
+def download_model(model_name: str) -> str:
+    """Download model to local directory for more reliable downloads."""
+    local_path = LOCAL_MODEL_DIR / model_name.replace("/", "--")
+
+    if local_path.exists():
+        print(f"Model already downloaded at: {local_path}")
+        return str(local_path)
+
+    print(f"Downloading model to: {local_path}")
+    LOCAL_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Download without using cache symlinks
+    snapshot_download(
+        repo_id=model_name,
+        local_dir=str(local_path),
+        local_dir_use_symlinks=False,  # Disable symlinks for reliability
+    )
+
+    return str(local_path)
+
+
 def main():
     print(f"Loading model: {MODEL_NAME}")
     print("This may take a moment on first run (downloading model)...")
 
-    # Load model and tokenizer
-    model, tokenizer = load(MODEL_NAME)
+    # Download to local directory for reliability
+    local_path = download_model(MODEL_NAME)
+
+    # Load model and tokenizer from local path
+    model, tokenizer = load(local_path)
 
     print("Model loaded successfully!")
     print(f"Using device: Apple Silicon (MLX)")
