@@ -8,6 +8,12 @@ Usage:
 For smaller models that fit in less memory, you can change the model_name below.
 """
 
+import os
+
+# Enable faster, more reliable downloads using hf_transfer
+# This avoids issues with the default parallel download mechanism
+os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+
 from mlx_lm import load, generate
 import mlx.core as mx
 
