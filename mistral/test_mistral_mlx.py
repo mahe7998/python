@@ -1,150 +1,130 @@
 """
-Test Mistral models using Apple MLX framework.
-Optimized for Apple Silicon (M1, M2, M3, etc.)
+Test Mistral vision models using Apple MLX framework.
+Equivalent to test_mistral.py but optimized for Apple Silicon (M1, M2, M3, etc.)
 
 Usage:
     python test_mistral_mlx.py
-
-For smaller models that fit in less memory, you can change the model_name below.
 """
 
 import os
 
 # Disable HuggingFace hub caching for more reliable downloads
-# This downloads directly without the parallel mechanism that can stall
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 
 from pathlib import Path
-from huggingface_hub import snapshot_download
-from mlx_lm import load, generate
-import mlx.core as mx
+import subprocess
+import requests
+from PIL import Image
+from io import BytesIO
 
-# Local directory to store models (avoids cache issues)
-LOCAL_MODEL_DIR = Path(__file__).parent / "models"
+# Use HuggingFace's default cache directory
+LOCAL_MODEL_DIR = Path.home() / ".cache" / "huggingface" / "hub"
 
-# Choose a model - options:
-# - "mlx-community/Mistral-7B-Instruct-v0.3-4bit" (requires ~4GB RAM)
-# - "mlx-community/Mistral-7B-Instruct-v0.2-4bit" (requires ~4GB RAM)
-# - "mlx-community/Mistral-Small-24B-Instruct-2501-4bit" (requires ~14GB RAM)
-# - "mistralai/Mistral-7B-Instruct-v0.3" (requires ~14GB RAM, full precision)
+# Pixtral is Mistral's vision-language model
+# Using 4-bit quantized version for Apple Silicon
+MODEL_NAME = "mlx-community/pixtral-12b-4bit"
 
-# Default to a 4-bit quantized model that fits in most Macs
-MODEL_NAME = "mlx-community/Mistral-7B-Instruct-v0.3-4bit"
+# Files needed for the model
+MODEL_FILES = [
+    ".gitattributes",
+    "README.md",
+    "chat_template.json",
+    "config.json",
+    "model-00001-of-00002.safetensors",
+    "model-00002-of-00002.safetensors",
+    "model.safetensors.index.json",
+    "preprocessor_config.json",
+    "processor_config.json",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+]
 
 
 def download_model(model_name: str) -> str:
-    """Download model to local directory for more reliable downloads."""
-    local_path = LOCAL_MODEL_DIR / model_name.replace("/", "--")
+    """Download model to local directory using wget for reliable downloads."""
+    # HuggingFace uses "models--org--name" format
+    local_path = LOCAL_MODEL_DIR / f"models--{model_name.replace('/', '--')}" / "snapshots" / "main"
 
-    if local_path.exists():
+    if local_path.exists() and (local_path / "config.json").exists():
         print(f"Model already downloaded at: {local_path}")
         return str(local_path)
 
     print(f"Downloading model to: {local_path}")
-    LOCAL_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    local_path.mkdir(parents=True, exist_ok=True)
 
-    # Download without using cache symlinks
-    snapshot_download(
-        repo_id=model_name,
-        local_dir=str(local_path),
-        local_dir_use_symlinks=False,  # Disable symlinks for reliability
-    )
+    base_url = f"https://huggingface.co/{model_name}/resolve/main"
+
+    for filename in MODEL_FILES:
+        file_path = local_path / filename
+        if file_path.exists():
+            print(f"  Skipping {filename} (already exists)")
+            continue
+
+        url = f"{base_url}/{filename}"
+        print(f"  Downloading {filename}...")
+        result = subprocess.run(
+            ["wget", "-q", "--show-progress", "-O", str(file_path), url],
+            check=False,
+        )
+        if result.returncode != 0:
+            print(f"  Warning: Failed to download {filename}")
 
     return str(local_path)
 
 
 def main():
+    # Import mlx_vlm for vision-language models
+    from mlx_vlm import load, generate
+    from mlx_vlm.prompt_utils import apply_chat_template
+    from mlx_vlm.utils import load_config
+
     print(f"Loading model: {MODEL_NAME}")
     print("This may take a moment on first run (downloading model)...")
 
     # Download to local directory for reliability
     local_path = download_model(MODEL_NAME)
 
-    # Load model and tokenizer from local path
-    model, tokenizer = load(local_path)
+    # Load model and processor
+    model, processor = load(local_path)
+    config = load_config(local_path)
 
     print("Model loaded successfully!")
-    print(f"Using device: Apple Silicon (MLX)")
+    print("Using device: Apple Silicon (MLX)")
 
-    # Create a prompt
-    prompt = "Explain what machine learning is in simple terms."
+    # Download image (same as test_mistral.py)
+    url = "https://huggingface.co/datasets/patrickvonplaten/random_img/resolve/main/yosemite.png"
+    print(f"\nDownloading image from: {url}")
+    response = requests.get(url)
+    image = Image.open(BytesIO(response.content))
 
-    # Format for instruction-tuned model
-    messages = [
-        {"role": "user", "content": prompt}
-    ]
+    # Prompt similar to test_mistral.py
+    prompt = "The image shows a"
 
-    # Apply chat template if available
-    if hasattr(tokenizer, 'apply_chat_template'):
-        formatted_prompt = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
-        )
-    else:
-        formatted_prompt = f"[INST] {prompt} [/INST]"
+    # Apply chat template for the vision model
+    formatted_prompt = apply_chat_template(
+        processor, config, prompt, num_images=1
+    )
 
     print(f"\nPrompt: {prompt}")
     print("\nGenerating response...")
     print("-" * 50)
 
-    # Generate response
-    response = generate(
+    # Generate response with image (mlx_vlm expects a list of images)
+    output = generate(
         model,
-        tokenizer,
-        prompt=formatted_prompt,
+        processor,
+        formatted_prompt,
+        [image],
         max_tokens=256,
-        verbose=True,  # Shows generation speed
+        temperature=0.7,
+        verbose=True,
     )
 
     print("-" * 50)
-    print(f"\nResponse:\n{response}")
-
-
-def test_image_model():
-    """
-    Test multimodal model with image input.
-    Note: Requires a vision-capable model like LLaVA or Pixtral.
-    """
-    try:
-        from mlx_lm.models.pixtral import load as load_pixtral
-        import requests
-        from PIL import Image
-        from io import BytesIO
-
-        # Vision model - requires more memory
-        vision_model = "mlx-community/pixtral-12b-4bit"
-
-        print(f"Loading vision model: {vision_model}")
-        model, tokenizer = load(vision_model)
-
-        # Download test image
-        url = "https://huggingface.co/datasets/patrickvonplaten/random_img/resolve/main/yosemite.png"
-        response = requests.get(url)
-        image = Image.open(BytesIO(response.content))
-
-        prompt = "Describe this image in detail."
-
-        # Generate with image
-        response = generate(
-            model,
-            tokenizer,
-            prompt=f"[IMG]{prompt}",
-            max_tokens=256,
-            images=[image],
-        )
-
-        print(f"Response: {response}")
-
-    except ImportError as e:
-        print(f"Vision model not available: {e}")
-    except Exception as e:
-        print(f"Error with vision model: {e}")
+    print(f"\nResponse:\n{output}")
 
 
 if __name__ == "__main__":
     main()
-
-    # Uncomment to test vision model (requires more memory)
-    # test_image_model()
