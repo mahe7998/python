@@ -108,6 +108,8 @@ class TranscriptionUpdate(BaseModel):
     """Schema for updating an existing transcription"""
     title: Optional[str] = Field(None, min_length=1, max_length=255)
     content_md: Optional[str] = Field(None, min_length=1)
+    audio_file_path: Optional[str] = None
+    duration_seconds: Optional[float] = None
     speaker_map: Optional[Dict[str, str]] = None
     extra_metadata: Optional[Dict[str, Any]] = Field(None, serialization_alias='metadata')
     is_reviewed: Optional[bool] = None

@@ -391,63 +391,36 @@ class AudioBuffer:
             duration = self.window_seconds
 
         try:
-            # Use TWO ffmpeg calls: first extract channel, then resample
-            # Step 1: Extract channel to temp file at original sample rate
-            temp_path = output_path.with_suffix('.temp.wav')
-
-            logger.info(f"=== TWO-STEP FFMPEG DEBUG ===")
-            logger.info(f"Channel selection: {self.channel_selection}")
-            logger.info(f"Temp path: {temp_path}")
-
-            ffmpeg_cmd1 = [
+            # Use single ffmpeg call: extract channel with pan filter, then resample
+            # The order matters: pan filter extracts channel first, then -ar resamples
+            ffmpeg_cmd = [
                 'ffmpeg', '-y',
                 '-i', str(self.webm_path),
                 '-ss', str(start_time),
                 '-t', str(duration),
             ]
 
-            # Add channel selection (no resampling yet)
+            # Add channel selection filter (applied before resampling)
             if self.channel_selection == 'left':
                 # Extract left channel only
-                ffmpeg_cmd1.extend(['-af', 'pan=1c|c0=c0'])
+                ffmpeg_cmd.extend(['-af', 'pan=1c|c0=c0'])
             elif self.channel_selection == 'right':
                 # Extract right channel only
-                ffmpeg_cmd1.extend(['-af', 'pan=1c|c0=c1'])
+                ffmpeg_cmd.extend(['-af', 'pan=1c|c0=c1'])
             else:
                 # Mix both channels to mono
-                ffmpeg_cmd1.extend(['-af', 'pan=1c|c0=0.5*c0+0.5*c1'])
+                ffmpeg_cmd.extend(['-af', 'pan=1c|c0=0.5*c0+0.5*c1'])
 
-            ffmpeg_cmd1.extend(['-loglevel', 'error', str(temp_path)])
-
-            logger.info(f"Step 1 command: {' '.join(ffmpeg_cmd1)}")
-            result = subprocess.run(ffmpeg_cmd1, capture_output=True, timeout=10)
-            logger.info(f"Step 1 complete, returncode: {result.returncode}, temp file exists: {temp_path.exists()}")
-
-            if result.returncode != 0:
-                logger.error(f"ffmpeg channel extraction failed: {result.stderr.decode()}")
-                raise RuntimeError(f"Channel extraction failed: {result.stderr.decode()}")
-
-            # Verify temp file was created before proceeding
-            if not temp_path.exists():
-                logger.error(f"Temp file was not created: {temp_path}")
-                raise RuntimeError(f"Temp file was not created: {temp_path}")
-
-            # Step 2: Resample to target sample rate (subprocess.run() waits for completion)
-            ffmpeg_cmd2 = [
-                'ffmpeg', '-y',
-                '-i', str(temp_path),
+            # Add resampling (applied after channel extraction)
+            ffmpeg_cmd.extend([
                 '-ar', str(self.sample_rate),
                 '-loglevel', 'error',
                 str(output_path)
-            ]
+            ])
 
-            logger.info(f"Step 2 command: {' '.join(ffmpeg_cmd2)}")
-            result = subprocess.run(ffmpeg_cmd2, capture_output=True, timeout=10)
-            logger.info(f"Step 2 complete, returncode: {result.returncode}, output file exists: {output_path.exists()}")
-
-            # Clean up temp file
-            temp_path.unlink(missing_ok=True)
-            logger.info(f"Temp file cleaned up")
+            logger.info(f"Channel selection: {self.channel_selection}")
+            logger.info(f"FFmpeg command: {' '.join(ffmpeg_cmd)}")
+            result = subprocess.run(ffmpeg_cmd, capture_output=True, timeout=10)
 
             if result.returncode != 0:
                 logger.error(f"ffmpeg extraction failed: {result.stderr.decode()}")
@@ -495,63 +468,36 @@ class AudioBuffer:
         output_path = self.audio_dir / f"{session_id}_final.wav"
 
         try:
-            # Use TWO ffmpeg calls: first extract channel, then resample
-            # Step 1: Extract channel to temp file at original sample rate
-            temp_path = output_path.with_suffix('.temp.wav')
-
-            logger.info(f"=== FINAL EXTRACTION TWO-STEP FFMPEG DEBUG ===")
-            logger.info(f"Channel selection: {self.channel_selection}")
-            logger.info(f"Temp path: {temp_path}")
-
-            ffmpeg_cmd1 = [
+            # Use single ffmpeg call: extract channel with pan filter, then resample
+            # The order matters: pan filter extracts channel first, then -ar resamples
+            ffmpeg_cmd = [
                 'ffmpeg', '-y',
                 '-i', str(self.webm_path),
                 '-ss', str(start_position),
                 '-t', str(remaining_duration),
             ]
 
-            # Add channel selection (no resampling yet)
+            # Add channel selection filter (applied before resampling)
             if self.channel_selection == 'left':
                 # Extract left channel only
-                ffmpeg_cmd1.extend(['-af', 'pan=1c|c0=c0'])
+                ffmpeg_cmd.extend(['-af', 'pan=1c|c0=c0'])
             elif self.channel_selection == 'right':
                 # Extract right channel only
-                ffmpeg_cmd1.extend(['-af', 'pan=1c|c0=c1'])
+                ffmpeg_cmd.extend(['-af', 'pan=1c|c0=c1'])
             else:
                 # Mix both channels to mono
-                ffmpeg_cmd1.extend(['-af', 'pan=1c|c0=0.5*c0+0.5*c1'])
+                ffmpeg_cmd.extend(['-af', 'pan=1c|c0=0.5*c0+0.5*c1'])
 
-            ffmpeg_cmd1.extend(['-loglevel', 'error', str(temp_path)])
-
-            logger.info(f"FINAL Step 1 command: {' '.join(ffmpeg_cmd1)}")
-            result = subprocess.run(ffmpeg_cmd1, capture_output=True, timeout=30)
-            logger.info(f"FINAL Step 1 complete, returncode: {result.returncode}, temp file exists: {temp_path.exists()}")
-
-            if result.returncode != 0:
-                logger.error(f"ffmpeg channel extraction failed: {result.stderr.decode()}")
-                raise RuntimeError(f"Channel extraction failed: {result.stderr.decode()}")
-
-            # Verify temp file was created before proceeding
-            if not temp_path.exists():
-                logger.error(f"Temp file was not created: {temp_path}")
-                raise RuntimeError(f"Temp file was not created: {temp_path}")
-
-            # Step 2: Resample to target sample rate (subprocess.run() waits for completion)
-            ffmpeg_cmd2 = [
-                'ffmpeg', '-y',
-                '-i', str(temp_path),
+            # Add resampling (applied after channel extraction)
+            ffmpeg_cmd.extend([
                 '-ar', str(self.sample_rate),
                 '-loglevel', 'error',
                 str(output_path)
-            ]
+            ])
 
-            logger.info(f"FINAL Step 2 command: {' '.join(ffmpeg_cmd2)}")
-            result = subprocess.run(ffmpeg_cmd2, capture_output=True, timeout=30)
-            logger.info(f"FINAL Step 2 complete, returncode: {result.returncode}, output file exists: {output_path.exists()}")
-
-            # Clean up temp file
-            temp_path.unlink(missing_ok=True)
-            logger.info(f"FINAL Temp file cleaned up")
+            logger.info(f"FINAL - Channel selection: {self.channel_selection}")
+            logger.info(f"FINAL - FFmpeg command: {' '.join(ffmpeg_cmd)}")
+            result = subprocess.run(ffmpeg_cmd, capture_output=True, timeout=30)
 
             if result.returncode != 0:
                 logger.error(f"ffmpeg final extraction failed: {result.stderr.decode()}")
@@ -646,6 +592,7 @@ async def websocket_transcribe(websocket: WebSocket):
 
     Protocol:
     - Client sends: {"type": "set_model", "model": <model_name>}
+    - Client sends: {"type": "set_resume_transcription", "transcription_id": <id>}
     - Client sends: {"type": "audio_chunk", "data": <base64_audio>, "duration": <seconds>}
     - Client sends: {"type": "end_recording"}
     - Server sends: {"type": "transcription", "segments": [...]}
@@ -659,6 +606,10 @@ async def websocket_transcribe(websocket: WebSocket):
     whisper_service = None
     selected_model = None
     selected_channel = None  # Will be set when client sends channel selection ('left', 'right', 'both', or None)
+    resume_transcription_id = None  # Will be set when client wants to resume an existing transcription
+    existing_audio_path = None  # Path to existing audio file when resuming
+    existing_duration = 0.0  # Duration of existing audio when resuming
+
     # Use host-based audio directory (same as whisper_service.py)
     audio_dir = Path.home() / "projects" / "python" / "mlx_whisper" / "audio"
     audio_dir.mkdir(parents=True, exist_ok=True)
@@ -829,6 +780,100 @@ async def websocket_transcribe(websocket: WebSocket):
                     "message": f"Channel set to: {channel}"
                 })
 
+            elif message_type == "set_resume_transcription":
+                # Set the transcription ID to resume from
+                transcription_id = data.get("transcription_id")
+
+                if transcription_id:
+                    logger.info(f"Client wants to resume transcription ID: {transcription_id}")
+
+                    try:
+                        # Load transcription from database
+                        from app.database import async_session_maker
+                        from app.models import Transcription
+                        from sqlalchemy import select
+
+                        async with async_session_maker() as session:
+                            result = await session.execute(
+                                select(Transcription).where(Transcription.id == transcription_id)
+                            )
+                            transcription = result.scalar_one_or_none()
+
+                            if transcription:
+                                resume_transcription_id = transcription_id
+                                existing_audio_path = transcription.audio_file_path
+                                existing_duration = transcription.duration_seconds or 0.0
+
+                                # IMPORTANT: Create a NEW session and audio buffer for the resumed recording
+                                # This ensures new audio goes to a separate file and can be concatenated later
+                                session_id = str(uuid.uuid4())
+                                audio_buffer = AudioBuffer(audio_dir=audio_dir, session_id=session_id, channel_selection=selected_channel or 'both')
+                                chunk_counter = 0
+                                logger.info(f"Created new session {session_id} for resumed transcription")
+
+                                logger.info(f"Loaded transcription {transcription_id}: audio_path={existing_audio_path}, duration={existing_duration}s")
+
+                                await websocket.send_json({
+                                    "type": "status",
+                                    "message": f"Resuming transcription: {transcription.title}"
+                                })
+                            else:
+                                logger.warning(f"Transcription {transcription_id} not found")
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": f"Transcription not found: {transcription_id}"
+                                })
+
+                    except Exception as e:
+                        logger.error(f"Error loading transcription {transcription_id}: {e}")
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": f"Failed to load transcription: {str(e)}"
+                        })
+
+            elif message_type == "set_resume_audio":
+                # Resume from an audio file path (without database record)
+                audio_path = data.get("audio_path")
+
+                if audio_path:
+                    logger.info(f"Client wants to resume from audio file: {audio_path}")
+
+                    # Convert API path to filesystem path
+                    if audio_path.startswith("/api/audio/"):
+                        filename = audio_path.replace("/api/audio/", "")
+                        audio_full_path = audio_dir / filename
+
+                        if audio_full_path.exists():
+                            existing_audio_path = str(audio_full_path)
+                            # Duration will be auto-detected using ffprobe when needed
+                            existing_duration = 0.0
+
+                            # IMPORTANT: Create a NEW session and audio buffer for the resumed recording
+                            # This ensures new audio goes to a separate file and can be concatenated later
+                            session_id = str(uuid.uuid4())
+                            audio_buffer = AudioBuffer(audio_dir=audio_dir, session_id=session_id, channel_selection=selected_channel or 'both')
+                            chunk_counter = 0
+                            logger.info(f"Created new session {session_id} for resumed recording")
+
+                            logger.info(f"Resuming from audio file: {existing_audio_path}")
+
+                            await websocket.send_json({
+                                "type": "status",
+                                "message": f"Resuming from previous recording"
+                            })
+                        else:
+                            logger.warning(f"Audio file not found: {audio_full_path}")
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": f"Audio file not found: {audio_path}"
+                            })
+                    else:
+                        logger.warning(f"Invalid audio path format: {audio_path}")
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": f"Invalid audio path format"
+                        })
+
             elif message_type == "audio_chunk":
                 # Ensure model is selected
                 if whisper_service is None:
@@ -940,12 +985,9 @@ async def websocket_transcribe(websocket: WebSocket):
                             })
                         finally:
                             # Clean up temporary WAV extraction files (keep WebM)
-                            # DISABLED: Keep WAV files for inspection
-                            # if audio_path and Path(audio_path).exists():
-                            #     Path(audio_path).unlink()
-                            #     logger.info(f"Deleted temporary WAV extraction file: {audio_path}")
                             if audio_path and Path(audio_path).exists():
-                                logger.info(f"Kept temporary WAV extraction file for inspection: {audio_path}")
+                                Path(audio_path).unlink()
+                                logger.info(f"Deleted temporary WAV extraction file: {audio_path}")
 
                 except Exception as e:
                     logger.error(f"Error processing audio chunk: {e}")
@@ -1064,24 +1106,158 @@ async def websocket_transcribe(websocket: WebSocket):
                             })
                         finally:
                             # Clean up temporary WAV extraction files (keep WebM)
-                            # DISABLED: Keep WAV files for inspection
-                            # if audio_path and Path(audio_path).exists():
-                            #     Path(audio_path).unlink()
-                            #     logger.info(f"Deleted temporary WAV extraction file: {audio_path}")
                             if audio_path and Path(audio_path).exists():
-                                logger.info(f"Kept temporary WAV extraction file for inspection: {audio_path}")
+                                Path(audio_path).unlink()
+                                logger.info(f"Deleted temporary WAV extraction file: {audio_path}")
+
+                # Handle audio concatenation if resuming an existing transcription
+                final_audio_path = audio_buffer.webm_path
+                total_duration = audio_buffer.absolute_duration
+
+                if existing_audio_path:
+                    if resume_transcription_id:
+                        logger.info(f"Resuming transcription {resume_transcription_id}, concatenating audio files")
+                    else:
+                        logger.info(f"Concatenating audio files (resuming from audio without database record)")
+
+                    # Convert existing audio path to full path
+                    existing_full_path = Path(existing_audio_path)
+                    if not existing_full_path.is_absolute():
+                        existing_full_path = audio_dir / existing_audio_path
+
+                    # Only concatenate if existing file exists
+                    if existing_full_path.exists():
+                        try:
+                            await websocket.send_json({
+                                "type": "status",
+                                "message": "Appending audio to existing recording..."
+                            })
+
+                            # If existing_duration is not set (not from database), get it from the file using ffprobe
+                            if existing_duration == 0.0:
+                                try:
+                                    probe_cmd = [
+                                        'ffprobe', '-v', 'error',
+                                        '-show_entries', 'format=duration',
+                                        '-of', 'default=noprint_wrappers=1:nokey=1',
+                                        str(existing_full_path)
+                                    ]
+                                    probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
+                                    if probe_result.returncode == 0:
+                                        existing_duration = float(probe_result.stdout.strip())
+                                        logger.info(f"Detected existing audio duration from file: {existing_duration:.1f}s")
+                                except (ValueError, subprocess.TimeoutExpired) as e:
+                                    logger.warning(f"Could not detect existing audio duration: {e}")
+                                    existing_duration = 0.0
+
+                            # Create output path for concatenated audio
+                            concat_output = audio_dir / f"{session_id}_concatenated.webm"
+
+                            # Create temporary filelist for FFmpeg concat demuxer
+                            filelist_path = audio_dir / f"{session_id}_filelist.txt"
+                            with open(filelist_path, 'w') as f:
+                                f.write(f"file '{existing_full_path}'\n")
+                                f.write(f"file '{audio_buffer.webm_path}'\n")
+
+                            # Use FFmpeg concat demuxer to combine files without re-encoding
+                            concat_cmd = [
+                                'ffmpeg', '-y',
+                                '-f', 'concat',
+                                '-safe', '0',
+                                '-i', str(filelist_path),
+                                '-c', 'copy',  # Copy streams without re-encoding (fast)
+                                '-loglevel', 'error',
+                                str(concat_output)
+                            ]
+
+                            logger.info(f"Concatenating audio: {' '.join(concat_cmd)}")
+                            result = subprocess.run(concat_cmd, capture_output=True, timeout=60)
+
+                            if result.returncode == 0:
+                                # Delete old files and filelist
+                                audio_buffer.webm_path.unlink()
+                                filelist_path.unlink()
+
+                                # Use concatenated file as the final audio
+                                final_audio_path = concat_output
+                                total_duration = existing_duration + audio_buffer.absolute_duration
+
+                                logger.info(f"Audio concatenation successful: {total_duration:.1f}s total duration")
+
+                                # Fix WebM duration metadata after concatenation
+                                # The concat demuxer with -c copy doesn't update duration metadata
+                                try:
+                                    temp_fixed = concat_output.parent / f"{concat_output.stem}_fixed.webm"
+
+                                    fix_cmd = [
+                                        'ffmpeg', '-y',
+                                        '-i', str(concat_output),
+                                        '-c:a', 'libopus',  # Re-encode audio as Opus
+                                        '-b:a', '128k',     # Audio bitrate
+                                        '-f', 'webm',       # Force WebM output format
+                                        '-loglevel', 'error',
+                                        str(temp_fixed)
+                                    ]
+
+                                    logger.info("Fixing WebM duration metadata after concatenation...")
+                                    fix_result = subprocess.run(fix_cmd, capture_output=True, timeout=60)
+
+                                    if fix_result.returncode == 0 and temp_fixed.exists() and temp_fixed.stat().st_size > 0:
+                                        temp_fixed.replace(concat_output)
+                                        logger.info(f"Fixed concatenated WebM duration metadata: {concat_output}")
+                                    else:
+                                        logger.warning(f"Could not fix WebM duration metadata: {fix_result.stderr.decode() if fix_result.stderr else 'unknown error'}")
+
+                                except subprocess.TimeoutExpired:
+                                    logger.error("ffmpeg WebM fix timeout after concatenation")
+                                except Exception as e:
+                                    logger.error(f"ffmpeg WebM fix error after concatenation: {e}")
+
+                                # Rename concatenated file to the original first file name
+                                # This keeps the audio path consistent with any saved transcription
+                                try:
+                                    concat_output.replace(existing_full_path)
+                                    final_audio_path = existing_full_path
+                                    logger.info(f"Renamed concatenated file to original: {existing_full_path}")
+                                except Exception as e:
+                                    logger.warning(f"Could not rename concatenated file: {e}, keeping as {concat_output}")
+                                    final_audio_path = concat_output
+
+                                await websocket.send_json({
+                                    "type": "status",
+                                    "message": f"Audio appended successfully ({total_duration:.1f}s total)"
+                                })
+                            else:
+                                logger.error(f"FFmpeg concat failed: {result.stderr.decode()}")
+                                await websocket.send_json({
+                                    "type": "error",
+                                    "message": "Failed to append audio files"
+                                })
+                                # Continue with new recording only
+                                filelist_path.unlink()
+
+                        except Exception as e:
+                            logger.error(f"Error concatenating audio: {e}")
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": f"Audio concatenation error: {str(e)}"
+                            })
+                            # Continue with new recording only
+                    else:
+                        logger.warning(f"Existing audio file not found: {existing_full_path}")
 
                 # Send completion message with audio file URL
                 final_audio_url = None
-                if audio_buffer.webm_path and audio_buffer.webm_path.exists():
+                if final_audio_path and final_audio_path.exists():
                     # Keep the WebM file and send its path to frontend
-                    final_audio_url = f"/api/audio/{audio_buffer.webm_path.name}"
+                    final_audio_url = f"/api/audio/{final_audio_path.name}"
                     logger.info(f"Final audio file available at: {final_audio_url}")
 
                 await websocket.send_json({
                     "type": "status",
                     "message": "Recording completed. Transcription finished.",
-                    "audio_url": final_audio_url
+                    "audio_url": final_audio_url,
+                    "duration_seconds": total_duration
                 })
 
                 # Clear buffer for next recording session (but keep WebM file)
