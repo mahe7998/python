@@ -16,3 +16,4 @@ transformers/pytorch_model.bin
 .DS_Store
 fcc-ai-engineering-aws/
 localGPT-Vision/
+ollama-playground/
