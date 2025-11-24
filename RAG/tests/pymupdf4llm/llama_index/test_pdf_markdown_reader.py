@@ -12,7 +12,7 @@ except ImportError:
     raise NotImplementedError("Please install 'llama_index' is needed.")
 
 
-from pymupdf4llm.pymupdf4llm.llama_index.pdf_markdown_reader import PDFMarkdownReader
+from pymupdf4llm.llama.pdf_markdown_reader import PDFMarkdownReader
 
 PDF = "input.pdf"
 
@@ -22,7 +22,8 @@ def _get_test_file_path(file_name: str, __file__: str = __file__) -> str:
         os.path.dirname(os.path.abspath(__file__)),
         "..",
         "..",
-        ".." "helpers",
+        "..",
+        "helpers",
         file_name,
     )
     file_path = os.path.normpath(file_path)

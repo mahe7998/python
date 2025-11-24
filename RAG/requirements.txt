@@ -1,0 +1,13 @@
+# Testing dependencies
+pytest>=9.0.0
+pytest-asyncio>=1.0.0
+llama-index>=0.14.0
+
+# Note: pymupdf4llm is installed locally via `pip install -e pymupdf4llm/`
+
+# Known Issue: SWIG Deprecation Warnings
+# When running tests, you may see warnings like:
+#   DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+# This is an upstream issue in pymupdf's SWIG bindings.
+# Track progress: https://github.com/pymupdf/PyMuPDF/issues/2983
+# Workaround: python -W ignore -m pytest tests/ -v --disable-warnings
