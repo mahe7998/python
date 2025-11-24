@@ -21,6 +21,7 @@ venv.bak/
 # Project specific
 output/
 backup/
+data/
 server.log
 test_result.json
 .vscode/

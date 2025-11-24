@@ -14,3 +14,5 @@ transformers/pytorch_model.bin
 *.jpg
 *.bin
 .DS_Store
+fcc-ai-engineering-aws/
+localGPT-Vision/
