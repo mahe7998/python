@@ -1,0 +1,14 @@
+[project]
+name = "md2pdf"
+version = "0.1.0"
+description = "Convert markdown files to nicely formatted PDF"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "fpdf2",
+    "markdown",
+    "click",
+    "python-frontmatter",
+    "pillow",
+    "requests"
+]

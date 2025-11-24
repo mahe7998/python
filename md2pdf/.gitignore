@@ -1,0 +1,22 @@
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Build artifacts
+*.egg-info/
+md2pdf.egg-info/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+
+# Lock file (optional - uncomment if you want to track it)
+# uv.lock
+
+# Sample files
+samples/
