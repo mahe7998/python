@@ -22,6 +22,7 @@ venv.bak/
 output/
 backup/
 data/
+content/
 server.log
 test_result.json
 .vscode/
@@ -32,3 +33,5 @@ test_result.json
 
 # Misc
 .idea/
+*.pdf
+*.md
