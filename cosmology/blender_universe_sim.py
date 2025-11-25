@@ -258,18 +258,19 @@ class Siphon:
     def get_unit_vector(self):
         return spherical_to_cartesian(self.theta, self.phi, 1.0)
 
-    def calculate_depth_at(self, theta, phi):
+    def calculate_depth_at(self, theta, phi, current_radius):
         """Calculate siphon depth at a given point (Gaussian profile)."""
         ang_dist = angular_distance_spherical(theta, phi, self.theta, self.phi)
-        depth = self.depth * math.exp(-ang_dist**2 / (2 * SIPHON_WIDTH**2))
-        return depth
+        # Depth is a fraction of current radius, so it scales with expansion
+        # self.depth is stored as a fraction (0.0 to 1.0)
+        actual_depth = self.depth * current_radius * math.exp(-ang_dist**2 / (2 * SIPHON_WIDTH**2))
+        return actual_depth
 
     def add_mass(self, amount):
-        """Add mass to siphon (increases depth)."""
+        """Add mass to siphon."""
         self.mass += amount
         self.particle_count += 1
-        # Depth grows with mass but with diminishing returns
-        self.depth = SIPHON_MAX_DEPTH * (1 - math.exp(-self.mass * 0.3))
+        # Note: depth is grown gradually in check_coalescence(), not here
 
 
 # =============================================================================
@@ -423,23 +424,19 @@ def check_coalescence(frame):
                 print(f"  Frame {frame}: Particle coalesced at siphon {particle.siphon_index}, "
                       f"total mass: {siphon.mass:.2f}")
 
-    # Grow siphon depth very gradually - must be slower than expansion
-    # so particles don't appear to move backward
+    # Grow siphon depth very gradually as a fraction of radius
+    # depth is now stored as a fraction (0.0 to ~0.3 max)
     for siphon in SIM.siphons:
         if siphon.mass > 0:
-            # Depth grows at a fraction of the expansion rate
-            # This ensures siphon deepens slower than sphere expands
-            max_growth_per_frame = EXPANSION_RATE * 0.3  # 30% of expansion rate
+            # Target depth as fraction of radius (more mass = deeper)
+            # With 40 particles, max mass = 40, target would be 40 * 0.005 = 0.2 (20% of radius)
+            target_depth = min(0.25, siphon.mass * 0.005)
 
-            # Target depth based on mass (more mass = deeper siphon eventually)
-            target_depth = min(SIPHON_MAX_DEPTH, siphon.mass * 0.15)
+            # Very slow approach to target - 0.5% per frame
+            desired_increment = (target_depth - siphon.depth) * 0.005
 
-            # Calculate desired increment
-            desired_increment = (target_depth - siphon.depth) * 0.01
-
-            # Clamp to max growth rate so we never go backward
-            depth_increment = min(desired_increment, max_growth_per_frame)
-            depth_increment = max(0, depth_increment)  # Never decrease
+            # Never decrease, always grow slowly
+            depth_increment = max(0, desired_increment)
 
             siphon.depth += depth_increment
 
@@ -452,7 +449,7 @@ def update_sphere(current_radius):
         direction = SIM.original_verts[i]
         theta, phi = cartesian_to_spherical(direction)
 
-        total_depth = sum(s.calculate_depth_at(theta, phi) for s in SIM.siphons)
+        total_depth = sum(s.calculate_depth_at(theta, phi, current_radius) for s in SIM.siphons)
         final_radius = max(0.1, current_radius - total_depth)
         v.co = direction * final_radius
 
@@ -471,7 +468,7 @@ def update_particles(current_radius, frame):
         theta, phi = particle.theta, particle.phi
 
         # Calculate sphere surface depth at particle position (same as sphere mesh)
-        total_depth = sum(s.calculate_depth_at(theta, phi) for s in SIM.siphons)
+        total_depth = sum(s.calculate_depth_at(theta, phi, current_radius) for s in SIM.siphons)
 
         # Particle sits on the sphere surface (at the siphon depression)
         surface_radius = max(0.1, current_radius - total_depth)
@@ -569,7 +566,7 @@ def bake_animation():
         for i in range(len(SIM.original_verts)):
             direction = SIM.original_verts[i]
             theta, phi = cartesian_to_spherical(direction)
-            total_depth = sum(s.calculate_depth_at(theta, phi) for s in SIM.siphons)
+            total_depth = sum(s.calculate_depth_at(theta, phi, current_radius) for s in SIM.siphons)
             final_radius = max(0.1, current_radius - total_depth)
             vertex_positions.append(direction * final_radius)
 
@@ -582,7 +579,7 @@ def bake_animation():
 
             theta, phi = particle.theta, particle.phi
             # Calculate sphere surface depth at particle position
-            total_depth = sum(s.calculate_depth_at(theta, phi) for s in SIM.siphons)
+            total_depth = sum(s.calculate_depth_at(theta, phi, current_radius) for s in SIM.siphons)
             # Particle sits on the sphere surface
             surface_radius = max(0.1, current_radius - total_depth)
             particle_radius = surface_radius + PARTICLE_SIZE * 0.5
