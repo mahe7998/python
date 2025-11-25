@@ -2,10 +2,10 @@
 Blender Universe Expansion Simulation
 =====================================
 A 3D simulation of an expanding universe where:
-- Particles live on the surface of an expanding sphere
-- Particles attract each other and coalesce
-- Coalescence creates "siphons" (gravitational wells) that deform the sphere
-- Energy conservation: attraction steals from radial expansion
+- Particles follow the radial expansion (move outward with the sphere)
+- Particles have slight angular deviations only at siphon locations
+- When particles coalesce, they lock in place and create "mass resistance"
+- Siphons form from accumulated mass, deforming the sphere surface
 
 To run in Blender:
 1. Open Blender
@@ -36,7 +36,6 @@ MAX_RADIUS = 17.0
 SPHERE_SUBDIVISIONS = 5  # Icosphere subdivisions
 
 # Particle settings
-NUM_PARTICLES = 80
 PARTICLE_SIZE = 0.25  # Larger particles for visibility
 PARTICLE_COLOR = (0.2, 0.6, 1.0, 1.0)  # Blue-ish
 
@@ -44,11 +43,21 @@ PARTICLE_COLOR = (0.2, 0.6, 1.0, 1.0)  # Blue-ish
 SIPHON_START_FRAME = 30
 SIPHON_MAX_DEPTH = 3.0
 SIPHON_WIDTH = 0.3  # Angular width in radians
-COALESCENCE_THRESHOLD = 0.4  # Distance at which particles start merging
 MAX_SIPHONS = 2  # Maximum number of siphons that can form
 
+# Siphon seed locations (theta, phi) - predefined where siphons will form
+# Particles near these locations will have slight angular deviations
+SIPHON_SEEDS = [
+    (math.pi * 0.4, math.pi * 0.5),    # First siphon location
+    (math.pi * 0.6, math.pi * 1.3),    # Second siphon location
+]
+
+# Particle distribution (only around siphon locations)
+PARTICLES_PER_SIPHON = 20  # Particles that will converge at each siphon
+CONVERGENCE_ANGLE = 0.2    # Angular spread for converging particles
+COALESCENCE_DISTANCE = 0.08  # Angular distance to lock particles together
+
 # Physics
-ATTRACTION_STRENGTH = 0.003
 EXPANSION_RATE = (MAX_RADIUS - INITIAL_RADIUS) / TOTAL_FRAMES
 
 
@@ -74,15 +83,13 @@ SIM = SimState()
 
 def clear_scene():
     """Remove all objects from the scene."""
-    # Remove frame handler if exists
-    for handler in bpy.app.handlers.frame_change_post:
+    for handler in list(bpy.app.handlers.frame_change_post):
         if handler.__name__ == "frame_update_handler":
             bpy.app.handlers.frame_change_post.remove(handler)
 
     bpy.ops.object.select_all(action='SELECT')
     bpy.ops.object.delete(use_global=False)
 
-    # Clear orphan data
     for block in bpy.data.meshes:
         if block.users == 0:
             bpy.data.meshes.remove(block)
@@ -103,7 +110,6 @@ def create_material(name, color, emission_strength=0, transparent=False):
     output.location = (400, 0)
 
     if transparent:
-        # Use a mix of Transparent and Principled BSDF for true transparency
         principled = nodes.new('ShaderNodeBsdfPrincipled')
         principled.location = (0, 100)
         principled.inputs['Base Color'].default_value = color
@@ -120,14 +126,13 @@ def create_material(name, color, emission_strength=0, transparent=False):
         links.new(transparent_node.outputs['BSDF'], mix_shader.inputs[2])
         links.new(mix_shader.outputs['Shader'], output.inputs['Surface'])
 
-        # Material settings for transparency
         mat.blend_method = 'BLEND'
         mat.use_backface_culling = False
         try:
             mat.show_transparent_back = True
             mat.shadow_method = 'NONE'
         except AttributeError:
-            pass  # Blender 4.x
+            pass
     else:
         principled = nodes.new('ShaderNodeBsdfPrincipled')
         principled.location = (0, 0)
@@ -168,20 +173,36 @@ def angular_distance(vec1, vec2):
     return math.acos(dot)
 
 
+def angular_distance_spherical(theta1, phi1, theta2, phi2):
+    """Calculate angular distance between two spherical coordinates."""
+    v1 = spherical_to_cartesian(theta1, phi1, 1.0)
+    v2 = spherical_to_cartesian(theta2, phi2, 1.0)
+    return angular_distance(v1, v2)
+
+
 # =============================================================================
 # PARTICLE CLASS
 # =============================================================================
 
 class SurfaceParticle:
-    """A particle that lives on the sphere surface."""
+    """A particle that lives on the sphere surface and follows radial expansion."""
 
-    def __init__(self, theta, phi, mass=1.0):
-        self.theta = theta
+    def __init__(self, theta, phi, target_theta=None, target_phi=None, convergence_speed=0.0):
+        self.theta = theta  # Current position
         self.phi = phi
-        self.mass = mass
-        self.velocity_theta = 0.0
-        self.velocity_phi = 0.0
-        self.merged = False
+        self.initial_theta = theta  # Starting position
+        self.initial_phi = phi
+
+        # Target position (for particles that will converge to siphon)
+        self.target_theta = target_theta if target_theta else theta
+        self.target_phi = target_phi if target_phi else phi
+        self.convergence_speed = convergence_speed  # How fast to move toward target
+
+        self.mass = 1.0
+        self.locked = False  # When True, particle is locked in siphon
+        self.locked_theta = None  # Position where particle locked
+        self.locked_phi = None
+        self.siphon_index = -1  # Which siphon this particle belongs to (-1 = none)
         self.blender_obj = None
 
     def get_unit_vector(self):
@@ -190,44 +211,40 @@ class SurfaceParticle:
     def get_position(self, radius):
         return spherical_to_cartesian(self.theta, self.phi, radius)
 
-    def attract_to(self, other, strength):
-        if self.merged or other.merged:
+    def update_position(self, frame, coalescence_frame):
+        """Update position - particles slowly converge toward siphon centers."""
+        if self.locked:
+            # Particle is locked in place
+            self.theta = self.locked_theta
+            self.phi = self.locked_phi
             return
 
-        v1 = self.get_unit_vector()
-        v2 = other.get_unit_vector()
-        ang_dist = angular_distance(v1, v2)
-
-        if ang_dist < 0.01:
+        if frame < coalescence_frame or self.convergence_speed == 0:
+            # Before coalescence starts, particles stay fixed (follow radial expansion)
             return
 
-        force = strength * other.mass / (ang_dist ** 2 + 0.01)
+        # Slowly move toward target (siphon center)
+        progress = (frame - coalescence_frame) / (TOTAL_FRAMES - coalescence_frame)
+        progress = min(1.0, progress * self.convergence_speed)
 
-        d_theta = other.theta - self.theta
-        d_phi = other.phi - self.phi
+        # Interpolate toward target
+        d_theta = self.target_theta - self.initial_theta
+        d_phi = self.target_phi - self.initial_phi
 
+        # Normalize phi difference
         while d_phi > math.pi:
             d_phi -= 2 * math.pi
         while d_phi < -math.pi:
             d_phi += 2 * math.pi
 
-        dist = math.sqrt(d_theta**2 + d_phi**2)
-        if dist > 0:
-            self.velocity_theta += force * d_theta / dist
-            self.velocity_phi += force * d_phi / dist
+        self.theta = self.initial_theta + d_theta * progress
+        self.phi = self.initial_phi + d_phi * progress
 
-    def update_position(self, damping=0.95):
-        if self.merged:
-            return
-
-        self.theta += self.velocity_theta
-        self.phi += self.velocity_phi
-
-        self.velocity_theta *= damping
-        self.velocity_phi *= damping
-
-        self.theta = max(0.05, min(math.pi - 0.05, self.theta))
-        self.phi = self.phi % (2 * math.pi)
+    def lock_at_current_position(self):
+        """Lock particle at current position (when coalesced)."""
+        self.locked = True
+        self.locked_theta = self.theta
+        self.locked_phi = self.phi
 
 
 # =============================================================================
@@ -237,24 +254,28 @@ class SurfaceParticle:
 class Siphon:
     """A gravitational well caused by mass accumulation."""
 
-    def __init__(self, theta, phi, initial_mass=1.0):
+    def __init__(self, theta, phi):
         self.theta = theta
         self.phi = phi
-        self.mass = initial_mass
+        self.mass = 0.0  # Accumulated mass from particles
         self.depth = 0.0
+        self.particle_count = 0
 
     def get_unit_vector(self):
         return spherical_to_cartesian(self.theta, self.phi, 1.0)
 
     def calculate_depth_at(self, theta, phi):
-        point_vec = spherical_to_cartesian(theta, phi, 1.0)
-        siphon_vec = self.get_unit_vector()
-        ang_dist = angular_distance(point_vec, siphon_vec)
+        """Calculate siphon depth at a given point (Gaussian profile)."""
+        ang_dist = angular_distance_spherical(theta, phi, self.theta, self.phi)
         depth = self.depth * math.exp(-ang_dist**2 / (2 * SIPHON_WIDTH**2))
         return depth
 
-    def grow(self, amount):
-        self.depth = min(self.depth + amount, SIPHON_MAX_DEPTH * self.mass)
+    def add_mass(self, amount):
+        """Add mass to siphon (increases depth)."""
+        self.mass += amount
+        self.particle_count += 1
+        # Depth grows with mass but with diminishing returns
+        self.depth = SIPHON_MAX_DEPTH * (1 - math.exp(-self.mass * 0.3))
 
 
 # =============================================================================
@@ -285,12 +306,12 @@ def setup_simulation():
 
     # Create materials
     sphere_mat = create_material("SphereMat", (0.5, 0.55, 0.7, 1.0), transparent=True)
-    particle_mat = create_material("ParticleMat", PARTICLE_COLOR, emission_strength=5.0)  # Brighter glow
+    particle_mat = create_material("ParticleMat", PARTICLE_COLOR, emission_strength=5.0)
 
-    # Create sphere at initial radius
+    # Create sphere
     bpy.ops.mesh.primitive_ico_sphere_add(
         subdivisions=SPHERE_SUBDIVISIONS,
-        radius=1.0,  # Unit sphere, we'll scale vertices
+        radius=1.0,
         location=(0, 0, 0)
     )
     SIM.sphere_obj = bpy.context.active_object
@@ -307,25 +328,52 @@ def setup_simulation():
     for i, v in enumerate(SIM.sphere_obj.data.vertices):
         v.co = SIM.original_verts[i] * INITIAL_RADIUS
 
-    # Create particles
-    for i in range(NUM_PARTICLES):
-        theta = random.uniform(0.2, math.pi - 0.2)
-        phi = random.uniform(0, 2 * math.pi)
+    # Create siphons at seed locations
+    for i, (s_theta, s_phi) in enumerate(SIPHON_SEEDS[:MAX_SIPHONS]):
+        siphon = Siphon(s_theta, s_phi)
+        SIM.siphons.append(siphon)
 
-        particle = SurfaceParticle(theta, phi)
+    # Create particles ONLY around siphon locations
+    particle_index = 0
 
-        # Create particle mesh - place OUTSIDE sphere surface
-        bpy.ops.mesh.primitive_uv_sphere_add(
-            segments=8,
-            ring_count=6,
-            radius=PARTICLE_SIZE,
-            location=particle.get_position(INITIAL_RADIUS + PARTICLE_SIZE * 0.5)
-        )
-        particle.blender_obj = bpy.context.active_object
-        particle.blender_obj.name = f"Particle_{i}"
-        particle.blender_obj.data.materials.append(particle_mat)
+    for siphon_idx, siphon in enumerate(SIM.siphons):
+        for _ in range(PARTICLES_PER_SIPHON):
+            # Starting position with slight offset from siphon center
+            # Distributed in a ring around the siphon
+            angle_offset = random.uniform(0.05, CONVERGENCE_ANGLE)
+            direction = random.uniform(0, 2 * math.pi)
 
-        SIM.particles.append(particle)
+            start_theta = siphon.theta + angle_offset * math.cos(direction)
+            start_phi = siphon.phi + angle_offset * math.sin(direction)
+
+            # Clamp theta to valid range
+            start_theta = max(0.1, min(math.pi - 0.1, start_theta))
+
+            # Convergence speed varies - some particles arrive earlier
+            speed = random.uniform(0.8, 2.0)
+
+            particle = SurfaceParticle(
+                theta=start_theta,
+                phi=start_phi,
+                target_theta=siphon.theta,
+                target_phi=siphon.phi,
+                convergence_speed=speed
+            )
+            particle.siphon_index = siphon_idx
+
+            # Create Blender object
+            bpy.ops.mesh.primitive_uv_sphere_add(
+                segments=8,
+                ring_count=6,
+                radius=PARTICLE_SIZE,
+                location=particle.get_position(INITIAL_RADIUS + PARTICLE_SIZE * 0.5)
+            )
+            particle.blender_obj = bpy.context.active_object
+            particle.blender_obj.name = f"Particle_{particle_index}"
+            particle.blender_obj.data.materials.append(particle_mat)
+
+            SIM.particles.append(particle)
+            particle_index += 1
 
     # Setup camera
     bpy.ops.object.camera_add(location=(0, -35, 12))
@@ -349,83 +397,42 @@ def setup_simulation():
     # Register frame handler
     bpy.app.handlers.frame_change_post.append(frame_update_handler)
 
-    # Go to frame 1
     bpy.context.scene.frame_set(1)
 
-    print(f"Setup complete! {NUM_PARTICLES} particles created.")
+    print(f"Setup complete!")
+    print(f"  - {len(SIM.particles)} particles")
+    print(f"  - {len(SIM.siphons)} siphon locations")
     print("Press SPACE to play animation.")
 
 
-def update_physics():
-    """Update particle physics for one step."""
-    active = [p for p in SIM.particles if not p.merged]
+def check_coalescence(frame):
+    """Check if particles should lock together at siphons."""
+    for particle in SIM.particles:
+        if particle.locked or particle.siphon_index < 0:
+            continue
 
-    for i, p1 in enumerate(active):
-        for p2 in active[i+1:]:
-            p1.attract_to(p2, ATTRACTION_STRENGTH)
-            p2.attract_to(p1, ATTRACTION_STRENGTH)
+        siphon = SIM.siphons[particle.siphon_index]
 
-    for p in active:
-        p.update_position()
+        # Check distance to siphon center
+        dist = angular_distance_spherical(
+            particle.theta, particle.phi,
+            siphon.theta, siphon.phi
+        )
 
+        if dist < COALESCENCE_DISTANCE:
+            # Lock particle and add mass to siphon
+            particle.lock_at_current_position()
+            siphon.add_mass(particle.mass)
 
-def check_coalescence():
-    """Check for particle clustering and create siphons."""
-    active = [p for p in SIM.particles if not p.merged]
+            # Reduce expansion energy (mass resistance)
+            SIM.expansion_energy *= 0.998
 
-    for i, p1 in enumerate(active):
-        nearby = []
-        for p2 in active[i+1:]:
-            if angular_distance(p1.get_unit_vector(), p2.get_unit_vector()) < COALESCENCE_THRESHOLD:
-                nearby.append(p2)
-
-        if len(nearby) >= 2:
-            # Calculate center
-            total_mass = p1.mass
-            theta_sum = p1.theta * p1.mass
-            phi_sum = p1.phi * p1.mass
-
-            for p in nearby:
-                total_mass += p.mass
-                theta_sum += p.theta * p.mass
-                phi_sum += p.phi * p.mass
-
-            center_theta = theta_sum / total_mass
-            center_phi = phi_sum / total_mass
-            center_vec = spherical_to_cartesian(center_theta, center_phi, 1.0)
-
-            # Find or create siphon
-            existing = None
-            for s in SIM.siphons:
-                if angular_distance(center_vec, s.get_unit_vector()) < SIPHON_WIDTH:
-                    existing = s
-                    break
-
-            if existing:
-                existing.mass += 0.05
-                existing.grow(0.03)
-            elif len(SIM.siphons) < MAX_SIPHONS:
-                # Only create new siphon if under the limit
-                siphon = Siphon(center_theta, center_phi, total_mass)
-                siphon.depth = 0.3
-                SIM.siphons.append(siphon)
-                SIM.expansion_energy *= 0.997
-                print(f"  New siphon created! Total: {len(SIM.siphons)}/{MAX_SIPHONS}")
-
-            # Merge one particle
-            if nearby and not nearby[0].merged:
-                nearby[0].merged = True
-
-
-def update_siphons(frame):
-    """Grow siphons over time."""
-    progress = (frame - SIPHON_START_FRAME) / max(1, TOTAL_FRAMES - SIPHON_START_FRAME)
-    for siphon in SIM.siphons:
-        siphon.grow(0.02 * progress)
+            print(f"  Frame {frame}: Particle locked at siphon {particle.siphon_index}, "
+                  f"total mass: {siphon.mass:.2f}, depth: {siphon.depth:.2f}")
 
 
 def update_sphere(current_radius):
-    """Update sphere mesh vertices."""
+    """Update sphere mesh vertices with siphon deformations."""
     mesh = SIM.sphere_obj.data
 
     for i, v in enumerate(mesh.vertices):
@@ -439,52 +446,44 @@ def update_sphere(current_radius):
     mesh.update()
 
 
-def update_particles(current_radius):
+def update_particles(current_radius, frame):
     """Update particle positions."""
     for particle in SIM.particles:
         if not particle.blender_obj:
             continue
 
+        # Update angular position (converging particles move slowly toward siphon)
+        particle.update_position(frame, SIPHON_START_FRAME)
+
         theta, phi = particle.theta, particle.phi
+
+        # Calculate depth at particle position
         total_depth = sum(s.calculate_depth_at(theta, phi) for s in SIM.siphons)
 
-        # Place particle slightly above surface
-        effective_radius = max(0.1, current_radius - total_depth) + PARTICLE_SIZE * 0.6
+        # Place particle on surface (slightly above)
+        effective_radius = max(0.1, current_radius - total_depth) + PARTICLE_SIZE * 0.5
         particle.blender_obj.location = spherical_to_cartesian(theta, phi, effective_radius)
-
-        # Shrink merged particles
-        if particle.merged:
-            current_scale = particle.blender_obj.scale[0]
-            if current_scale > 0.1:
-                new_scale = current_scale * 0.95
-                particle.blender_obj.scale = (new_scale, new_scale, new_scale)
 
 
 def frame_update_handler(scene):
     """Called on every frame change."""
     frame = scene.frame_current
 
-    # Avoid duplicate updates
     if frame == SIM.last_frame:
         return
     SIM.last_frame = frame
 
-    # Calculate current radius
+    # Calculate current radius with energy consideration
     effective_rate = EXPANSION_RATE * SIM.expansion_energy
     current_radius = INITIAL_RADIUS + frame * effective_rate
 
-    # Physics (only run forward, not when scrubbing backward)
-    if frame > 0:
-        update_physics()
-
-    # Coalescence after threshold
+    # Check coalescence after start frame
     if frame > SIPHON_START_FRAME:
-        check_coalescence()
-        update_siphons(frame)
+        check_coalescence(frame)
 
     # Update visuals
     update_sphere(current_radius)
-    update_particles(current_radius)
+    update_particles(current_radius, frame)
 
 
 # =============================================================================
@@ -502,14 +501,21 @@ def bake_animation():
 
     # Reset state
     SIM.expansion_energy = 1.0
-    SIM.siphons = []
     SIM.last_frame = -1
+
+    # Reset siphons
+    for siphon in SIM.siphons:
+        siphon.mass = 0.0
+        siphon.depth = 0.0
+        siphon.particle_count = 0
 
     # Reset particles
     for p in SIM.particles:
-        p.merged = False
-        p.velocity_theta = 0
-        p.velocity_phi = 0
+        p.locked = False
+        p.locked_theta = None
+        p.locked_phi = None
+        p.theta = p.initial_theta
+        p.phi = p.initial_phi
         if p.blender_obj:
             p.blender_obj.scale = (1, 1, 1)
 
@@ -517,13 +523,11 @@ def bake_animation():
     SIM.sphere_obj.shape_key_add(name="Basis", from_mix=False)
     basis_key = SIM.sphere_obj.data.shape_keys.key_blocks["Basis"]
 
-    # Store basis positions (initial small sphere)
-    for i, v in enumerate(SIM.sphere_obj.data.vertices):
+    for i in range(len(SIM.sphere_obj.data.vertices)):
         basis_key.data[i].co = SIM.original_verts[i] * INITIAL_RADIUS
 
-    # Determine keyframe interval (every N frames for shape keys)
-    # More keyframes = smoother but larger file
-    SHAPE_KEY_INTERVAL = 5  # Create shape key every 5 frames
+    # Shape key interval
+    SHAPE_KEY_INTERVAL = 5
 
     shape_key_frames = list(range(1, TOTAL_FRAMES + 1, SHAPE_KEY_INTERVAL))
     if TOTAL_FRAMES not in shape_key_frames:
@@ -531,12 +535,12 @@ def bake_animation():
 
     print(f"Creating {len(shape_key_frames)} shape keys for sphere mesh...")
 
-    # First pass: create all shape keys
+    # Create all shape keys
     for kf in shape_key_frames:
         sk = SIM.sphere_obj.shape_key_add(name=f"Frame_{kf}", from_mix=False)
-        sk.value = 0.0  # Start with 0 influence
+        sk.value = 0.0
 
-    # Second pass: calculate positions and bake everything
+    # Bake each frame
     for frame in range(1, TOTAL_FRAMES + 1):
         bpy.context.scene.frame_set(frame)
 
@@ -544,65 +548,51 @@ def bake_animation():
         effective_rate = EXPANSION_RATE * SIM.expansion_energy
         current_radius = INITIAL_RADIUS + frame * effective_rate
 
-        # Update physics
-        update_physics()
-
+        # Check coalescence
         if frame > SIPHON_START_FRAME:
-            check_coalescence()
-            update_siphons(frame)
+            check_coalescence(frame)
 
-        # Calculate sphere vertex positions for this frame
-        mesh = SIM.sphere_obj.data
+        # Calculate sphere vertex positions
         vertex_positions = []
-        for i, v in enumerate(mesh.vertices):
+        for i in range(len(SIM.original_verts)):
             direction = SIM.original_verts[i]
             theta, phi = cartesian_to_spherical(direction)
             total_depth = sum(s.calculate_depth_at(theta, phi) for s in SIM.siphons)
             final_radius = max(0.1, current_radius - total_depth)
             vertex_positions.append(direction * final_radius)
 
-        # Update particle positions
+        # Update particles
         for particle in SIM.particles:
             if not particle.blender_obj:
                 continue
 
+            particle.update_position(frame, SIPHON_START_FRAME)
+
             theta, phi = particle.theta, particle.phi
             total_depth = sum(s.calculate_depth_at(theta, phi) for s in SIM.siphons)
-            effective_radius = max(0.1, current_radius - total_depth) + PARTICLE_SIZE * 0.6
+            effective_radius = max(0.1, current_radius - total_depth) + PARTICLE_SIZE * 0.5
             particle.blender_obj.location = spherical_to_cartesian(theta, phi, effective_radius)
-
-            if particle.merged:
-                current_scale = particle.blender_obj.scale[0]
-                if current_scale > 0.1:
-                    new_scale = current_scale * 0.95
-                    particle.blender_obj.scale = (new_scale, new_scale, new_scale)
 
         # Keyframe particles
         for particle in SIM.particles:
             if particle.blender_obj:
                 particle.blender_obj.keyframe_insert(data_path="location", frame=frame)
-                particle.blender_obj.keyframe_insert(data_path="scale", frame=frame)
 
         # Handle shape keys for sphere
         if frame in shape_key_frames:
             sk_name = f"Frame_{frame}"
             sk = SIM.sphere_obj.data.shape_keys.key_blocks[sk_name]
 
-            # Set vertex positions for this shape key
             for i, pos in enumerate(vertex_positions):
                 sk.data[i].co = pos
 
-            # Keyframe shape key values
-            # Turn off all shape keys
-            for sk_block in SIM.sphere_obj.data.shape_keys.key_blocks[1:]:  # Skip Basis
+            for sk_block in SIM.sphere_obj.data.shape_keys.key_blocks[1:]:
                 sk_block.value = 0.0
                 sk_block.keyframe_insert(data_path="value", frame=frame)
 
-            # Turn on current shape key
             sk.value = 1.0
             sk.keyframe_insert(data_path="value", frame=frame)
 
-            # Set previous shape key to 0 at this frame
             idx = shape_key_frames.index(frame)
             if idx > 0:
                 prev_frame = shape_key_frames[idx - 1]
@@ -610,25 +600,22 @@ def bake_animation():
                 prev_sk.value = 0.0
                 prev_sk.keyframe_insert(data_path="value", frame=frame)
 
-            # Set next shape key transition
             if idx < len(shape_key_frames) - 1:
                 next_frame = shape_key_frames[idx + 1]
-                # At next_frame, this key should be 0
                 sk.value = 0.0
                 sk.keyframe_insert(data_path="value", frame=next_frame)
 
         if frame % 50 == 0:
             print(f"  Frame {frame}/{TOTAL_FRAMES}")
 
-    # Set interpolation to linear for smoother transitions
+    # Set linear interpolation
     if SIM.sphere_obj.data.shape_keys.animation_data:
         for fc in SIM.sphere_obj.data.shape_keys.animation_data.action.fcurves:
             for kp in fc.keyframe_points:
                 kp.interpolation = 'LINEAR'
 
     print("Baking complete!")
-    print("Animation is now saved in keyframes.")
-    print(f"  - Particles: location and scale keyframed every frame")
+    print(f"  - Particles: location keyframed every frame")
     print(f"  - Sphere: {len(shape_key_frames)} shape keys created")
 
 
@@ -642,8 +629,6 @@ def main():
     print("=" * 50)
 
     setup_simulation()
-
-    # Bake animation with shape keys for sphere mesh
     bake_animation()
 
 
