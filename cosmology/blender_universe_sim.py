@@ -41,10 +41,10 @@ PARTICLE_SIZE = 0.05  # Half the original size
 PARTICLE_COLOR = (0.2, 0.6, 1.0, 1.0)  # Blue-ish
 
 # Siphon settings
-SIPHON_START_FRAME = 30
+SIPHON_START_FRAME = 50  # Frame when coalescence can begin (delay for particles to spread)
 SIPHON_MAX_DEPTH = 4.0
 SIPHON_WIDTH = 0.1  # Angular width in radians
-MAX_SIPHONS = 2  # Maximum number of siphons that can form
+MAX_SIPHONS = 1  # Maximum number of siphons that can form
 
 # Siphon seed locations (theta, phi) - predefined where siphons will form
 # Particles near these locations will have slight angular deviations
@@ -56,8 +56,8 @@ SIPHON_SEEDS = [
 # Particle distribution (only around siphon locations)
 PARTICLES_PER_SIPHON = 40  # Particles that will converge at each siphon
 CONVERGENCE_ANGLE = 0.2    # Angular spread for converging particles (2x original)
-COALESCENCE_DISTANCE = 0.08  # Angular distance to lock particles together
-CONVERGENCE_SPEED_FACTOR = 0.2  # Slowdown factor (0.1 = very slow, 1.0 = normal speed)
+COALESCENCE_DISTANCE = 0.1  # Angular distance to lock particles together
+CONVERGENCE_SPEED_FACTOR = 1.0  # Slowdown factor (0.1 = very slow, 1.0 = normal speed)
 
 # Physics
 EXPANSION_RATE = (MAX_RADIUS - INITIAL_RADIUS) / TOTAL_FRAMES
@@ -187,22 +187,22 @@ def angular_distance_spherical(theta1, phi1, theta2, phi2):
 # =============================================================================
 
 class SurfaceParticle:
-    """A particle that lives on the sphere surface and follows radial expansion."""
+    """A particle that expands radially and sits on the sphere surface."""
 
     def __init__(self, theta, phi, target_theta=None, target_phi=None, convergence_speed=0.0):
-        self.theta = theta  # Current position
+        self.theta = theta  # Angular position on surface
         self.phi = phi
-        self.initial_theta = theta  # Starting position
+        self.initial_theta = theta
         self.initial_phi = phi
 
-        # Target position (for particles that will converge to siphon)
+        # Target for angular convergence toward siphon center
         self.target_theta = target_theta if target_theta else theta
         self.target_phi = target_phi if target_phi else phi
-        self.convergence_speed = convergence_speed  # How fast to move toward target
+        self.convergence_speed = convergence_speed
 
         self.mass = 1.0
-        self.coalesced = False  # When True, particle has joined the siphon mass
-        self.siphon_index = -1  # Which siphon this particle belongs to (-1 = none)
+        self.coalesced = False  # When True, particle has joined the siphon
+        self.siphon_index = -1
         self.blender_obj = None
 
     def get_unit_vector(self):
@@ -211,44 +211,33 @@ class SurfaceParticle:
     def get_position(self, radius):
         return spherical_to_cartesian(self.theta, self.phi, radius)
 
-    def update_position(self, frame, coalescence_frame, siphons):
-        """Update position - particles always move toward siphon center."""
+    def update_angular_position(self, frame, coalescence_frame, siphons):
+        """Slowly move toward siphon center (angular motion on surface)."""
         if self.siphon_index < 0 or self.convergence_speed == 0:
-            # No siphon assigned, particle stays fixed
             return
 
         if frame < coalescence_frame:
-            # Before coalescence starts, particles stay fixed
             return
 
         siphon = siphons[self.siphon_index]
 
-        # Always move toward siphon center (whether coalesced or not)
-        # Coalesced particles move together with the group
         d_theta = siphon.theta - self.theta
         d_phi = siphon.phi - self.phi
 
-        # Normalize phi difference
         while d_phi > math.pi:
             d_phi -= 2 * math.pi
         while d_phi < -math.pi:
             d_phi += 2 * math.pi
 
-        # Calculate distance to siphon center
         dist = math.sqrt(d_theta**2 + d_phi**2)
 
-        if dist > 0.001:  # Still moving toward center
-            # Move a fraction of the distance each frame
+        if dist > 0.001:
             move_factor = self.convergence_speed * 0.02
-            if self.coalesced:
-                # Coalesced particles move slower but stay grouped
-                move_factor *= 0.5
-
             self.theta += d_theta * move_factor
             self.phi += d_phi * move_factor
 
     def mark_coalesced(self):
-        """Mark particle as coalesced (joined the siphon mass)."""
+        """Mark particle as coalesced."""
         self.coalesced = True
 
 
@@ -343,9 +332,10 @@ def setup_simulation():
 
     for siphon_idx, siphon in enumerate(SIM.siphons):
         for _ in range(PARTICLES_PER_SIPHON):
-            # Starting position with slight offset from siphon center
-            # Distributed in a ring around the siphon
-            angle_offset = random.uniform(0.05, CONVERGENCE_ANGLE)
+            # Starting position with offset from siphon center
+            # Must start OUTSIDE coalescence distance so they don't immediately coalesce
+            min_offset = COALESCENCE_DISTANCE * 1.5  # Start outside coalescence zone
+            angle_offset = random.uniform(min_offset, CONVERGENCE_ANGLE)
             direction = random.uniform(0, 2 * math.pi)
 
             start_theta = siphon.theta + angle_offset * math.cos(direction)
@@ -412,9 +402,9 @@ def setup_simulation():
 
 
 def check_coalescence(frame):
-    """Check if particles should coalesce at siphons."""
+    """Check if particles should coalesce and grow siphon depth."""
     for particle in SIM.particles:
-        if particle.coalesced or particle.siphon_index < 0:
+        if particle.siphon_index < 0:
             continue
 
         siphon = SIM.siphons[particle.siphon_index]
@@ -426,15 +416,32 @@ def check_coalescence(frame):
         )
 
         if dist < COALESCENCE_DISTANCE:
-            # Mark particle as coalesced and add mass to siphon
-            particle.mark_coalesced()
-            siphon.add_mass(particle.mass)
+            if not particle.coalesced:
+                # First time coalescing - mark it
+                particle.mark_coalesced()
+                siphon.add_mass(particle.mass)
+                print(f"  Frame {frame}: Particle coalesced at siphon {particle.siphon_index}, "
+                      f"total mass: {siphon.mass:.2f}")
 
-            # Reduce expansion energy (mass resistance)
-            SIM.expansion_energy *= 0.998
+    # Grow siphon depth very gradually - must be slower than expansion
+    # so particles don't appear to move backward
+    for siphon in SIM.siphons:
+        if siphon.mass > 0:
+            # Depth grows at a fraction of the expansion rate
+            # This ensures siphon deepens slower than sphere expands
+            max_growth_per_frame = EXPANSION_RATE * 0.3  # 30% of expansion rate
 
-            print(f"  Frame {frame}: Particle coalesced at siphon {particle.siphon_index}, "
-                  f"total mass: {siphon.mass:.2f}, depth: {siphon.depth:.2f}")
+            # Target depth based on mass (more mass = deeper siphon eventually)
+            target_depth = min(SIPHON_MAX_DEPTH, siphon.mass * 0.15)
+
+            # Calculate desired increment
+            desired_increment = (target_depth - siphon.depth) * 0.01
+
+            # Clamp to max growth rate so we never go backward
+            depth_increment = min(desired_increment, max_growth_per_frame)
+            depth_increment = max(0, depth_increment)  # Never decrease
+
+            siphon.depth += depth_increment
 
 
 def update_sphere(current_radius):
@@ -458,17 +465,18 @@ def update_particles(current_radius, frame):
         if not particle.blender_obj:
             continue
 
-        # Update angular position (particles always move toward siphon center)
-        particle.update_position(frame, SIPHON_START_FRAME, SIM.siphons)
+        # Update angular position (particles move toward siphon center)
+        particle.update_angular_position(frame, SIPHON_START_FRAME, SIM.siphons)
 
         theta, phi = particle.theta, particle.phi
 
-        # Calculate depth at particle position
+        # Calculate sphere surface depth at particle position (same as sphere mesh)
         total_depth = sum(s.calculate_depth_at(theta, phi) for s in SIM.siphons)
 
-        # Place particle on surface (slightly above)
-        effective_radius = max(0.1, current_radius - total_depth) + PARTICLE_SIZE * 0.5
-        particle.blender_obj.location = spherical_to_cartesian(theta, phi, effective_radius)
+        # Particle sits on the sphere surface (at the siphon depression)
+        surface_radius = max(0.1, current_radius - total_depth)
+        particle_radius = surface_radius + PARTICLE_SIZE * 0.5
+        particle.blender_obj.location = spherical_to_cartesian(theta, phi, particle_radius)
 
 
 def frame_update_handler(scene):
@@ -570,12 +578,15 @@ def bake_animation():
             if not particle.blender_obj:
                 continue
 
-            particle.update_position(frame, SIPHON_START_FRAME, SIM.siphons)
+            particle.update_angular_position(frame, SIPHON_START_FRAME, SIM.siphons)
 
             theta, phi = particle.theta, particle.phi
+            # Calculate sphere surface depth at particle position
             total_depth = sum(s.calculate_depth_at(theta, phi) for s in SIM.siphons)
-            effective_radius = max(0.1, current_radius - total_depth) + PARTICLE_SIZE * 0.5
-            particle.blender_obj.location = spherical_to_cartesian(theta, phi, effective_radius)
+            # Particle sits on the sphere surface
+            surface_radius = max(0.1, current_radius - total_depth)
+            particle_radius = surface_radius + PARTICLE_SIZE * 0.5
+            particle.blender_obj.location = spherical_to_cartesian(theta, phi, particle_radius)
 
         # Keyframe particles
         for particle in SIM.particles:
