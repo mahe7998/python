@@ -34,15 +34,16 @@ FPS = 30
 INITIAL_RADIUS = 0.15
 MAX_RADIUS = 17.0
 SPHERE_SUBDIVISIONS = 5  # Icosphere subdivisions
+SPHERE_TRANSPARENCY = 0.8  # 0.0 = opaque, 1.0 = fully transparent
 
 # Particle settings
-PARTICLE_SIZE = 0.25  # Larger particles for visibility
+PARTICLE_SIZE = 0.1  # Half the original size
 PARTICLE_COLOR = (0.2, 0.6, 1.0, 1.0)  # Blue-ish
 
 # Siphon settings
 SIPHON_START_FRAME = 30
-SIPHON_MAX_DEPTH = 3.0
-SIPHON_WIDTH = 0.3  # Angular width in radians
+SIPHON_MAX_DEPTH = 5.0
+SIPHON_WIDTH = 0.2  # Angular width in radians
 MAX_SIPHONS = 2  # Maximum number of siphons that can form
 
 # Siphon seed locations (theta, phi) - predefined where siphons will form
@@ -54,8 +55,9 @@ SIPHON_SEEDS = [
 
 # Particle distribution (only around siphon locations)
 PARTICLES_PER_SIPHON = 20  # Particles that will converge at each siphon
-CONVERGENCE_ANGLE = 0.2    # Angular spread for converging particles
+CONVERGENCE_ANGLE = 0.15    # Angular spread for converging particles (2x original)
 COALESCENCE_DISTANCE = 0.08  # Angular distance to lock particles together
+CONVERGENCE_SPEED_FACTOR = 0.3  # Slowdown factor (0.1 = very slow, 1.0 = normal speed)
 
 # Physics
 EXPANSION_RATE = (MAX_RADIUS - INITIAL_RADIUS) / TOTAL_FRAMES
@@ -120,7 +122,7 @@ def create_material(name, color, emission_strength=0, transparent=False):
 
         mix_shader = nodes.new('ShaderNodeMixShader')
         mix_shader.location = (200, 0)
-        mix_shader.inputs['Fac'].default_value = 0.9  # 90% transparent
+        mix_shader.inputs['Fac'].default_value = SPHERE_TRANSPARENCY
 
         links.new(principled.outputs['BSDF'], mix_shader.inputs[1])
         links.new(transparent_node.outputs['BSDF'], mix_shader.inputs[2])
@@ -350,7 +352,8 @@ def setup_simulation():
             start_theta = max(0.1, min(math.pi - 0.1, start_theta))
 
             # Convergence speed varies - some particles arrive earlier
-            speed = random.uniform(0.8, 2.0)
+            # Apply global slowdown factor
+            speed = random.uniform(0.8, 2.0) * CONVERGENCE_SPEED_FACTOR
 
             particle = SurfaceParticle(
                 theta=start_theta,
