@@ -44,17 +44,27 @@ PARTICLE_COLOR = (0.2, 0.6, 1.0, 1.0)  # Blue-ish
 SIPHON_START_FRAME = 50  # Frame when coalescence can begin (delay for particles to spread)
 SIPHON_MAX_DEPTH = 4.0
 SIPHON_WIDTH = 0.1  # Angular width in radians
-MAX_SIPHONS = 1  # Maximum number of siphons that can form
+MAX_SIPHONS = 10  # Maximum number of siphons that can form
 
 # Siphon seed locations (theta, phi) - predefined where siphons will form
-# Particles near these locations will have slight angular deviations
+# Distributed around the sphere for even coverage
+# theta: 0 to pi (pole to pole), phi: 0 to 2*pi (around equator)
 SIPHON_SEEDS = [
-    (math.pi * 0.4, math.pi * 0.5),    # First siphon location
-    (math.pi * 0.6, math.pi * 1.3),    # Second siphon location
+    (math.pi * 0.25, math.pi * 0.0),    # Upper region, front
+    (math.pi * 0.25, math.pi * 0.8),    # Upper region, side
+    (math.pi * 0.25, math.pi * 1.6),    # Upper region, back
+    (math.pi * 0.50, math.pi * 0.4),    # Equator, front-side
+    (math.pi * 0.50, math.pi * 1.0),    # Equator, side
+    (math.pi * 0.50, math.pi * 1.6),    # Equator, back
+    (math.pi * 0.75, math.pi * 0.2),    # Lower region, front
+    (math.pi * 0.75, math.pi * 1.0),    # Lower region, side
+    (math.pi * 0.75, math.pi * 1.8),    # Lower region, back
+    (math.pi * 0.40, math.pi * 1.3),    # Mid-upper, back-side
 ]
 
 # Particle distribution (only around siphon locations)
-PARTICLES_PER_SIPHON = 40  # Particles that will converge at each siphon
+PARTICLES_PER_SIPHON_MIN = 20  # Minimum particles per siphon
+PARTICLES_PER_SIPHON_MAX = 60  # Maximum particles per siphon
 CONVERGENCE_ANGLE = 0.2    # Angular spread for converging particles (2x original)
 COALESCENCE_DISTANCE = 0.1  # Angular distance to lock particles together
 CONVERGENCE_SPEED_FACTOR = 1.0  # Slowdown factor (0.1 = very slow, 1.0 = normal speed)
@@ -332,7 +342,9 @@ def setup_simulation():
     particle_index = 0
 
     for siphon_idx, siphon in enumerate(SIM.siphons):
-        for _ in range(PARTICLES_PER_SIPHON):
+        # Random number of particles for this siphon
+        num_particles = random.randint(PARTICLES_PER_SIPHON_MIN, PARTICLES_PER_SIPHON_MAX)
+        for _ in range(num_particles):
             # Starting position with offset from siphon center
             # Must start OUTSIDE coalescence distance so they don't immediately coalesce
             min_offset = COALESCENCE_DISTANCE * 1.5  # Start outside coalescence zone
