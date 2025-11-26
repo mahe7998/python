@@ -200,17 +200,21 @@ class Particle:
                 strength = gravity_strength * self.mass * other.mass / (dist * dist)
                 force += direction.normalized() * strength
 
-        # Stronger attraction to clusters - mass scales attraction significantly
+        # Attraction to clusters - proportional to cluster mass
         for cluster in clusters:
             if not cluster.active:
                 continue
             direction = cluster.position - self.position
             dist = direction.length
             if dist > MIN_DISTANCE:
-                # Clusters have more mass, much stronger pull (mass^1.5 for extra attraction)
-                effective_mass = cluster.mass ** 1.5
-                strength = gravity_strength * self.mass * effective_mass / (dist * dist)
-                force += direction.normalized() * strength * 3.0
+                # Clusters attract based on their mass
+                strength = gravity_strength * self.mass * cluster.mass / (dist * dist)
+                force += direction.normalized() * strength
+
+        # Limit gravitational acceleration to preserve outward motion
+        max_accel = 0.08
+        if force.length > max_accel:
+            force = force.normalized() * max_accel
 
         self.velocity += force
 
@@ -257,12 +261,21 @@ class Cluster:
             direction = other.position - self.position
             dist = direction.length
             if dist > MIN_DISTANCE:
-                # Combined mass effect - bigger clusters attract more strongly
-                combined_mass = (self.mass ** 1.2) * (other.mass ** 1.2)
-                strength = gravity_strength * combined_mass / (dist * dist)
-                force += direction.normalized() * strength * 2.0
+                # F = G * m1 * m2 / r^2, then acceleration = F / m1
+                # So acceleration = G * m2 / r^2 (bigger clusters attract but are harder to move)
+                strength = gravity_strength * other.mass / (dist * dist)
+                force += direction.normalized() * strength
 
-        self.velocity += force
+        # Acceleration is force / mass (larger clusters have more inertia)
+        # This keeps large clusters moving mostly outward
+        acceleration = force / (self.mass ** 0.5)
+
+        # Limit the gravitational influence - gravity should only slightly perturb motion
+        max_accel = 0.05
+        if acceleration.length > max_accel:
+            acceleration = acceleration.normalized() * max_accel
+
+        self.velocity += acceleration
 
     def update(self, damping):
         """Update cluster position."""
@@ -551,9 +564,15 @@ def check_cluster_merging(frame):
                 explosion = ExplosionEffect(new_pos, frame, explosion_obj)
                 SIM.explosion_effects.append(explosion)
 
-                # Deactivate absorbed cluster
+                # Deactivate absorbed cluster - hide with alpha=0
                 absorbed.active = False
                 absorbed.blender_obj.scale = (0.001, 0.001, 0.001)
+                if absorbed.blender_obj and len(absorbed.blender_obj.data.materials) > 0:
+                    mat = absorbed.blender_obj.data.materials[0]
+                    if mat and mat.node_tree:
+                        alpha_input = mat.node_tree.nodes["Principled BSDF"].inputs['Alpha']
+                        alpha_input.default_value = 0.0
+                        alpha_input.keyframe_insert(data_path="default_value", frame=frame)
 
                 print(f"  Frame {frame}: Clusters merged! New mass: {total_mass:.1f}")
                 break
@@ -770,7 +789,7 @@ def bake_animation():
         # Update clusters
         if gravity_active:
             for cluster in SIM.clusters:
-                cluster.apply_gravity(SIM.clusters, gravity_strength * 3)
+                cluster.apply_gravity(SIM.clusters, gravity_strength)
 
             for cluster in SIM.clusters:
                 cluster.update(DAMPING)
