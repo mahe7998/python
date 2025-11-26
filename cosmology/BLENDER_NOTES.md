@@ -21,19 +21,36 @@ mat = create_material(f"ClusterMat_{id}", color, emission_strength=8.0, use_alph
 
 2. Set `blend_method = 'BLEND'` on the material to enable transparency
 
-3. Keyframe alpha=0 for all frames before the object should appear:
+3. Keyframe alpha=0 at frame 1 when creating the object:
 ```python
-# Hide with alpha=0 from frame 1 to frame before creation
-mat.node_tree.nodes["Principled BSDF"].inputs['Alpha'].default_value = 0.0
-mat.node_tree.nodes["Principled BSDF"].inputs['Alpha'].keyframe_insert(data_path="default_value", frame=1)
-mat.node_tree.nodes["Principled BSDF"].inputs['Alpha'].keyframe_insert(data_path="default_value", frame=creation_frame-1)
+alpha_input = mat.node_tree.nodes["Principled BSDF"].inputs['Alpha']
+alpha_input.default_value = 0.0
+alpha_input.keyframe_insert(data_path="default_value", frame=1)
+if frame > 2:
+    alpha_input.keyframe_insert(data_path="default_value", frame=frame-1)
 
 # Show at creation frame
-mat.node_tree.nodes["Principled BSDF"].inputs['Alpha'].default_value = 1.0
-mat.node_tree.nodes["Principled BSDF"].inputs['Alpha'].keyframe_insert(data_path="default_value", frame=creation_frame)
+alpha_input.default_value = 1.0
+alpha_input.keyframe_insert(data_path="default_value", frame=frame)
 ```
+
+4. **IMPORTANT: Final pass after baking** - Go back and re-keyframe alpha=0 at frame 1 for ALL dynamically created objects after the baking loop completes:
+```python
+# Final pass: ensure all clusters and explosions are hidden at frame 1
+bpy.context.scene.frame_set(1)
+for cluster in SIM.clusters:
+    if cluster.blender_obj and len(cluster.blender_obj.data.materials) > 0:
+        mat = cluster.blender_obj.data.materials[0]
+        if mat and mat.node_tree:
+            alpha_input = mat.node_tree.nodes["Principled BSDF"].inputs['Alpha']
+            alpha_input.default_value = 0.0
+            alpha_input.keyframe_insert(data_path="default_value", frame=1)
+```
+
+This final pass is **required** because the keyframes set during object creation may not properly persist or may be overwritten during the baking process.
 
 ### What Doesn't Work
 - Setting scale to (0.001, 0.001, 0.001) - objects still render
 - Moving objects far away (10000, 10000, 10000) - not a clean solution
 - Only keyframing from creation frame onwards - objects still visible at frame 1
+- Keyframing alpha only at creation time without a final pass - keyframes may not persist

@@ -38,13 +38,13 @@ MAX_RADIUS = 50.0  # Maximum expansion
 EXPLOSION_SPEED = 0.8  # Initial outward velocity
 
 # Particle settings
-NUM_PARTICLES = 100
+NUM_PARTICLES = 1000
 PARTICLE_SIZE = 0.15
 PARTICLE_COLOR = (1.0, 0.9, 0.7, 1.0)  # Warm white/yellow
 
 # Physics settings
-GRAVITY_START_FRAME = FPS * 5  # 5 seconds = 25 frames
-GRAVITATIONAL_CONSTANT = 0.0008  # Strength of gravitational pull
+GRAVITY_START_FRAME = FPS * 4  # 5 seconds = 25 frames
+GRAVITATIONAL_CONSTANT = 0.002  # Strength of gravitational pull
 DAMPING = 0.995  # Velocity damping per frame
 MIN_DISTANCE = 0.5  # Minimum distance for gravity calculation (avoid singularity)
 
@@ -200,16 +200,17 @@ class Particle:
                 strength = gravity_strength * self.mass * other.mass / (dist * dist)
                 force += direction.normalized() * strength
 
-        # Stronger attraction to clusters
+        # Stronger attraction to clusters - mass scales attraction significantly
         for cluster in clusters:
             if not cluster.active:
                 continue
             direction = cluster.position - self.position
             dist = direction.length
             if dist > MIN_DISTANCE:
-                # Clusters have more mass, stronger pull
-                strength = gravity_strength * self.mass * cluster.mass / (dist * dist)
-                force += direction.normalized() * strength * 2.0
+                # Clusters have more mass, much stronger pull (mass^1.5 for extra attraction)
+                effective_mass = cluster.mass ** 1.5
+                strength = gravity_strength * self.mass * effective_mass / (dist * dist)
+                force += direction.normalized() * strength * 3.0
 
         self.velocity += force
 
@@ -256,8 +257,10 @@ class Cluster:
             direction = other.position - self.position
             dist = direction.length
             if dist > MIN_DISTANCE:
-                strength = gravity_strength * self.mass * other.mass / (dist * dist)
-                force += direction.normalized() * strength
+                # Combined mass effect - bigger clusters attract more strongly
+                combined_mass = (self.mass ** 1.2) * (other.mass ** 1.2)
+                strength = gravity_strength * combined_mass / (dist * dist)
+                force += direction.normalized() * strength * 2.0
 
         self.velocity += force
 
@@ -456,13 +459,15 @@ def check_particle_clustering(frame):
                 cluster.blender_obj.data.materials.append(cluster_mat)
 
                 # Hide with alpha=0 for all frames before creation
-                cluster_mat.node_tree.nodes["Principled BSDF"].inputs['Alpha'].default_value = 0.0
-                cluster_mat.node_tree.nodes["Principled BSDF"].inputs['Alpha'].keyframe_insert(data_path="default_value", frame=1)
-                cluster_mat.node_tree.nodes["Principled BSDF"].inputs['Alpha'].keyframe_insert(data_path="default_value", frame=frame-1)
+                alpha_input = cluster_mat.node_tree.nodes["Principled BSDF"].inputs['Alpha']
+                alpha_input.default_value = 0.0
+                alpha_input.keyframe_insert(data_path="default_value", frame=1)
+                if frame > 2:
+                    alpha_input.keyframe_insert(data_path="default_value", frame=frame-1)
 
                 # Show at creation frame
-                cluster_mat.node_tree.nodes["Principled BSDF"].inputs['Alpha'].default_value = 1.0
-                cluster_mat.node_tree.nodes["Principled BSDF"].inputs['Alpha'].keyframe_insert(data_path="default_value", frame=frame)
+                alpha_input.default_value = 1.0
+                alpha_input.keyframe_insert(data_path="default_value", frame=frame)
 
                 new_radius = PARTICLE_SIZE * (cluster.mass ** 0.33)
                 cluster.blender_obj.scale = (new_radius / PARTICLE_SIZE,) * 3
@@ -533,13 +538,15 @@ def check_cluster_merging(frame):
                 explosion_obj.data.materials.append(explosion_mat)
 
                 # Hide with alpha=0 for all frames before creation
-                explosion_mat.node_tree.nodes["Principled BSDF"].inputs['Alpha'].default_value = 0.0
-                explosion_mat.node_tree.nodes["Principled BSDF"].inputs['Alpha'].keyframe_insert(data_path="default_value", frame=1)
-                explosion_mat.node_tree.nodes["Principled BSDF"].inputs['Alpha'].keyframe_insert(data_path="default_value", frame=frame-1)
+                alpha_input = explosion_mat.node_tree.nodes["Principled BSDF"].inputs['Alpha']
+                alpha_input.default_value = 0.0
+                alpha_input.keyframe_insert(data_path="default_value", frame=1)
+                if frame > 2:
+                    alpha_input.keyframe_insert(data_path="default_value", frame=frame-1)
 
                 # Show at creation frame
-                explosion_mat.node_tree.nodes["Principled BSDF"].inputs['Alpha'].default_value = 1.0
-                explosion_mat.node_tree.nodes["Principled BSDF"].inputs['Alpha'].keyframe_insert(data_path="default_value", frame=frame)
+                alpha_input.default_value = 1.0
+                alpha_input.keyframe_insert(data_path="default_value", frame=frame)
 
                 explosion = ExplosionEffect(new_pos, frame, explosion_obj)
                 SIM.explosion_effects.append(explosion)
@@ -813,6 +820,25 @@ def bake_animation():
 
         if frame % 30 == 0:
             print(f"  Frame {frame}/{TOTAL_FRAMES} - Active particles: {sum(1 for p in SIM.particles if p.active)}, Clusters: {sum(1 for c in SIM.clusters if c.active)}")
+
+    # Final pass: ensure all clusters and explosions are hidden at frame 1
+    # This is needed because they're created mid-animation
+    bpy.context.scene.frame_set(1)
+    for cluster in SIM.clusters:
+        if cluster.blender_obj and len(cluster.blender_obj.data.materials) > 0:
+            mat = cluster.blender_obj.data.materials[0]
+            if mat and mat.node_tree:
+                alpha_input = mat.node_tree.nodes["Principled BSDF"].inputs['Alpha']
+                alpha_input.default_value = 0.0
+                alpha_input.keyframe_insert(data_path="default_value", frame=1)
+
+    for explosion in SIM.explosion_effects:
+        if explosion.blender_obj and len(explosion.blender_obj.data.materials) > 0:
+            mat = explosion.blender_obj.data.materials[0]
+            if mat and mat.node_tree:
+                alpha_input = mat.node_tree.nodes["Principled BSDF"].inputs['Alpha']
+                alpha_input.default_value = 0.0
+                alpha_input.keyframe_insert(data_path="default_value", frame=1)
 
     print("Baking complete!")
     print(f"  - {len(SIM.particles)} particles")
