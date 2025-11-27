@@ -38,6 +38,12 @@ class MLXWhisperService:
         self.model_name = model_name
         self.path_or_hf_repo = path_or_hf_repo
 
+        # Device is always MPS (Metal Performance Shaders) for MLX on Apple Silicon
+        self.device = "mps"
+
+        # Speaker diarization not yet supported in MLX-Whisper (placeholder for future)
+        self.diarize_model = None
+
         logger.info(f"Initialized MLX-Whisper service with model={model_name} (Apple Silicon GPU acceleration)")
 
     def load_models(self):

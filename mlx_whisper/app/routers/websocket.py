@@ -1260,8 +1260,16 @@ async def websocket_transcribe(websocket: WebSocket):
                     "duration_seconds": total_duration
                 })
 
-                # Clear buffer for next recording session (but keep WebM file)
-                # audio_buffer.clear()
+                # Reset for next recording in same session
+                # Create new session_id and audio buffer for potential next recording
+                session_id = str(uuid.uuid4())
+                audio_buffer = AudioBuffer(audio_dir=audio_dir, session_id=session_id, channel_selection=selected_channel or 'both')
+                chunk_counter = 0
+                # Reset resume state for next recording
+                existing_audio_path = None
+                existing_duration = 0.0
+                resume_transcription_id = None
+                logger.info(f"Reset for next recording, new session: {session_id}")
 
             elif message_type == "ping":
                 # Keepalive ping
@@ -1283,11 +1291,11 @@ async def websocket_transcribe(websocket: WebSocket):
                 "type": "error",
                 "message": f"Server error: {str(e)}"
             })
-        except:
-            pass
+        except Exception as send_error:
+            logger.debug(f"Could not send error to client (likely disconnected): {send_error}")
     finally:
         try:
             await websocket.close()
-        except:
-            pass
+        except Exception as close_error:
+            logger.debug(f"Could not close WebSocket (likely already closed): {close_error}")
         logger.info("WebSocket connection closed")
