@@ -441,6 +441,9 @@ class AudioBuffer:
         Extract only the remaining untranscribed audio from WebM to WAV for final transcription.
         This ensures we only transcribe the end portion that wasn't covered by sliding window.
 
+        Includes at least 2 seconds of overlap from previous transcription to ensure
+        enough audio context for accurate transcription (deduplication handles overlap).
+
         Args:
             session_id: Session identifier
 
@@ -454,7 +457,11 @@ class AudioBuffer:
                 return None
 
             total_duration = self.absolute_duration
-            start_position = self.last_transcribed_position
+            # Include at least 2 seconds of overlap from previous transcription
+            # This ensures we have enough audio context even for short final chunks
+            # The deduplication logic will handle any overlapping text
+            overlap_seconds = 2.0
+            start_position = max(0, self.last_transcribed_position - overlap_seconds)
 
         # Calculate the remaining duration to transcribe
         remaining_duration = total_duration - start_position
@@ -503,7 +510,7 @@ class AudioBuffer:
                 logger.error(f"ffmpeg final extraction failed: {result.stderr.decode()}")
                 return None
 
-            logger.info(f"Extracted final audio: {remaining_duration:.1f}s (from {start_position:.1f}s to {total_duration:.1f}s)")
+            logger.info(f"Extracted final audio: {remaining_duration:.1f}s (from {start_position:.1f}s to {total_duration:.1f}s, with {overlap_seconds:.1f}s overlap)")
             return str(output_path)
 
         except subprocess.TimeoutExpired:
