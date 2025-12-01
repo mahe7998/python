@@ -25,8 +25,8 @@ class MLXWhisperService:
 
     def __init__(
         self,
-        model_name: str = "mlx-community/whisper-base",
-        path_or_hf_repo: str = "mlx-community/whisper-base",
+        model_name: str = "mlx-community/whisper-base-mlx",
+        path_or_hf_repo: str = "mlx-community/whisper-base-mlx",
     ):
         """
         Initialize MLX-Whisper service
@@ -54,6 +54,15 @@ class MLXWhisperService:
         import numpy as np
         import tempfile
         import os
+
+        # Set up HuggingFace authentication if HF_TOKEN is available
+        hf_token = os.environ.get("HF_TOKEN")
+        if hf_token:
+            # Set the token in the environment for huggingface_hub to use
+            os.environ["HUGGING_FACE_HUB_TOKEN"] = hf_token
+            logger.info("HF_TOKEN found - authenticated access to HuggingFace enabled")
+        else:
+            logger.info("No HF_TOKEN set - using public model access only")
 
         logger.info("Pre-loading MLX-Whisper model (downloading if needed)...")
         logger.info("This may take 1-2 minutes on first run...")
@@ -94,25 +103,40 @@ class MLXWhisperService:
             logger.error(f"Error pre-loading model: {e}")
             logger.info("Will fall back to lazy loading on first transcription")
 
-    def _transcribe_sync(self, audio_path: str) -> Dict[str, Any]:
+    def _transcribe_sync(self, audio_path: str, language: Optional[str] = None) -> Dict[str, Any]:
         """
         Synchronous transcription (runs in thread pool)
 
         Args:
             audio_path: Path to audio file
+            language: Optional language code (e.g., 'en', 'fr'). If None, auto-detect.
 
         Returns:
             Transcription result dictionary
         """
         try:
             logger.info(f"Transcribing audio with MLX (GPU-accelerated): {audio_path}")
+            if language:
+                logger.info(f"Forcing language: {language}")
+            else:
+                logger.info("Language: auto-detect")
+
+            # Build transcription options
+            transcribe_kwargs = {
+                "path_or_hf_repo": self.path_or_hf_repo,
+                "verbose": False,
+                # Disable conditioning on previous text to prevent hallucination loops
+                # When True, hallucinations from one window propagate to subsequent windows
+                # causing repetition loops, especially on concatenated audio files
+                "condition_on_previous_text": False,
+            }
+
+            # Add language option if specified (forces transcription in that language)
+            if language:
+                transcribe_kwargs["language"] = language
 
             # Transcribe with MLX-Whisper (runs on Apple Silicon GPU)
-            result = mlx_whisper.transcribe(
-                audio_path,
-                path_or_hf_repo=self.path_or_hf_repo,
-                verbose=False
-            )
+            result = mlx_whisper.transcribe(audio_path, **transcribe_kwargs)
 
             # MLX-Whisper returns: {'text': str, 'segments': List[Dict], 'language': str}
             # segments contain: {'id', 'seek', 'start', 'end', 'text', 'tokens', 'temperature', 'avg_logprob', 'compression_ratio', 'no_speech_prob'}
@@ -126,7 +150,12 @@ class MLXWhisperService:
             logger.error(f"Error during transcription: {e}")
             raise
 
-    async def transcribe_audio(self, audio_path: str, channel: Optional[str] = None) -> List[TranscriptionSegment]:
+    async def transcribe_audio(
+        self,
+        audio_path: str,
+        channel: Optional[str] = None,
+        language: Optional[str] = None
+    ) -> List[TranscriptionSegment]:
         """
         Transcribe audio file with optional channel selection for stereo
 
@@ -136,11 +165,13 @@ class MLXWhisperService:
                     - 'left': Transcribe left channel only
                     - 'right': Transcribe right channel only
                     - 'both' or None: Mix stereo to mono (default behavior)
+            language: Optional language code (e.g., 'en', 'fr'). If None, auto-detect.
 
         Returns:
             List of transcription segments
         """
         from app.wav_utils import get_wav_info, split_stereo_to_mono
+        from functools import partial
 
         audio_path_obj = Path(audio_path)
 
@@ -165,7 +196,9 @@ class MLXWhisperService:
                 # Transcribe selected channel
                 selected_path = left_path if channel == 'left' else right_path
                 loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(executor, self._transcribe_sync, str(selected_path))
+                # Use partial to pass language parameter
+                transcribe_func = partial(self._transcribe_sync, str(selected_path), language=language)
+                result = await loop.run_in_executor(executor, transcribe_func)
 
                 # Clean up temporary files
                 try:
@@ -176,14 +209,16 @@ class MLXWhisperService:
             else:
                 # Fallback to standard transcription if split fails
                 loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(executor, self._transcribe_sync, audio_path)
+                transcribe_func = partial(self._transcribe_sync, audio_path, language=language)
+                result = await loop.run_in_executor(executor, transcribe_func)
         else:
             # Mono audio, 'both' selected, or no channel selection
             # Standard transcription (stereo will be mixed to mono by Whisper)
             if channels == 2:
                 logger.info("Stereo audio: mixing both channels to mono for transcription")
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(executor, self._transcribe_sync, audio_path)
+            transcribe_func = partial(self._transcribe_sync, audio_path, language=language)
+            result = await loop.run_in_executor(executor, transcribe_func)
 
         # Convert to TranscriptionSegment objects
         # MLX-Whisper doesn't include speaker diarization, so we don't set speaker field
@@ -234,7 +269,7 @@ class MLXWhisperService:
                 # Continue same speaker
                 markdown_lines.append(segment.text)
 
-        return "\n".join(markdown_lines)
+        return " ".join(markdown_lines)
 
     async def save_audio_chunk(self, audio_data: bytes, filename: str) -> str:
         """
@@ -273,8 +308,8 @@ def get_whisper_service() -> MLXWhisperService:
     global whisper_service
     if whisper_service is None:
         # Initialize with default settings
-        # Model options: mlx-community/whisper-tiny, whisper-base, whisper-small, whisper-medium, whisper-large-v3
-        model_name = os.getenv("WHISPER_MODEL", "mlx-community/whisper-base")
+        # Model options: mlx-community/whisper-tiny, whisper-base-mlx, whisper-small-mlx, whisper-medium-mlx, whisper-large-v3-mlx
+        model_name = os.getenv("WHISPER_MODEL", "mlx-community/whisper-base-mlx")
 
         whisper_service = MLXWhisperService(
             model_name=model_name,

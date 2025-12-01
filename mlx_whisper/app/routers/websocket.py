@@ -50,7 +50,14 @@ async def preload_model_with_resume(model_name: str, websocket: WebSocket) -> bo
         # This significantly speeds up large file downloads (can achieve ~2 Gbps)
         os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
 
-        logger.info(f"Pre-downloading model {model_name} with resume support (XET disabled, hf_transfer enabled)...")
+        # Get HuggingFace token for authenticated access to gated/private models
+        hf_token = os.environ.get("HF_TOKEN")
+        if hf_token:
+            logger.info(f"Pre-downloading model {model_name} with HF_TOKEN authentication...")
+        else:
+            logger.info(f"Pre-downloading model {model_name} (no HF_TOKEN set - public models only)...")
+
+        logger.info("Download options: XET disabled, hf_transfer enabled, resume support enabled")
 
         await websocket.send_json({
             "type": "status",
@@ -67,7 +74,8 @@ async def preload_model_with_resume(model_name: str, websocket: WebSocket) -> bo
                 repo_id=model_name,
                 resume_download=True,  # Automatic resume for interrupted downloads
                 local_files_only=False,
-                ignore_patterns=["*.md", "*.txt", ".gitattributes"]  # Skip unnecessary files
+                ignore_patterns=["*.md", "*.txt", ".gitattributes"],  # Skip unnecessary files
+                token=hf_token  # Use HF_TOKEN for authenticated access
             )
 
         # Run download with progress monitoring
@@ -310,6 +318,65 @@ def align_and_deduplicate_text(previous_text: str, new_text: str, overlap_thresh
     return new_portion
 
 
+async def add_webm_cuepoints(input_path: Path, output_path: Path, cue_interval_ms: int = 5000) -> bool:
+    """
+    Re-encode WebM file with proper cue points (seek table) for fast seeking.
+
+    MediaRecorder creates WebM files without cue points, which means browsers
+    must scan through the file to seek. This re-encodes the file with cue points
+    every N milliseconds, enabling instant seeking.
+
+    Args:
+        input_path: Path to input WebM file
+        output_path: Path for output WebM file with cue points
+        cue_interval_ms: Cue point interval in milliseconds (default 5000 = 5 seconds)
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Use ffmpeg to re-encode with cue points
+        # -cluster_time_limit: Controls how often cue points are written (in milliseconds)
+        # -cues_to_front 1: Move cue points (seek table) to the front of the file for fast access
+        # -reserve_index_space: Reserve space at start of file for the cues index
+        ffmpeg_cmd = [
+            'ffmpeg', '-y',
+            '-i', str(input_path),
+            '-c:a', 'libopus',           # Re-encode audio as Opus (WebM standard codec)
+            '-b:a', '128k',              # Audio bitrate
+            '-f', 'webm',                # Force WebM output format
+            '-cluster_time_limit', str(cue_interval_ms),  # Cue point interval (in milliseconds)
+            '-cues_to_front', '1',       # Move seek table to front of file
+            '-reserve_index_space', '50000',  # Reserve 50KB for cues index at file start
+            '-loglevel', 'error',
+            str(output_path)
+        ]
+
+        logger.info(f"Adding cue points to WebM: {input_path} -> {output_path}")
+        logger.info(f"Cue interval: {cue_interval_ms}ms, command: {' '.join(ffmpeg_cmd)}")
+
+        result = subprocess.run(ffmpeg_cmd, capture_output=True, timeout=120)
+
+        if result.returncode != 0:
+            logger.error(f"ffmpeg cue points failed: {result.stderr.decode()}")
+            return False
+
+        # Verify output file was created and has content
+        if not output_path.exists() or output_path.stat().st_size == 0:
+            logger.error("ffmpeg produced empty output file")
+            return False
+
+        logger.info(f"Successfully added cue points to WebM: {output_path}")
+        return True
+
+    except subprocess.TimeoutExpired:
+        logger.error("ffmpeg cue points timeout")
+        return False
+    except Exception as e:
+        logger.error(f"ffmpeg cue points error: {e}")
+        return False
+
+
 class AudioBuffer:
     """
     Buffer for accumulating audio chunks with ffmpeg-based sliding window transcription
@@ -456,15 +523,34 @@ class AudioBuffer:
                 logger.error(f"WebM file not found for session {session_id}")
                 return None
 
-            total_duration = self.absolute_duration
+            webm_path = self.webm_path
             # Include at least 2 seconds of overlap from previous transcription
             # This ensures we have enough audio context even for short final chunks
             # The deduplication logic will handle any overlapping text
             overlap_seconds = 2.0
             start_position = max(0, self.last_transcribed_position - overlap_seconds)
 
+        # Get actual file duration using ffprobe (more accurate than tracking chunks)
+        try:
+            probe_cmd = [
+                'ffprobe', '-v', 'error',
+                '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                str(webm_path)
+            ]
+            probe_result = subprocess.run(probe_cmd, capture_output=True, timeout=10)
+            if probe_result.returncode == 0:
+                actual_duration = float(probe_result.stdout.decode().strip())
+                logger.info(f"FINAL - Actual file duration from ffprobe: {actual_duration:.2f}s")
+            else:
+                logger.warning(f"ffprobe failed, using tracked duration: {probe_result.stderr.decode()}")
+                actual_duration = self.absolute_duration
+        except Exception as e:
+            logger.warning(f"ffprobe error, using tracked duration: {e}")
+            actual_duration = self.absolute_duration
+
         # Calculate the remaining duration to transcribe
-        remaining_duration = total_duration - start_position
+        remaining_duration = actual_duration - start_position
 
         # If there's less than 0.5 seconds remaining, skip it
         if remaining_duration < 0.5:
@@ -476,12 +562,13 @@ class AudioBuffer:
 
         try:
             # Use single ffmpeg call: extract channel with pan filter, then resample
-            # The order matters: pan filter extracts channel first, then -ar resamples
+            # Don't use -t (duration limit) - extract from start_position to END of file
+            # This ensures we capture all audio even if duration tracking was slightly off
             ffmpeg_cmd = [
                 'ffmpeg', '-y',
-                '-i', str(self.webm_path),
+                '-i', str(webm_path),
                 '-ss', str(start_position),
-                '-t', str(remaining_duration),
+                # No -t flag - extract to end of file
             ]
 
             # Add channel selection filter (applied before resampling)
@@ -510,7 +597,7 @@ class AudioBuffer:
                 logger.error(f"ffmpeg final extraction failed: {result.stderr.decode()}")
                 return None
 
-            logger.info(f"Extracted final audio: {remaining_duration:.1f}s (from {start_position:.1f}s to {total_duration:.1f}s, with {overlap_seconds:.1f}s overlap)")
+            logger.info(f"Extracted final audio: from {start_position:.1f}s to end of file ({actual_duration:.2f}s), with {overlap_seconds:.1f}s overlap")
             return str(output_path)
 
         except subprocess.TimeoutExpired:
@@ -522,48 +609,33 @@ class AudioBuffer:
 
     async def fix_webm_duration(self):
         """
-        Fix WebM file duration metadata using ffmpeg
+        Fix WebM file duration metadata and add cue points for seeking.
 
-        MediaRecorder creates WebM files without duration metadata,
-        which prevents browsers from determining file length for seeking.
-        This decodes and re-encodes the file to add proper duration metadata.
+        MediaRecorder creates WebM files without duration metadata or cue points,
+        which prevents browsers from determining file length and causes slow seeking.
+        This re-encodes the file with:
+        - Proper duration metadata
+        - Cue points (seek table) every 5 seconds for instant seeking
+        - Cues moved to front of file for fast access
         """
         if not self.webm_path or not self.webm_path.exists():
             logger.warning("No WebM file to fix")
             return
 
-        try:
-            # Create temporary output file
-            temp_output = self.webm_path.parent / f"{self.webm_path.stem}_fixed.webm"
+        # Create temporary output file
+        temp_output = self.webm_path.parent / f"{self.webm_path.stem}_fixed.webm"
 
-            # Decode and re-encode to add duration metadata
-            # We need to re-encode because simple remuxing doesn't work with MediaRecorder WebM files
-            result = subprocess.run([
-                'ffmpeg', '-y',
-                '-i', str(self.webm_path),
-                '-c:a', 'libopus',  # Re-encode audio as Opus
-                '-b:a', '128k',     # Audio bitrate
-                '-f', 'webm',       # Force WebM output format
-                '-loglevel', 'error',
-                str(temp_output)
-            ], capture_output=True, timeout=60)
+        # Use the helper function with 5-second cue interval
+        success = await add_webm_cuepoints(self.webm_path, temp_output, cue_interval_ms=5000)
 
-            if result.returncode != 0:
-                logger.error(f"ffmpeg WebM fix failed: {result.stderr.decode()}")
-                # Don't fail silently - keep original file
-                return
-
-            # Only replace if output file was created and has content
-            if temp_output.exists() and temp_output.stat().st_size > 0:
-                temp_output.replace(self.webm_path)
-                logger.info(f"Fixed WebM duration metadata: {self.webm_path}")
-            else:
-                logger.error(f"ffmpeg produced empty output file")
-
-        except subprocess.TimeoutExpired:
-            logger.error("ffmpeg WebM fix timeout")
-        except Exception as e:
-            logger.error(f"ffmpeg WebM fix error: {e}")
+        if success and temp_output.exists() and temp_output.stat().st_size > 0:
+            temp_output.replace(self.webm_path)
+            logger.info(f"Fixed WebM with cue points: {self.webm_path}")
+        else:
+            logger.error("Failed to fix WebM file")
+            # Clean up temp file if it exists
+            if temp_output.exists():
+                temp_output.unlink()
 
     def mark_transcribed(self, transcription_text: str):
         """
@@ -613,6 +685,7 @@ async def websocket_transcribe(websocket: WebSocket):
     whisper_service = None
     selected_model = None
     selected_channel = None  # Will be set when client sends channel selection ('left', 'right', 'both', or None)
+    selected_language = None  # Will be set when client sends language selection (e.g., 'en', 'fr', or None for auto-detect)
     resume_transcription_id = None  # Will be set when client wants to resume an existing transcription
     existing_audio_path = None  # Path to existing audio file when resuming
     existing_duration = 0.0  # Duration of existing audio when resuming
@@ -645,7 +718,7 @@ async def websocket_transcribe(websocket: WebSocket):
 
             if message_type == "set_model":
                 # Set the model for this session
-                model_name = data.get("model", "mlx-community/whisper-base")
+                model_name = data.get("model", "mlx-community/whisper-base-mlx")
                 selected_model = model_name
 
                 logger.info(f"Client selected model: {model_name}")
@@ -787,6 +860,18 @@ async def websocket_transcribe(websocket: WebSocket):
                     "message": f"Channel set to: {channel}"
                 })
 
+            elif message_type == "set_language":
+                # Set the transcription language for this session
+                language = data.get("language")  # None means auto-detect
+
+                selected_language = language
+                logger.info(f"[LANGUAGE DEBUG] Client selected language: {language if language else 'auto-detect'}")
+
+                await websocket.send_json({
+                    "type": "status",
+                    "message": f"Language set to: {language if language else 'auto-detect'}"
+                })
+
             elif message_type == "set_resume_transcription":
                 # Set the transcription ID to resume from
                 transcription_id = data.get("transcription_id")
@@ -843,7 +928,8 @@ async def websocket_transcribe(websocket: WebSocket):
                 audio_path = data.get("audio_path")
 
                 if audio_path:
-                    logger.info(f"Client wants to resume from audio file: {audio_path}")
+                    logger.info(f"[CONCAT DEBUG] set_resume_audio received: {audio_path}")
+                    logger.info(f"[CONCAT DEBUG] Current existing_audio_path before set: {existing_audio_path}")
 
                     # Convert API path to filesystem path
                     if audio_path.startswith("/api/audio/"):
@@ -860,7 +946,8 @@ async def websocket_transcribe(websocket: WebSocket):
                             session_id = str(uuid.uuid4())
                             audio_buffer = AudioBuffer(audio_dir=audio_dir, session_id=session_id, channel_selection=selected_channel or 'both')
                             chunk_counter = 0
-                            logger.info(f"Created new session {session_id} for resumed recording")
+                            logger.info(f"[CONCAT DEBUG] Created new session {session_id} for resumed recording")
+                            logger.info(f"[CONCAT DEBUG] existing_audio_path set to: {existing_audio_path}")
 
                             logger.info(f"Resuming from audio file: {existing_audio_path}")
 
@@ -923,7 +1010,7 @@ async def websocket_transcribe(websocket: WebSocket):
 
                         # Transcribe the sliding window
                         try:
-                            segments = await whisper_service.transcribe_audio(audio_path, channel=selected_channel)
+                            segments = await whisper_service.transcribe_audio(audio_path, channel=selected_channel, language=selected_language)
 
                             # Extract full text from all segments
                             full_text = " ".join(seg.text.strip() for seg in segments if seg.text.strip())
@@ -1016,8 +1103,18 @@ async def websocket_transcribe(websocket: WebSocket):
                 logger.info("End recording signal received")
 
                 if audio_buffer.webm_path and audio_buffer.webm_path.exists():
-                    # Fix WebM duration metadata for proper seeking in browser
-                    await audio_buffer.fix_webm_duration()
+                    # Send status to disable recording button while processing
+                    await websocket.send_json({
+                        "type": "processing_audio",
+                        "message": "Optimizing audio for playback..."
+                    })
+
+                    # Fix WebM duration metadata and add cue points for proper seeking in browser
+                    # Skip this if we're resuming - the file will be concatenated and cues added to the final file
+                    if not existing_audio_path:
+                        await audio_buffer.fix_webm_duration()
+                    else:
+                        logger.info("Skipping cue points for intermediate file (will be concatenated)")
 
                     await websocket.send_json({
                         "type": "status",
@@ -1040,7 +1137,7 @@ async def websocket_transcribe(websocket: WebSocket):
                         })
                     else:
                         try:
-                            segments = await whisper_service.transcribe_audio(audio_path, channel=selected_channel)
+                            segments = await whisper_service.transcribe_audio(audio_path, channel=selected_channel, language=selected_language)
 
                             # Extract full text from all segments
                             full_text = " ".join(seg.text.strip() for seg in segments if seg.text.strip())
@@ -1121,6 +1218,9 @@ async def websocket_transcribe(websocket: WebSocket):
                 final_audio_path = audio_buffer.webm_path
                 total_duration = audio_buffer.absolute_duration
 
+                logger.info(f"[CONCAT DEBUG] end_recording: existing_audio_path = {existing_audio_path}")
+                logger.info(f"[CONCAT DEBUG] end_recording: audio_buffer.webm_path = {audio_buffer.webm_path}")
+
                 if existing_audio_path:
                     if resume_transcription_id:
                         logger.info(f"Resuming transcription {resume_transcription_id}, concatenating audio files")
@@ -1191,34 +1291,20 @@ async def websocket_transcribe(websocket: WebSocket):
 
                                 logger.info(f"Audio concatenation successful: {total_duration:.1f}s total duration")
 
-                                # Fix WebM duration metadata after concatenation
-                                # The concat demuxer with -c copy doesn't update duration metadata
-                                try:
-                                    temp_fixed = concat_output.parent / f"{concat_output.stem}_fixed.webm"
+                                # Add cue points to concatenated WebM for fast seeking
+                                # The concat demuxer with -c copy doesn't add cue points
+                                temp_fixed = concat_output.parent / f"{concat_output.stem}_fixed.webm"
+                                logger.info("Adding cue points to concatenated WebM for fast seeking...")
+                                cue_success = await add_webm_cuepoints(concat_output, temp_fixed, cue_interval_ms=5000)
 
-                                    fix_cmd = [
-                                        'ffmpeg', '-y',
-                                        '-i', str(concat_output),
-                                        '-c:a', 'libopus',  # Re-encode audio as Opus
-                                        '-b:a', '128k',     # Audio bitrate
-                                        '-f', 'webm',       # Force WebM output format
-                                        '-loglevel', 'error',
-                                        str(temp_fixed)
-                                    ]
-
-                                    logger.info("Fixing WebM duration metadata after concatenation...")
-                                    fix_result = subprocess.run(fix_cmd, capture_output=True, timeout=60)
-
-                                    if fix_result.returncode == 0 and temp_fixed.exists() and temp_fixed.stat().st_size > 0:
-                                        temp_fixed.replace(concat_output)
-                                        logger.info(f"Fixed concatenated WebM duration metadata: {concat_output}")
-                                    else:
-                                        logger.warning(f"Could not fix WebM duration metadata: {fix_result.stderr.decode() if fix_result.stderr else 'unknown error'}")
-
-                                except subprocess.TimeoutExpired:
-                                    logger.error("ffmpeg WebM fix timeout after concatenation")
-                                except Exception as e:
-                                    logger.error(f"ffmpeg WebM fix error after concatenation: {e}")
+                                if cue_success and temp_fixed.exists() and temp_fixed.stat().st_size > 0:
+                                    temp_fixed.replace(concat_output)
+                                    logger.info(f"Added cue points to concatenated WebM: {concat_output}")
+                                else:
+                                    logger.warning("Could not add cue points to concatenated WebM")
+                                    # Clean up temp file if it exists
+                                    if temp_fixed.exists():
+                                        temp_fixed.unlink()
 
                                 # Rename concatenated file to the original first file name
                                 # This keeps the audio path consistent with any saved transcription
@@ -1259,6 +1345,25 @@ async def websocket_transcribe(websocket: WebSocket):
                     # Keep the WebM file and send its path to frontend
                     final_audio_url = f"/api/audio/{final_audio_path.name}"
                     logger.info(f"Final audio file available at: {final_audio_url}")
+
+                    # Get accurate duration from ffprobe (more reliable than tracking chunks)
+                    # This is especially important after concatenation and re-encoding
+                    try:
+                        probe_cmd = [
+                            'ffprobe', '-v', 'error',
+                            '-show_entries', 'format=duration',
+                            '-of', 'default=noprint_wrappers=1:nokey=1',
+                            str(final_audio_path)
+                        ]
+                        probe_result = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=10)
+                        if probe_result.returncode == 0:
+                            actual_duration = float(probe_result.stdout.strip())
+                            logger.info(f"Accurate final duration from ffprobe: {actual_duration:.2f}s (tracked: {total_duration:.2f}s)")
+                            total_duration = actual_duration
+                        else:
+                            logger.warning(f"ffprobe failed for final duration, using tracked: {probe_result.stderr}")
+                    except (ValueError, subprocess.TimeoutExpired) as e:
+                        logger.warning(f"Could not get accurate duration from ffprobe: {e}, using tracked: {total_duration:.2f}s")
 
                 await websocket.send_json({
                     "type": "status",

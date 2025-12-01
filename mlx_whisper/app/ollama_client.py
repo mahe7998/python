@@ -152,22 +152,24 @@ class OllamaClient:
             logger.error(f"Error rewriting text with Ollama: {e}")
             raise
 
-    async def fix_grammar(self, text: str, model: Optional[str] = None) -> str:
+    async def fix_grammar(self, text: str, model: Optional[str] = None, context_words: Optional[int] = None) -> str:
         """
         Fix grammar and spelling in text
 
         Args:
             text: Text to fix
             model: Model to use
+            context_words: Max words per chunk (defaults to self.max_context_words)
 
         Returns:
             Text with corrected grammar
         """
         # Chunk text if it exceeds context window
-        chunks = self._chunk_text_at_sentences(text, self.max_context_words)
+        max_words = context_words or self.max_context_words
+        chunks = self._chunk_text_at_sentences(text, max_words)
 
         if len(chunks) > 1:
-            logger.info(f"Processing {len(chunks)} chunks for grammar fixing")
+            logger.info(f"Processing {len(chunks)} chunks for grammar fixing (max {max_words} words/chunk)")
 
         instruction = (
             "Fix all grammar, spelling, and punctuation errors in the following text. "
@@ -184,22 +186,24 @@ class OllamaClient:
 
         return ' '.join(processed_chunks)
 
-    async def rephrase_professionally(self, text: str, model: Optional[str] = None) -> str:
+    async def rephrase_professionally(self, text: str, model: Optional[str] = None, context_words: Optional[int] = None) -> str:
         """
         Rephrase text in a more professional tone
 
         Args:
             text: Text to rephrase
             model: Model to use
+            context_words: Max words per chunk (defaults to self.max_context_words)
 
         Returns:
             Professionally rephrased text
         """
         # Chunk text if it exceeds context window
-        chunks = self._chunk_text_at_sentences(text, self.max_context_words)
+        max_words = context_words or self.max_context_words
+        chunks = self._chunk_text_at_sentences(text, max_words)
 
         if len(chunks) > 1:
-            logger.info(f"Processing {len(chunks)} chunks for professional rephrasing")
+            logger.info(f"Processing {len(chunks)} chunks for professional rephrasing (max {max_words} words/chunk)")
 
         instruction = (
             "Rephrase the following text in a more professional and formal tone. "
@@ -216,7 +220,7 @@ class OllamaClient:
 
         return ' '.join(processed_chunks)
 
-    async def summarize(self, text: str, model: Optional[str] = None, max_length: int = 100) -> str:
+    async def summarize(self, text: str, model: Optional[str] = None, max_length: int = 100, context_words: Optional[int] = None) -> str:
         """
         Create a concise summary of text
 
@@ -224,15 +228,17 @@ class OllamaClient:
             text: Text to summarize
             model: Model to use
             max_length: Maximum length of summary in characters (default: 100)
+            context_words: Max words per chunk (defaults to self.max_context_words)
 
         Returns:
             Summary of the text (limited to max_length characters)
         """
         # For summarization, only use first chunk to stay within context window
-        chunks = self._chunk_text_at_sentences(text, self.max_context_words)
+        max_words = context_words or self.max_context_words
+        chunks = self._chunk_text_at_sentences(text, max_words)
         first_chunk = chunks[0]
 
-        logger.info(f"Summarizing text: {len(text.split())} words total, using first {len(first_chunk.split())} words")
+        logger.info(f"Summarizing text: {len(text.split())} words total, using first {len(first_chunk.split())} words (max {max_words})")
 
         instruction = (
             f"Create a very concise summary of the following text in maximum {max_length} characters. "
@@ -248,22 +254,24 @@ class OllamaClient:
 
         return summary
 
-    async def improve_text(self, text: str, model: Optional[str] = None) -> str:
+    async def improve_text(self, text: str, model: Optional[str] = None, context_words: Optional[int] = None) -> str:
         """
         Improve text overall (grammar, clarity, flow)
 
         Args:
             text: Text to improve
             model: Model to use
+            context_words: Max words per chunk (defaults to self.max_context_words)
 
         Returns:
             Improved text
         """
         # Chunk text if it exceeds context window
-        chunks = self._chunk_text_at_sentences(text, self.max_context_words)
+        max_words = context_words or self.max_context_words
+        chunks = self._chunk_text_at_sentences(text, max_words)
 
         if len(chunks) > 1:
-            logger.info(f"Processing {len(chunks)} chunks for text improvement")
+            logger.info(f"Processing {len(chunks)} chunks for text improvement (max {max_words} words/chunk)")
 
         instruction = (
             "Improve the following text by fixing grammar, enhancing clarity, "
@@ -280,22 +288,24 @@ class OllamaClient:
 
         return ' '.join(processed_chunks)
 
-    async def extract_action_items(self, text: str, model: Optional[str] = None) -> str:
+    async def extract_action_items(self, text: str, model: Optional[str] = None, context_words: Optional[int] = None) -> str:
         """
         Extract action items from transcription
 
         Args:
             text: Text to analyze
             model: Model to use
+            context_words: Max words per chunk (defaults to self.max_context_words)
 
         Returns:
             List of action items
         """
         # Chunk text if it exceeds context window
-        chunks = self._chunk_text_at_sentences(text, self.max_context_words)
+        max_words = context_words or self.max_context_words
+        chunks = self._chunk_text_at_sentences(text, max_words)
 
         if len(chunks) > 1:
-            logger.info(f"Processing {len(chunks)} chunks for action item extraction")
+            logger.info(f"Processing {len(chunks)} chunks for action item extraction (max {max_words} words/chunk)")
 
         instruction = (
             "Extract all action items, tasks, and to-dos from the following transcription. "

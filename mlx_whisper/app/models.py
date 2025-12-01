@@ -177,6 +177,14 @@ class TranscriptionListResponse(BaseModel):
     page_size: int
 
 
+class AIReviewRequest(BaseModel):
+    """Schema for AI review requests (sent in request body)"""
+    text: str = Field(..., description="Text to review/process")
+    action: str = Field(..., description="Action: fix_grammar, rephrase, summarize, improve, extract_actions")
+    model: Optional[str] = Field(None, description="Ollama model to use (optional, uses default if not specified)")
+    context_words: Optional[int] = Field(None, description="Max context window in words (optional, uses model default if not specified)")
+
+
 class WebSocketMessage(BaseModel):
     """Schema for WebSocket messages"""
     type: str  # "audio_chunk", "transcription", "status", "error"

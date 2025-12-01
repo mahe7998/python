@@ -148,8 +148,66 @@ mlx_whisper/
 # Activate virtual environment
 source venv/bin/activate
 
-# Run tests (if available)
+# Run unit tests (if available)
 pytest
+```
+
+### Audio Concatenation Test
+
+The `test_scripts/test_concatenation.mjs` script tests the full streaming transcription workflow including audio concatenation across multiple recording sessions.
+
+**Prerequisites:**
+- Node.js 18+
+- Playwright (`npm install playwright`)
+- BlackHole 2ch audio driver (for capturing system audio)
+- Sox (`brew install sox`) for audio capture
+
+**Setup:**
+
+```bash
+cd test_scripts
+
+# Install Playwright
+npm install playwright
+npx playwright install chromium
+```
+
+**Capturing Test Audio:**
+
+Before running the test, capture audio from BlackHole (or use an existing WAV file):
+
+```bash
+# Capture 65 seconds of audio from BlackHole 2ch
+./capture_blackhole_audio.sh 65
+```
+
+This creates `audio/blackhole_capture_test.wav`. The test will reuse this file if it exists.
+
+**Running the Test:**
+
+```bash
+cd test_scripts
+node test_concatenation.mjs
+```
+
+**What the Test Does:**
+
+1. **Session 1**: Records 30s via WebSocket streaming transcription, receives real-time transcription
+2. **Session 2**: Resumes from the previous recording, appends another 30s of audio
+3. **Full Transcription**: Uploads the concatenated audio (~60s) to the REST API for comparison
+4. **Validation**: Compares streaming vs full transcription results
+
+**Test Output:**
+
+Results are saved to `audio/test_results/`:
+- `test_XXX_streaming.txt` - Streaming transcription result
+- `test_XXX_full.txt` - Full file transcription result
+
+**Expected Output:**
+
+```
+=== TEST PASSED ===
+Total duration: ~60s (expected: ~60s)
 ```
 
 ## Configuration
