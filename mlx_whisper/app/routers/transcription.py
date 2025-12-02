@@ -5,11 +5,13 @@ from typing import List, Optional, Dict, Any
 import logging
 import asyncio
 import uuid
+import os
 from datetime import datetime
 from enum import Enum
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, BackgroundTasks
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, insert
 
@@ -397,6 +399,148 @@ async def get_ollama_model_info(
             'context_length': 4096,
             'error': str(e)
         }
+
+
+class TranscribePathRequest(BaseModel):
+    """Request body for transcribing by file path"""
+    audio_path: str
+    language: Optional[str] = None
+
+
+async def get_audio_duration(audio_path: str) -> float:
+    """Get audio duration using ffprobe - tries fast methods first, falls back to slower ones"""
+    import subprocess
+
+    # Method 1: Try reading duration from format metadata (fastest, but often missing in WebM)
+    try:
+        result = subprocess.run(
+            ['ffprobe', '-v', 'error',
+             '-show_entries', 'format=duration',
+             '-of', 'default=noprint_wrappers=1:nokey=1', audio_path],
+            capture_output=True, text=True, timeout=2
+        )
+        duration = result.stdout.strip()
+        if duration and duration != 'N/A' and float(duration) > 0:
+            return float(duration)
+    except Exception as e:
+        logger.debug(f"Format duration method failed: {e}")
+
+    # Method 2: Read last packet timestamp (fast for WebM files without header duration)
+    # Reads from near end of file to get the last timestamp
+    try:
+        result = subprocess.run(
+            ['ffprobe', '-v', 'error',
+             '-read_intervals', '99999%+#1000',  # Read last 1000 packets from near end
+             '-show_entries', 'packet=pts_time',
+             '-of', 'default=noprint_wrappers=1:nokey=1', audio_path],
+            capture_output=True, text=True, timeout=5
+        )
+        # Get the last non-empty line (last packet timestamp)
+        lines = [l.strip() for l in result.stdout.strip().split('\n') if l.strip() and l.strip() != 'N/A']
+        if lines:
+            return float(lines[-1])
+    except Exception as e:
+        logger.debug(f"Packet timestamp method failed: {e}")
+
+    # Method 3: Fall back to full stream analysis (slower but reliable)
+    try:
+        result = subprocess.run(
+            ['ffprobe', '-v', 'error',
+             '-show_entries', 'stream=duration',
+             '-of', 'default=noprint_wrappers=1:nokey=1', audio_path],
+            capture_output=True, text=True, timeout=30
+        )
+        lines = [l.strip() for l in result.stdout.strip().split('\n') if l.strip() and l.strip() != 'N/A']
+        if lines:
+            return float(lines[0])
+    except Exception as e:
+        logger.warning(f"Could not get audio duration: {e}")
+
+    return 0.0
+
+
+@router.get("/audio-duration")
+async def get_audio_file_duration(audio_path: str):
+    """
+    Get the duration of an audio file.
+    Used by frontend to estimate transcription time.
+    """
+    from pathlib import Path
+
+    # Convert API path to filesystem path
+    if audio_path.startswith('/api/audio/'):
+        filename = audio_path.replace('/api/audio/', '')
+        audio_dir = Path.home() / "projects" / "python" / "mlx_whisper" / "audio"
+        audio_path = str(audio_dir / filename)
+
+    if not os.path.exists(audio_path):
+        raise HTTPException(status_code=404, detail="Audio file not found")
+
+    duration = await get_audio_duration(audio_path)
+    # Estimate transcription time: roughly 1 second of processing per 10 seconds of audio
+    estimated_seconds = max(5, duration / 10)
+
+    return {
+        "duration": duration,
+        "estimated_transcription_seconds": estimated_seconds
+    }
+
+
+@router.post("/transcribe-path", response_model=dict)
+async def transcribe_audio_by_path(
+    request: TranscribePathRequest,
+    whisper_service: MLXWhisperService = Depends(get_whisper_service),
+):
+    """
+    Transcribe an audio file by its server path.
+    Used for re-transcribing existing recordings.
+
+    Args:
+        request: Contains audio_path (API path like /api/audio/filename.webm) and optional language
+        whisper_service: MLX-Whisper service instance
+
+    Returns:
+        Transcription segments and text
+    """
+    from pathlib import Path
+
+    try:
+        # Convert API path to filesystem path
+        audio_path = request.audio_path
+        if audio_path.startswith('/api/audio/'):
+            filename = audio_path.replace('/api/audio/', '')
+            audio_dir = Path.home() / "projects" / "python" / "mlx_whisper" / "audio"
+            audio_path = str(audio_dir / filename)
+
+        # Verify file exists
+        if not os.path.exists(audio_path):
+            raise HTTPException(status_code=404, detail=f"Audio file not found: {request.audio_path}")
+
+        # Transcribe with optional language
+        logger.info(f"Re-transcribing file: {audio_path}, language: {request.language}")
+        segments = await whisper_service.transcribe_audio(
+            audio_path,
+            language=request.language if request.language and request.language != 'auto' else None
+        )
+
+        # Build full text from segments
+        full_text = " ".join(seg.text.strip() for seg in segments if seg.text.strip())
+
+        # Format as markdown
+        markdown = whisper_service.format_as_markdown(segments)
+
+        return {
+            "segments": [seg.model_dump() for seg in segments],
+            "text": full_text,
+            "markdown": markdown,
+            "duration": segments[-1].end if segments else 0.0,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error re-transcribing audio: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{transcription_id}", response_model=TranscriptionResponse)
