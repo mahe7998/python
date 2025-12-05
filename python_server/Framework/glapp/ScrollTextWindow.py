@@ -10,7 +10,7 @@ class ScrollTextWindow(TextWindowBase):
         self.max_history = 1000
 
     def init_text(self):
-        self.history = np.empty((0), dtype=np.string_)
+        self.history = np.empty((0), dtype=np.bytes_)
     
     def load_texes(self):
         texes = []
