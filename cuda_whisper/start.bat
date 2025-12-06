@@ -1,0 +1,35 @@
+@echo off
+REM Start CUDA Whisper backend with NVIDIA RTX 4090 GPU acceleration
+REM This script starts the backend on Windows
+
+cd /d "%~dp0"
+
+REM Activate virtual environment
+call venv\Scripts\activate.bat
+
+REM Set database URL - connects to PostgreSQL on Mac via Tailscale
+set DATABASE_URL=postgresql+asyncpg://whisper:%WHISPER_DB_PASSWORD%@jacques-m4-macboo-pro-max.%TAILSCALE_URL%:5432/whisper
+
+REM Set Whisper model - Options: tiny, base, small, medium, large-v3, distil-large-v3
+set WHISPER_MODEL=base
+
+REM CUDA settings for RTX 4090
+set CUDA_VISIBLE_DEVICES=0
+set CUDA_DEVICE_ORDER=PCI_BUS_ID
+
+REM HuggingFace Hub timeout settings for large model downloads
+set HF_HUB_ETAG_TIMEOUT=600
+set HF_HUB_DOWNLOAD_TIMEOUT=600
+
+echo =========================================
+echo Starting CUDA Whisper Backend
+echo =========================================
+echo NVIDIA RTX 4090 GPU Acceleration: Enabled
+echo Model: %WHISPER_MODEL%
+echo Port: 8000
+echo Database: jacques-m4-macboo-pro-max (via Tailscale)
+echo =========================================
+echo.
+
+REM Start the backend
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

@@ -1,0 +1,41 @@
+# CUDA Whisper Backend - RTX 4090 Optimized
+# Requirements for faster-whisper with CUDA acceleration
+
+# Web Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+websockets>=12.0
+
+# Database
+sqlalchemy[asyncio]>=2.0.0
+asyncpg>=0.29.0
+
+# Validation
+pydantic>=2.5.0
+
+# Audio Processing
+pydub>=0.25.1
+numpy>=1.24.0
+
+# Faster-Whisper with CUDA support (CTranslate2 backend)
+# This is significantly faster than OpenAI Whisper on CUDA
+faster-whisper>=1.0.0
+
+# PyTorch with CUDA 12.1 support (for RTX 4090)
+# Install separately: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+torch>=2.1.0
+torchaudio>=2.1.0
+
+# CTranslate2 - the fast inference engine behind faster-whisper
+ctranslate2>=4.0.0
+
+# Ollama client for AI text processing
+ollama>=0.1.0
+
+# HuggingFace Hub for model downloads
+huggingface-hub>=0.19.0
+hf-transfer>=0.1.4
+
+# Utilities
+python-multipart>=0.0.6
+aiofiles>=23.2.0
