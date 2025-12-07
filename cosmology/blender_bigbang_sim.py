@@ -43,13 +43,13 @@ PARTICLE_SIZE = 0.15
 PARTICLE_COLOR = (1.0, 0.9, 0.7, 1.0)  # Warm white/yellow
 
 # Physics settings
-GRAVITY_START_FRAME = FPS * 4  # 5 seconds = 25 frames
-GRAVITATIONAL_CONSTANT = 0.002  # Strength of gravitational pull
-DAMPING = 0.995  # Velocity damping per frame
-MIN_DISTANCE = 0.5  # Minimum distance for gravity calculation (avoid singularity)
+GRAVITY_START_FRAME = FPS * 8  # 8 seconds = 40 frames (start later when particles spread out)
+GRAVITATIONAL_CONSTANT = 0.008  # Stronger gravitational pull for visible convergence
+DAMPING = 0.998  # Less damping to maintain outward motion longer
+MIN_DISTANCE = 0.3  # Minimum distance for gravity calculation (avoid singularity)
 
 # Clustering settings
-CLUSTER_MERGE_DISTANCE = 1.5  # Distance at which particles merge into clusters
+CLUSTER_MERGE_DISTANCE = 0.8  # Smaller merge distance - particles must get very close to merge
 CLUSTER_EXPLOSION_DURATION = 8  # Frames for explosion effect
 CLUSTER_EXPLOSION_SCALE = 2.5  # Scale multiplier during explosion
 
@@ -211,8 +211,8 @@ class Particle:
                 strength = gravity_strength * self.mass * cluster.mass / (dist * dist)
                 force += direction.normalized() * strength
 
-        # Limit gravitational acceleration to preserve outward motion
-        max_accel = 0.08
+        # Limit gravitational acceleration but allow visible convergence
+        max_accel = 0.15
         if force.length > max_accel:
             force = force.normalized() * max_accel
 
@@ -267,11 +267,11 @@ class Cluster:
                 force += direction.normalized() * strength
 
         # Acceleration is force / mass (larger clusters have more inertia)
-        # This keeps large clusters moving mostly outward
-        acceleration = force / (self.mass ** 0.5)
+        # This keeps large clusters moving mostly outward but allows convergence
+        acceleration = force / (self.mass ** 0.3)
 
-        # Limit the gravitational influence - gravity should only slightly perturb motion
-        max_accel = 0.05
+        # Limit acceleration but allow visible deviation toward each other
+        max_accel = 0.1
         if acceleration.length > max_accel:
             acceleration = acceleration.normalized() * max_accel
 
