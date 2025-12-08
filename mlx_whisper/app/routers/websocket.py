@@ -895,14 +895,21 @@ async def websocket_transcribe(websocket: WebSocket):
                                 resume_transcription_id = transcription_id
                                 existing_audio_path = transcription.audio_file_path
                                 existing_duration = transcription.duration_seconds or 0.0
+                                existing_content = transcription.content_md or ""
 
                                 # IMPORTANT: Create a NEW session and audio buffer for the resumed recording
                                 # This ensures new audio goes to a separate file and can be concatenated later
                                 session_id = str(uuid.uuid4())
                                 audio_buffer = AudioBuffer(audio_dir=audio_dir, session_id=session_id, channel_selection=selected_channel or 'both')
                                 chunk_counter = 0
-                                logger.info(f"Created new session {session_id} for resumed transcription")
 
+                                # Initialize last_transcription_text with existing content for deduplication
+                                # This prevents the first chunk from duplicating text that was already transcribed
+                                if existing_content:
+                                    audio_buffer.last_transcription_text = existing_content
+                                    logger.info(f"Initialized deduplication buffer with {len(existing_content)} chars of existing content")
+
+                                logger.info(f"Created new session {session_id} for resumed transcription")
                                 logger.info(f"Loaded transcription {transcription_id}: audio_path={existing_audio_path}, duration={existing_duration}s")
 
                                 await websocket.send_json({
@@ -1228,9 +1235,14 @@ async def websocket_transcribe(websocket: WebSocket):
                         logger.info(f"Concatenating audio files (resuming from audio without database record)")
 
                     # Convert existing audio path to full path
-                    existing_full_path = Path(existing_audio_path)
-                    if not existing_full_path.is_absolute():
-                        existing_full_path = audio_dir / existing_audio_path
+                    # Handle API paths like /api/audio/filename.webm
+                    if existing_audio_path.startswith("/api/audio/"):
+                        filename = existing_audio_path.replace("/api/audio/", "")
+                        existing_full_path = audio_dir / filename
+                    else:
+                        existing_full_path = Path(existing_audio_path)
+                        if not existing_full_path.is_absolute():
+                            existing_full_path = audio_dir / existing_audio_path
 
                     # Only concatenate if existing file exists
                     if existing_full_path.exists():
