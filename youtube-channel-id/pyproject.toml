@@ -1,0 +1,13 @@
+[project]
+name = "youtube-channel-id"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "google-api-python-client>=2.186.0",
+    "google-auth>=2.42.1",
+    "google-auth-httplib2>=0.2.1",
+    "google-auth-oauthlib>=1.2.2",
+    "flask>=3.0.0",
+]
