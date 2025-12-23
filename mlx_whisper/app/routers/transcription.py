@@ -405,6 +405,7 @@ class TranscribePathRequest(BaseModel):
     """Request body for transcribing by file path"""
     audio_path: str
     language: Optional[str] = None
+    diarize: bool = False
 
 
 async def get_audio_duration(audio_path: str) -> float:
@@ -517,11 +518,22 @@ async def transcribe_audio_by_path(
             raise HTTPException(status_code=404, detail=f"Audio file not found: {request.audio_path}")
 
         # Transcribe with optional language
-        logger.info(f"Re-transcribing file: {audio_path}, language: {request.language}")
+        logger.info(f"Re-transcribing file: {audio_path}, language: {request.language}, diarize: {request.diarize}")
         segments = await whisper_service.transcribe_audio(
             audio_path,
             language=request.language if request.language and request.language != 'auto' else None
         )
+
+        # Apply speaker diarization if requested
+        if request.diarize:
+            speaker_turns = await whisper_service.run_diarization(audio_path)
+            for segment in segments:
+                # Find speaker at segment midpoint
+                midpoint = (segment.start + segment.end) / 2
+                for start, end, speaker in speaker_turns:
+                    if start <= midpoint <= end:
+                        segment.speaker = speaker
+                        break
 
         # Build full text from segments
         full_text = " ".join(seg.text.strip() for seg in segments if seg.text.strip())

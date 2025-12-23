@@ -233,6 +233,72 @@ class MLXWhisperService:
 
         return segments
 
+    async def run_diarization(self, audio_path: str) -> list:
+        """
+        Run speaker diarization on audio file.
+
+        Args:
+            audio_path: Path to audio file
+
+        Returns:
+            List of (start, end, speaker_id) tuples
+        """
+        from pyannote.audio import Pipeline
+        import torch
+        import torchaudio
+
+        hf_token = os.environ.get("HF_TOKEN")
+        if not hf_token:
+            raise ValueError("HF_TOKEN environment variable required for diarization")
+
+        logger.info(f"Loading speaker diarization model...")
+        pipeline = Pipeline.from_pretrained(
+            "pyannote/speaker-diarization-3.1",
+            token=hf_token
+        )
+        # Use CPU for accurate timestamps (MPS has known issues on Apple Silicon)
+        pipeline.to(torch.device("cpu"))
+
+        logger.info(f"Running speaker diarization on: {audio_path}")
+
+        # Convert to WAV if needed (torchaudio doesn't support WebM)
+        import subprocess
+        import tempfile
+
+        if audio_path.endswith('.webm'):
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
+                wav_path = tmp.name
+            subprocess.run(['ffmpeg', '-y', '-i', audio_path, '-ar', '16000', '-ac', '1', wav_path],
+                          capture_output=True, check=True)
+            logger.info(f"Converted WebM to WAV: {wav_path}")
+        else:
+            wav_path = audio_path
+
+        # Load audio with torchaudio to avoid torchcodec issues
+        waveform, sample_rate = torchaudio.load(wav_path)
+        audio_dict = {"waveform": waveform, "sample_rate": sample_rate}
+
+        # Cleanup temp file after loading
+        if audio_path.endswith('.webm'):
+            import os as os_module
+            os_module.unlink(wav_path)
+
+        def run_pipeline():
+            return pipeline(audio_dict)
+
+        loop = asyncio.get_event_loop()
+        diarization_output = await loop.run_in_executor(executor, run_pipeline)
+
+        # Build list of speaker turns
+        # pyannote 4.0+ returns DiarizeOutput dataclass, access .speaker_diarization for Annotation
+        diarization = diarization_output.speaker_diarization
+        speaker_turns = []
+        for turn, _, speaker in diarization.itertracks(yield_label=True):
+            speaker_turns.append((turn.start, turn.end, speaker))
+
+        logger.info(f"Diarization complete: found {len(set(s[2] for s in speaker_turns))} speakers")
+        return speaker_turns
+
     def format_as_markdown(
         self,
         segments: List[TranscriptionSegment],
@@ -252,24 +318,35 @@ class MLXWhisperService:
             return ""
 
         speaker_map = speaker_map or {}
-        markdown_lines = []
+        markdown_parts = []
 
         current_speaker = None
+        current_texts = []
+
         for segment in segments:
             speaker_id = segment.speaker
             speaker_name = speaker_map.get(speaker_id, speaker_id)
 
-            # Add speaker label if changed
             if speaker_id != current_speaker:
-                if current_speaker is not None:
-                    markdown_lines.append("")  # Blank line between speakers
-                markdown_lines.append(f"**{speaker_name}**: {segment.text}")
-                current_speaker = speaker_id
-            else:
-                # Continue same speaker
-                markdown_lines.append(segment.text)
+                # Flush previous speaker's text
+                if current_texts:
+                    markdown_parts.append(" ".join(current_texts))
+                    current_texts = []
 
-        return " ".join(markdown_lines)
+                # Start new speaker section
+                if speaker_id is not None:
+                    # Add line break before speaker label (except first)
+                    prefix = "\n\n" if markdown_parts else ""
+                    markdown_parts.append(f"{prefix}**{speaker_name}**:")
+                current_speaker = speaker_id
+
+            current_texts.append(segment.text.strip())
+
+        # Flush remaining text
+        if current_texts:
+            markdown_parts.append(" ".join(current_texts))
+
+        return " ".join(markdown_parts)
 
     async def save_audio_chunk(self, audio_data: bytes, filename: str) -> str:
         """
