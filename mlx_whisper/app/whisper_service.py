@@ -299,6 +299,167 @@ class MLXWhisperService:
         logger.info(f"Diarization complete: found {len(set(s[2] for s in speaker_turns))} speakers")
         return speaker_turns
 
+    async def get_word_alignments(self, audio_path: str, text: str, language: str = "eng") -> list:
+        """
+        Get word-level timestamps using CTC forced alignment (wav2vec2).
+        This provides much more accurate timing than Whisper's segment-level timestamps.
+
+        Args:
+            audio_path: Path to audio file (WAV format preferred)
+            text: Full transcription text
+            language: ISO 639-3 language code (default: "eng" for English)
+
+        Returns:
+            List of dicts with 'start', 'end', 'text' for each word
+        """
+        from ctc_forced_aligner import (
+            load_audio,
+            generate_emissions,
+            preprocess_text,
+            get_alignments,
+            get_spans,
+            postprocess_results,
+            AlignmentSingleton,
+        )
+        import subprocess
+        import tempfile
+
+        logger.info(f"Running word-level alignment on: {audio_path}")
+
+        # Convert to WAV if needed
+        if audio_path.endswith('.webm'):
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
+                wav_path = tmp.name
+            subprocess.run(['ffmpeg', '-y', '-i', audio_path, '-ar', '16000', '-ac', '1', wav_path],
+                          capture_output=True, check=True)
+            logger.info(f"Converted WebM to WAV for alignment: {wav_path}")
+        else:
+            wav_path = audio_path
+
+        def run_alignment():
+            # Load the alignment model (singleton - loads once)
+            aligner = AlignmentSingleton()
+
+            # Load audio
+            audio_waveform = load_audio(wav_path)
+
+            # Generate emissions from alignment model
+            emissions, stride = generate_emissions(aligner.model, audio_waveform, batch_size=4)
+
+            # Preprocess text for alignment
+            tokens_starred, text_starred = preprocess_text(
+                text,
+                romanize=True,
+                language=language
+            )
+
+            # Get alignments
+            segments, scores, blank_token = get_alignments(
+                emissions,
+                tokens_starred,
+                aligner.tokenizer
+            )
+
+            # Get word spans
+            spans = get_spans(tokens_starred, segments, blank_token)
+
+            # Post-process to get word timestamps
+            word_timestamps = postprocess_results(text_starred, spans, stride, scores)
+
+            return word_timestamps
+
+        loop = asyncio.get_event_loop()
+        word_timestamps = await loop.run_in_executor(executor, run_alignment)
+
+        # Cleanup temp file
+        if audio_path.endswith('.webm'):
+            import os as os_module
+            os_module.unlink(wav_path)
+
+        logger.info(f"Word alignment complete: {len(word_timestamps)} words aligned")
+        return word_timestamps
+
+    def assign_speakers_to_words(self, word_timestamps: list, speaker_turns: list) -> list:
+        """
+        Assign speakers to words based on diarization output.
+
+        Args:
+            word_timestamps: List of {'start', 'end', 'text'} for each word
+            speaker_turns: List of (start, end, speaker_id) tuples from diarization
+
+        Returns:
+            List of {'start', 'end', 'text', 'speaker'} for each word
+        """
+        result = []
+        for word in word_timestamps:
+            word_mid = (word['start'] + word['end']) / 2
+            speaker = None
+
+            # Find which speaker turn contains this word's midpoint
+            for turn_start, turn_end, turn_speaker in speaker_turns:
+                if turn_start <= word_mid <= turn_end:
+                    speaker = turn_speaker
+                    break
+
+            result.append({
+                'start': word['start'],
+                'end': word['end'],
+                'text': word['text'],
+                'speaker': speaker
+            })
+
+        return result
+
+    def words_to_speaker_segments(self, words_with_speakers: list) -> List[TranscriptionSegment]:
+        """
+        Convert word-level speaker assignments to sentence-like segments.
+        Groups consecutive words by same speaker.
+
+        Args:
+            words_with_speakers: List of {'start', 'end', 'text', 'speaker'} dicts
+
+        Returns:
+            List of TranscriptionSegment with speaker assignments
+        """
+        if not words_with_speakers:
+            return []
+
+        segments = []
+        current_speaker = words_with_speakers[0].get('speaker')
+        current_text = []
+        segment_start = words_with_speakers[0]['start']
+        segment_end = words_with_speakers[0]['end']
+
+        for word in words_with_speakers:
+            if word.get('speaker') == current_speaker:
+                current_text.append(word['text'])
+                segment_end = word['end']
+            else:
+                # Speaker changed - save current segment
+                if current_text:
+                    segments.append(TranscriptionSegment(
+                        text=" ".join(current_text),
+                        start=segment_start,
+                        end=segment_end,
+                        speaker=current_speaker
+                    ))
+                # Start new segment
+                current_speaker = word.get('speaker')
+                current_text = [word['text']]
+                segment_start = word['start']
+                segment_end = word['end']
+
+        # Don't forget the last segment
+        if current_text:
+            segments.append(TranscriptionSegment(
+                text=" ".join(current_text),
+                start=segment_start,
+                end=segment_end,
+                speaker=current_speaker
+            ))
+
+        return segments
+
     def format_as_markdown(
         self,
         segments: List[TranscriptionSegment],

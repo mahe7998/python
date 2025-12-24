@@ -524,19 +524,25 @@ async def transcribe_audio_by_path(
             language=request.language if request.language and request.language != 'auto' else None
         )
 
-        # Apply speaker diarization if requested
-        if request.diarize:
-            speaker_turns = await whisper_service.run_diarization(audio_path)
-            for segment in segments:
-                # Find speaker at segment midpoint
-                midpoint = (segment.start + segment.end) / 2
-                for start, end, speaker in speaker_turns:
-                    if start <= midpoint <= end:
-                        segment.speaker = speaker
-                        break
-
         # Build full text from segments
         full_text = " ".join(seg.text.strip() for seg in segments if seg.text.strip())
+
+        # Apply speaker diarization if requested
+        if request.diarize:
+            # Step 1: Run pyannote speaker diarization
+            logger.info("Running speaker diarization...")
+            speaker_turns = await whisper_service.run_diarization(audio_path)
+
+            # Step 2: Get word-level timestamps using CTC forced alignment (wav2vec2)
+            # This provides much more accurate timing than Whisper's segment-level timestamps
+            logger.info("Running word-level alignment for accurate speaker assignment...")
+            word_timestamps = await whisper_service.get_word_alignments(audio_path, full_text)
+
+            # Step 3: Assign speakers to each word based on diarization
+            words_with_speakers = whisper_service.assign_speakers_to_words(word_timestamps, speaker_turns)
+
+            # Step 4: Convert back to segments grouped by speaker
+            segments = whisper_service.words_to_speaker_segments(words_with_speakers)
 
         # Format as markdown
         markdown = whisper_service.format_as_markdown(segments)
