@@ -460,6 +460,146 @@ class MLXWhisperService:
 
         return segments
 
+    async def extract_speaker_embedding(self, audio_path: str, start: float, end: float) -> bytes:
+        """
+        Extract 256-dim voice embedding for a speaker segment.
+
+        Args:
+            audio_path: Path to audio file
+            start: Start time in seconds
+            end: End time in seconds
+
+        Returns:
+            Embedding as bytes (256 float32 values, ~1KB)
+        """
+        import numpy as np
+        import subprocess
+        import tempfile
+        import torch
+        import torchaudio
+        from pyannote.audio import Model, Inference
+
+        hf_token = os.environ.get("HF_TOKEN")
+        if not hf_token:
+            raise ValueError("HF_TOKEN environment variable required for embedding extraction")
+
+        logger.info(f"Extracting embedding for segment {start:.2f}-{end:.2f}s")
+
+        # Convert to WAV if needed
+        if audio_path.endswith('.webm'):
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
+                wav_path = tmp.name
+            subprocess.run(['ffmpeg', '-y', '-i', audio_path, '-ar', '16000', '-ac', '1', wav_path],
+                          capture_output=True, check=True)
+        else:
+            wav_path = audio_path
+
+        def run_embedding():
+            # Load audio manually using torchaudio to avoid pyannote's AudioDecoder issues
+            waveform, sample_rate = torchaudio.load(wav_path)
+
+            # Resample to 16kHz if needed
+            if sample_rate != 16000:
+                resampler = torchaudio.transforms.Resample(sample_rate, 16000)
+                waveform = resampler(waveform)
+                sample_rate = 16000
+
+            # Convert to mono if stereo
+            if waveform.shape[0] > 1:
+                waveform = waveform.mean(dim=0, keepdim=True)
+
+            # Extract the segment
+            start_sample = int(start * sample_rate)
+            end_sample = int(end * sample_rate)
+            segment_waveform = waveform[:, start_sample:end_sample]
+
+            # Create audio dict for pyannote
+            audio_dict = {"waveform": segment_waveform, "sample_rate": sample_rate}
+
+            # Load wespeaker model (same as used by diarization, already cached)
+            model = Model.from_pretrained("pyannote/wespeaker-voxceleb-resnet34-LM", token=hf_token)
+            inference = Inference(model, window="whole")
+
+            # Get embedding
+            embedding = inference(audio_dict)
+            return embedding
+
+        loop = asyncio.get_event_loop()
+        embedding = await loop.run_in_executor(executor, run_embedding)
+
+        # Cleanup temp file
+        if audio_path.endswith('.webm'):
+            import os as os_module
+            os_module.unlink(wav_path)
+
+        # Convert numpy array to bytes for storage
+        embedding_bytes = np.array(embedding).astype(np.float32).tobytes()
+        logger.info(f"Extracted embedding: {len(embedding_bytes)} bytes")
+        return embedding_bytes
+
+    def compare_embeddings(self, emb1: bytes, emb2: bytes, threshold: float = 0.6) -> tuple:
+        """
+        Compare two embeddings using cosine distance.
+
+        Args:
+            emb1: First embedding as bytes
+            emb2: Second embedding as bytes
+            threshold: Distance threshold (lower = more strict)
+
+        Returns:
+            (is_match: bool, confidence: float) - confidence is 0-1 where 1 = identical
+        """
+        import numpy as np
+        from scipy.spatial.distance import cosine
+
+        # Convert bytes to numpy arrays
+        arr1 = np.frombuffer(emb1, dtype=np.float32)
+        arr2 = np.frombuffer(emb2, dtype=np.float32)
+
+        # Calculate cosine distance (0 = identical, 2 = opposite)
+        distance = cosine(arr1, arr2)
+
+        # Convert distance to confidence (0-1 where 1 = identical)
+        confidence = float(1 - (distance / 2))
+
+        is_match = bool(distance < threshold)
+        return is_match, confidence
+
+    async def extract_all_speaker_embeddings(
+        self, audio_path: str, speaker_turns: list
+    ) -> dict:
+        """
+        Extract embeddings for all speakers from diarization output.
+        Uses the longest segment for each speaker for best embedding quality.
+
+        Args:
+            audio_path: Path to audio file
+            speaker_turns: List of (start, end, speaker_id) tuples
+
+        Returns:
+            Dict mapping speaker_id to embedding bytes
+        """
+        import numpy as np
+
+        # Find longest segment for each speaker
+        speaker_best_segments = {}
+        for start, end, speaker_id in speaker_turns:
+            duration = end - start
+            if speaker_id not in speaker_best_segments or duration > speaker_best_segments[speaker_id][1]:
+                speaker_best_segments[speaker_id] = (start, end - start, end)
+
+        # Extract embedding for each speaker's longest segment
+        embeddings = {}
+        for speaker_id, (start, duration, end) in speaker_best_segments.items():
+            try:
+                embedding = await self.extract_speaker_embedding(audio_path, start, end)
+                embeddings[speaker_id] = embedding
+                logger.info(f"Extracted embedding for {speaker_id} from {start:.2f}-{end:.2f}s")
+            except Exception as e:
+                logger.error(f"Failed to extract embedding for {speaker_id}: {e}")
+
+        return embeddings
+
     def format_as_markdown(
         self,
         segments: List[TranscriptionSegment],
