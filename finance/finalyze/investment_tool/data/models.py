@@ -99,6 +99,10 @@ class CompanyInfo:
     pe_ratio: Optional[float] = None
     eps: Optional[float] = None
     last_updated: Optional[datetime] = None
+    # Additional fields for search results
+    asset_type: Optional[str] = None  # Common Stock, ETF, Fund, Index, etc.
+    isin: Optional[str] = None
+    previous_close: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -113,6 +117,9 @@ class CompanyInfo:
             "pe_ratio": self.pe_ratio,
             "eps": self.eps,
             "last_updated": self.last_updated.isoformat() if self.last_updated else None,
+            "asset_type": self.asset_type,
+            "isin": self.isin,
+            "previous_close": self.previous_close,
         }
 
 

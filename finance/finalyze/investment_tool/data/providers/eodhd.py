@@ -302,12 +302,32 @@ class EODHDProvider(DataProviderBase):
 
         return df
 
-    def search_tickers(self, query: str) -> List[CompanyInfo]:
-        """Search for tickers by name or symbol."""
-        data = self._request(
-            "search",
-            params={"query": query}
-        )
+    def search_tickers(
+        self,
+        query: str,
+        limit: int = 50,
+        asset_type: Optional[str] = None,
+        exchange: Optional[str] = None,
+    ) -> List[CompanyInfo]:
+        """Search for tickers by name or symbol.
+
+        Args:
+            query: Search query (ticker, company name, or ISIN)
+            limit: Maximum number of results (default 50, max 500)
+            asset_type: Filter by type: stock, etf, fund, bond, index, crypto
+            exchange: Filter by exchange code
+        """
+        # EODHD search API requires query in URL path: /api/search/{query}
+        params = {"limit": limit}
+        if asset_type:
+            params["type"] = asset_type
+        if exchange:
+            params["exchange"] = exchange
+
+        # URL-encode the query for the path
+        import urllib.parse
+        encoded_query = urllib.parse.quote(query)
+        data = self._request(f"search/{encoded_query}", params=params)
 
         if not data:
             return []
@@ -320,6 +340,9 @@ class EODHDProvider(DataProviderBase):
                 exchange=item.get("Exchange", ""),
                 country=item.get("Country"),
                 currency=item.get("Currency"),
+                asset_type=item.get("Type"),
+                isin=item.get("ISIN"),
+                previous_close=item.get("previousClose"),
             ))
 
         return results

@@ -226,6 +226,7 @@ class MainWindow(QMainWindow):
         self.treemap.stock_double_clicked.connect(self._on_stock_double_clicked)
         self.treemap.filter_changed.connect(self._on_treemap_filter_changed)
         self.treemap.period_changed.connect(self._on_treemap_period_changed)
+        self.treemap.stock_remove_requested.connect(self._on_stock_remove_requested)
         left_layout.addWidget(self.treemap)
 
         main_splitter.addWidget(left_panel)
@@ -399,6 +400,14 @@ class MainWindow(QMainWindow):
         selected_filter = self.treemap.get_selected_filter()
         selected_period = self.treemap.get_selected_period()
 
+        # Set current category ID for removal operations
+        market_cap_filters = ("All Stocks", "Large Cap (>$200B)", "Mid Cap ($20B-$200B)", "Small Cap ($2B-$20B)", "Tiny Stocks (<$2B)")
+        if selected_filter not in market_cap_filters:
+            category = self.category_manager.get_category_by_name(selected_filter)
+            self.treemap.set_current_category_id(str(category.id) if category else None)
+        else:
+            self.treemap.set_current_category_id(None)
+
         # Get date range for the selected period
         start, end = get_date_range(selected_period, min_trading_days=0)
 
@@ -556,6 +565,29 @@ class MainWindow(QMainWindow):
     def _on_treemap_period_changed(self, period: str) -> None:
         """Handle treemap period change."""
         logger.info(f"Treemap period changed: {period}")
+        self._load_treemap_data()
+
+    def _on_stock_remove_requested(self, ticker: str, exchange: str, category_id: str) -> None:
+        """Handle stock removal from category."""
+        from pathlib import Path
+
+        if category_id == "":
+            # Remove from all categories
+            logger.info(f"Removing {ticker}.{exchange} from all categories")
+            for category in self.category_manager.get_all_categories():
+                self.category_manager.remove_stock_from_category(category.id, ticker, exchange)
+        else:
+            # Remove from specific category
+            cat_id = int(category_id)
+            category = self.category_manager.get_category(cat_id)
+            logger.info(f"Removing {ticker}.{exchange} from category: {category.name if category else cat_id}")
+            self.category_manager.remove_stock_from_category(cat_id, ticker, exchange)
+
+        # Save changes
+        save_path = Path.home() / ".investment_tool" / "categories.json"
+        self.category_manager.save_to_file(save_path)
+
+        # Refresh the treemap
         self._load_treemap_data()
 
     def _load_stock_chart(self, ticker: str, exchange: str) -> None:

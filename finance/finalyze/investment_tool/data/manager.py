@@ -236,9 +236,28 @@ class DataManager:
             exchange=exchange,
         )
 
-    def search_tickers(self, query: str) -> List[CompanyInfo]:
-        """Search for tickers across providers."""
-        results = self._fetch_from_providers("search_tickers", query=query)
+    def search_tickers(
+        self,
+        query: str,
+        limit: int = 50,
+        asset_type: Optional[str] = None,
+        exchange: Optional[str] = None,
+    ) -> List[CompanyInfo]:
+        """Search for tickers across providers.
+
+        Args:
+            query: Search query (ticker, company name, or ISIN)
+            limit: Maximum number of results
+            asset_type: Filter by type: stock, etf, fund, bond, index, crypto
+            exchange: Filter by exchange code
+        """
+        results = self._fetch_from_providers(
+            "search_tickers",
+            query=query,
+            limit=limit,
+            asset_type=asset_type,
+            exchange=exchange,
+        )
         return results or []
 
     def get_bulk_prices(
