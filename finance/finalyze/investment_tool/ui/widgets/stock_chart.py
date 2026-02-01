@@ -22,7 +22,8 @@ from PySide6.QtWidgets import (
     QSplitter,
     QSizePolicy,
 )
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QBrush, QPen
+from PySide6.QtCore import QRectF
 
 import pyqtgraph as pg
 import pandas as pd
@@ -32,6 +33,168 @@ from investment_tool.config.settings import get_config
 
 # Configure pyqtgraph
 pg.setConfigOptions(antialias=True, background="#1F2937", foreground="#F9FAFB")
+
+
+class MeasureViewBox(pg.ViewBox):
+    """Custom ViewBox that supports measure mode for drawing price range rectangles."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._measure_mode = False
+        self._measure_rect = None
+        self._measure_label = None
+        self._chart = None  # Reference to StockChart for data access
+
+    def setChart(self, chart: "StockChart") -> None:
+        """Set reference to the parent chart."""
+        self._chart = chart
+
+    def setMeasureMode(self, enabled: bool) -> None:
+        """Enable or disable measure mode."""
+        self._measure_mode = enabled
+        if enabled:
+            self.setMouseEnabled(x=False, y=False)
+        else:
+            self.setMouseEnabled(x=True, y=True)
+            self._clearMeasure()
+
+    def _clearMeasure(self) -> None:
+        """Clear measure graphics."""
+        if self._measure_rect is not None:
+            self.removeItem(self._measure_rect)
+            self._measure_rect = None
+        if self._measure_label is not None:
+            self.removeItem(self._measure_label)
+            self._measure_label = None
+
+    def mouseDragEvent(self, ev, axis=None):
+        """Handle mouse drag for measure mode."""
+        if not self._measure_mode:
+            super().mouseDragEvent(ev, axis)
+            return
+
+        # Only handle left button
+        if ev.button() != Qt.LeftButton:
+            ev.ignore()
+            return
+
+        ev.accept()
+
+        # Get positions in view (data) coordinates
+        start_pos = self.mapSceneToView(ev.buttonDownScenePos())
+        current_pos = self.mapSceneToView(ev.scenePos())
+
+        x1, y1 = start_pos.x(), start_pos.y()
+        x2, y2 = current_pos.x(), current_pos.y()
+
+        # Draw/update the measure region
+        self._drawMeasureRegion(x1, y1, x2, y2)
+
+        if ev.isFinish():
+            # Drag complete - keep the rectangle displayed
+            pass
+
+    def mouseClickEvent(self, ev):
+        """Handle mouse click to clear measure region."""
+        if self._measure_mode and ev.button() == Qt.RightButton:
+            self._clearMeasure()
+            ev.accept()
+        else:
+            super().mouseClickEvent(ev)
+
+    def _drawMeasureRegion(self, x1: float, y1: float, x2: float, y2: float) -> None:
+        """Draw the measure region rectangle from start to current position."""
+        if self._chart is None:
+            return
+
+        display_data = getattr(self._chart, '_display_data', None)
+        if display_data is None or display_data.empty:
+            return
+
+        # Clear previous
+        self._clearMeasure()
+
+        # Use exact mouse coordinates for the rectangle
+        # y1 = start price, y2 = current price
+        price1 = y1
+        price2 = y2
+
+        # Calculate stats
+        diff = price2 - price1
+        pct = (diff / price1 * 100) if price1 != 0 else 0
+
+        # Calculate time difference
+        max_idx = len(display_data) - 1
+        idx1 = max(0, min(int(x1), max_idx))
+        idx2 = max(0, min(int(x2), max_idx))
+
+        time_str = ""
+        try:
+            t1 = display_data.index[idx1]
+            t2 = display_data.index[idx2]
+
+            # Handle both datetime and date objects
+            if hasattr(t1, 'total_seconds'):
+                # Already a timedelta-compatible type
+                td = abs(t2 - t1)
+                total_seconds = td.total_seconds()
+            elif hasattr(t1, 'date') and callable(t1.date):
+                # datetime object
+                td = abs(t2 - t1)
+                total_seconds = td.total_seconds()
+            else:
+                # date object - convert to days
+                from datetime import date
+                if isinstance(t1, date):
+                    td = abs(t2 - t1)
+                    total_seconds = td.days * 86400
+                else:
+                    # Fallback to bar count
+                    total_seconds = None
+
+            if total_seconds is not None:
+                days = int(total_seconds // 86400)
+                hours = int((total_seconds % 86400) // 3600)
+                minutes = int((total_seconds % 3600) // 60)
+
+                if days > 0:
+                    time_str = f"{days}d {hours}h"
+                elif hours > 0:
+                    time_str = f"{hours}h {minutes}m"
+                else:
+                    time_str = f"{minutes}m"
+            else:
+                time_str = f"{abs(idx2 - idx1)} bars"
+        except Exception:
+            time_str = f"{abs(idx2 - idx1)} bars"
+
+        # Color based on gain/loss
+        if diff >= 0:
+            fill_color = QColor(34, 197, 94, 77)   # Green 30% alpha
+            border_color = QColor(34, 197, 94)
+        else:
+            fill_color = QColor(239, 68, 68, 77)  # Red 30% alpha
+            border_color = QColor(239, 68, 68)
+
+        # Draw rectangle from (x1,y1) to (x2,y2)
+        rect_x = [x1, x2, x2, x1, x1]
+        rect_y = [y1, y1, y2, y2, y1]
+        self._measure_rect = pg.PlotCurveItem(
+            rect_x, rect_y,
+            pen=pg.mkPen(border_color, width=2),
+            brush=pg.mkBrush(fill_color),
+            fillLevel=min(y1, y2)  # Fill from bottom of rectangle
+        )
+        self.addItem(self._measure_rect, ignoreBounds=True)
+
+        # Create label inside the rectangle (centered)
+        center_x = (x1 + x2) / 2
+        center_y = (y1 + y2) / 2
+        sign = "+" if diff >= 0 else ""
+        text = f"${price1:.2f} → ${price2:.2f}\n{sign}${diff:.2f} ({sign}{pct:.1f}%)\n{time_str}"
+        self._measure_label = pg.TextItem(text, color="#F9FAFB", anchor=(0.5, 0.5))
+        self._measure_label.setPos(center_x, center_y)
+        self.addItem(self._measure_label, ignoreBounds=True)
 
 
 class CandlestickItem(pg.GraphicsObject):
@@ -253,7 +416,7 @@ class StockChart(QWidget):
     Interactive stock chart with candlesticks, volume, and technical indicators.
     """
 
-    period_changed = Signal(str)
+    # Period is now controlled externally by main window
     indicator_toggled = Signal(str, bool)
 
     TIMEFRAMES = ["1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "2Y", "5Y"]
@@ -296,8 +459,11 @@ class StockChart(QWidget):
         splitter = QSplitter(Qt.Vertical)
         layout.addWidget(splitter, stretch=1)
 
-        # Main price chart
-        self.price_widget = pg.PlotWidget()
+        # Main price chart with custom ViewBox for measure mode
+        self._viewbox = MeasureViewBox()
+        self.price_widget = pg.PlotWidget(viewBox=self._viewbox)
+        self._viewbox.setChart(self)  # Give ViewBox access to chart data
+        self._viewbox.setMeasureMode(True)  # Default to measure mode
         self.price_widget.setBackground("#1F2937")
         self.price_widget.showGrid(x=True, y=True, alpha=0.3)
         self.price_widget.setLabel("left", "Price", units="$")
@@ -369,15 +535,15 @@ class StockChart(QWidget):
         self.chart_type_combo.currentTextChanged.connect(self._on_chart_type_changed)
         toolbar.addWidget(self.chart_type_combo)
 
-        # Timeframe
-        tf_label = QLabel("Period:")
-        toolbar.addWidget(tf_label)
+        # Measure mode checkbox
+        self.measure_checkbox = QCheckBox("Measure")
+        self.measure_checkbox.setToolTip("Drag to measure price range (right-click to clear)")
+        self.measure_checkbox.setChecked(True)  # Default to enabled
+        self.measure_checkbox.toggled.connect(self._on_measure_toggled)
+        toolbar.addWidget(self.measure_checkbox)
 
-        self.timeframe_combo = QComboBox()
-        self.timeframe_combo.addItems(self.TIMEFRAMES)
-        self.timeframe_combo.setCurrentText(self.config.ui.default_timeframe)
-        self.timeframe_combo.currentTextChanged.connect(self._on_timeframe_changed)
-        toolbar.addWidget(self.timeframe_combo)
+        # Store current period (controlled by main window)
+        self._current_period = self.config.ui.default_timeframe
 
         # Indicators button
         self.indicators_btn = QPushButton("Indicators")
@@ -738,7 +904,7 @@ class StockChart(QWidget):
                     if has_time:
                         # Intraday data - show date and time in ET
                         dt_et = dt + ET_OFFSET
-                        current_period = self.timeframe_combo.currentText()
+                        current_period = self._current_period
                         if current_period == "1D":
                             time_str = dt_et.strftime("%H:%M") + " ET  "
                         else:
@@ -759,19 +925,28 @@ class StockChart(QWidget):
             )
             self.crosshair_label.setPos(0, display_data["high"].max())
 
+    def _on_measure_toggled(self, enabled: bool) -> None:
+        """Handle measure mode toggle."""
+        self._viewbox.setMeasureMode(enabled)
+
     def _on_chart_type_changed(self, chart_type: str) -> None:
         """Handle chart type change."""
         self._update_chart()
 
-    def _on_timeframe_changed(self, timeframe: str) -> None:
-        """Handle timeframe change."""
-        self.period_changed.emit(timeframe)
+    def set_period(self, period: str) -> None:
+        """Set the chart period (called by main window)."""
+        self._current_period = period
+
+    def get_period(self) -> str:
+        """Get the current period."""
+        return self._current_period
 
     def clear(self) -> None:
         """Clear the chart."""
         self._data = None
         self._ticker = None
         self._exchange = None
+        self._viewbox._clearMeasure()
         self.price_widget.clear()
         self.volume_widget.clear()
         self.ticker_label.setText("No stock selected")

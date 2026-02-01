@@ -69,6 +69,7 @@ class MarketTreemap(QWidget):
     stock_double_clicked = Signal(str, str)  # ticker, exchange
     stocks_compare_requested = Signal(list)  # list of (ticker, exchange) tuples
     stock_remove_requested = Signal(str, str, str)  # ticker, exchange, category_id (empty for all)
+    stock_add_to_watchlist = Signal(str, str)  # ticker, exchange
     filter_changed = Signal(str)  # category name or "All Stocks"
     period_changed = Signal(str)  # period like "1D", "1W", etc.
 
@@ -299,8 +300,10 @@ class MarketTreemap(QWidget):
             lambda: self._add_to_compare(index)
         )
 
-        watchlist_menu = menu.addMenu("Add to Watchlist")
-        watchlist_menu.addAction("Default Watchlist")
+        watchlist_action = menu.addAction("Add to Watchlist")
+        watchlist_action.triggered.connect(
+            lambda: self.stock_add_to_watchlist.emit(item.ticker, item.exchange)
+        )
 
         # Add remove from category option
         menu.addSeparator()

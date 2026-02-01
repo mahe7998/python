@@ -227,6 +227,7 @@ class MainWindow(QMainWindow):
         self.treemap.filter_changed.connect(self._on_treemap_filter_changed)
         self.treemap.period_changed.connect(self._on_treemap_period_changed)
         self.treemap.stock_remove_requested.connect(self._on_stock_remove_requested)
+        self.treemap.stock_add_to_watchlist.connect(self._on_stock_add_to_watchlist)
         left_layout.addWidget(self.treemap)
 
         main_splitter.addWidget(left_panel)
@@ -238,29 +239,45 @@ class MainWindow(QMainWindow):
 
         # Stock Chart
         self.stock_chart = StockChart()
-        self.stock_chart.period_changed.connect(self._on_chart_period_changed)
+        # Period is now controlled by treemap, not chart
         right_layout.addWidget(self.stock_chart, stretch=2)
 
-        # Key Metrics panel
+        # Key Metrics panel - 3 columns
         self.metrics_group = QGroupBox("Key Metrics")
-        metrics_layout = QFormLayout(self.metrics_group)
-        metrics_layout.setContentsMargins(8, 8, 8, 8)
+        metrics_main_layout = QHBoxLayout(self.metrics_group)
+        metrics_main_layout.setContentsMargins(8, 8, 8, 8)
+        metrics_main_layout.setSpacing(16)
 
+        # Column 1: Price & Change
+        col1_layout = QFormLayout()
+        col1_layout.setSpacing(4)
         self.price_label = QLabel("--")
-        metrics_layout.addRow("Price:", self.price_label)
-
+        col1_layout.addRow("Price:", self.price_label)
         self.change_label = QLabel("--")
-        metrics_layout.addRow("Change:", self.change_label)
+        col1_layout.addRow("Change:", self.change_label)
+        metrics_main_layout.addLayout(col1_layout)
 
-        self.volume_label = QLabel("--")
-        metrics_layout.addRow("Volume:", self.volume_label)
+        # Column 2: 52W High, Low, Avg Volume
+        col2_layout = QFormLayout()
+        col2_layout.setSpacing(4)
+        self.week52_high_label = QLabel("--")
+        col2_layout.addRow("52W High:", self.week52_high_label)
+        self.week52_low_label = QLabel("--")
+        col2_layout.addRow("52W Low:", self.week52_low_label)
+        self.avg_volume_label = QLabel("--")
+        col2_layout.addRow("Avg Volume:", self.avg_volume_label)
+        metrics_main_layout.addLayout(col2_layout)
 
+        # Column 3: Market Cap & P/E
+        col3_layout = QFormLayout()
+        col3_layout.setSpacing(4)
         self.market_cap_label = QLabel("--")
-        metrics_layout.addRow("Market Cap:", self.market_cap_label)
-
+        col3_layout.addRow("Market Cap:", self.market_cap_label)
         self.pe_label = QLabel("--")
-        metrics_layout.addRow("P/E Ratio:", self.pe_label)
+        col3_layout.addRow("P/E Ratio:", self.pe_label)
+        metrics_main_layout.addLayout(col3_layout)
 
+        metrics_main_layout.addStretch()
         right_layout.addWidget(self.metrics_group)
 
         # Sentiment placeholder
@@ -281,6 +298,12 @@ class MainWindow(QMainWindow):
         self.bottom_tabs = QTabWidget()
         main_layout.addWidget(self.bottom_tabs)
 
+        # Watchlist tab (first tab)
+        self.watchlist_widget = WatchlistWidget()
+        self.watchlist_widget.stock_selected.connect(self._on_stock_selected)
+        self.watchlist_widget.stock_double_clicked.connect(self._on_stock_double_clicked)
+        self.bottom_tabs.addTab(self.watchlist_widget, "Watchlist")
+
         # News tab (placeholder)
         news_tab = QWidget()
         news_layout = QVBoxLayout(news_tab)
@@ -289,12 +312,6 @@ class MainWindow(QMainWindow):
         news_label.setStyleSheet("color: #9CA3AF;")
         news_layout.addWidget(news_label)
         self.bottom_tabs.addTab(news_tab, "News Feed")
-
-        # Watchlist tab
-        self.watchlist_widget = WatchlistWidget()
-        self.watchlist_widget.stock_selected.connect(self._on_stock_selected)
-        self.watchlist_widget.stock_double_clicked.connect(self._on_stock_double_clicked)
-        self.bottom_tabs.addTab(self.watchlist_widget, "Watchlist")
 
         # Screener tab (placeholder)
         screener_tab = QWidget()
@@ -351,7 +368,7 @@ class MainWindow(QMainWindow):
         if not self._selected_ticker or not self.data_manager:
             return
 
-        period = self.stock_chart.timeframe_combo.currentText()
+        period = self.stock_chart.get_period()
         if is_intraday_period(period):
             logger.info(f"Auto-refreshing intraday data for {self._selected_ticker}")
             self._load_stock_chart(self._selected_ticker, self._selected_exchange)
@@ -362,7 +379,8 @@ class MainWindow(QMainWindow):
             self.data_manager = get_data_manager()
             self._update_status()
 
-            # Set cache on watchlist widget
+            # Set data_manager first, then cache (cache triggers refresh which needs data_manager)
+            self.watchlist_widget.set_data_manager(self.data_manager)
             self.watchlist_widget.set_cache(self.data_manager.cache)
 
             if self.data_manager.is_connected():
@@ -371,6 +389,11 @@ class MainWindow(QMainWindow):
 
                 # Load treemap with default category
                 self._load_treemap_data()
+
+                # Set period and refresh watchlist with current data
+                period = self.treemap.get_selected_period()
+                self.watchlist_widget.set_period(period)
+                self.watchlist_widget.refresh_all()
             else:
                 self.connection_label.setText("EODHD: Not Configured")
                 self.connection_label.setStyleSheet("color: #F59E0B;")
@@ -421,7 +444,9 @@ class MainWindow(QMainWindow):
         # Market cap filters that should include all categories
         market_cap_filters = ("All Stocks", "Large Cap (>$200B)", "Mid Cap ($20B-$200B)", "Small Cap ($2B-$20B)", "Tiny Stocks (<$2B)")
 
-        for category in self.category_manager.get_all_categories():
+        all_categories = self.category_manager.get_all_categories()
+        logger.info(f"Found {len(all_categories)} categories")
+        for category in all_categories:
             # Skip if category doesn't match filter (unless it's All Stocks or a market cap filter)
             if selected_filter not in market_cap_filters and category.name != selected_filter:
                 continue
@@ -535,6 +560,7 @@ class MainWindow(QMainWindow):
                         sector=category.name,
                     ))
 
+        logger.info(f"Treemap loaded {len(items)} items for period={selected_period}, filter={selected_filter}")
         if items:
             self.treemap.set_items(items)
 
@@ -563,9 +589,23 @@ class MainWindow(QMainWindow):
         self._load_treemap_data()
 
     def _on_treemap_period_changed(self, period: str) -> None:
-        """Handle treemap period change."""
-        logger.info(f"Treemap period changed: {period}")
+        """Handle treemap period change - updates all views."""
+        logger.info(f"Period changed: {period}")
+
+        # Update stock chart period
+        self.stock_chart.set_period(period)
+
+        # Reload treemap data
         self._load_treemap_data()
+
+        # Reload stock chart if a stock is selected
+        if self._selected_ticker and self._selected_exchange:
+            self._load_stock_chart(self._selected_ticker, self._selected_exchange)
+            self._update_metrics(self._selected_ticker, self._selected_exchange)
+
+        # Set period and refresh watchlist data
+        self.watchlist_widget.set_period(period)
+        self.watchlist_widget.refresh_all()
 
     def _on_stock_remove_requested(self, ticker: str, exchange: str, category_id: str) -> None:
         """Handle stock removal from category."""
@@ -590,12 +630,17 @@ class MainWindow(QMainWindow):
         # Refresh the treemap
         self._load_treemap_data()
 
+    def _on_stock_add_to_watchlist(self, ticker: str, exchange: str) -> None:
+        """Handle adding stock to watchlist from treemap."""
+        self.watchlist_widget.add_stock(ticker, exchange)
+        logger.info(f"Added {ticker}.{exchange} to watchlist")
+
     def _load_stock_chart(self, ticker: str, exchange: str) -> None:
         """Load chart data for a stock."""
         if not self.data_manager:
             return
 
-        period = self.stock_chart.timeframe_combo.currentText()
+        period = self.stock_chart.get_period()
 
         try:
             if is_intraday_period(period):
@@ -697,19 +742,58 @@ class MainWindow(QMainWindow):
             company = self.data_manager.get_company_info(ticker, exchange)
 
             # Get period from chart
-            period = self.stock_chart.timeframe_combo.currentText()
-            start, end = get_date_range(period, min_trading_days=0)
-            prices = self.data_manager.get_daily_prices(ticker, exchange, start, end)
+            period = self.stock_chart.get_period()
 
-            if prices is not None and len(prices) >= 1:
-                current = prices["close"].iloc[-1]
-                first = prices["close"].iloc[0]
-                change = current - first
-                change_pct = change / first if first != 0 else 0
+            if is_intraday_period(period):
+                # For 1D: use intraday for current price, daily for prev close
+                start, end = get_date_range(period, min_trading_days=0)
+                daily_prices = self.data_manager.get_daily_prices(ticker, exchange, start, end)
 
-                # Total volume for the period
-                total_volume = prices["volume"].sum()
+                prev_close = None
+                if daily_prices is not None and len(daily_prices) >= 2:
+                    prev_close = daily_prices["close"].iloc[-2]
 
+                # Get intraday for current price
+                market_open, market_close = get_last_trading_day_hours(exchange)
+                now_utc = datetime.now(timezone.utc)
+                end_dt = now_utc if (market_open.date() == now_utc.date() and market_open <= now_utc <= market_close) else market_close
+
+                intraday = self.data_manager.get_intraday_prices(ticker, exchange, "5m", market_open, end_dt, use_cache=True)
+
+                if intraday is not None and len(intraday) >= 1:
+                    current = intraday["close"].iloc[-1]
+                    total_volume = intraday["volume"].sum() if "volume" in intraday.columns else 0
+                elif daily_prices is not None and len(daily_prices) >= 1:
+                    current = daily_prices["close"].iloc[-1]
+                    total_volume = daily_prices["volume"].iloc[-1]
+                else:
+                    current = None
+                    total_volume = 0
+
+                if current is not None and prev_close is not None:
+                    change = current - prev_close
+                    change_pct = change / prev_close if prev_close != 0 else 0
+                else:
+                    change = 0
+                    change_pct = 0
+            else:
+                # For other periods: compare start to end
+                start, end = get_date_range(period, min_trading_days=0)
+                prices = self.data_manager.get_daily_prices(ticker, exchange, start, end)
+
+                if prices is not None and len(prices) >= 1:
+                    current = prices["close"].iloc[-1]
+                    first = prices["close"].iloc[0]
+                    change = current - first
+                    change_pct = change / first if first != 0 else 0
+                    total_volume = prices["volume"].sum()
+                else:
+                    current = None
+                    change = 0
+                    change_pct = 0
+                    total_volume = 0
+
+            if current is not None:
                 self.price_label.setText(f"${current:.2f}")
 
                 change_color = "#22C55E" if change >= 0 else "#EF4444"
@@ -720,7 +804,23 @@ class MainWindow(QMainWindow):
                 )
                 self.change_label.setTextFormat(Qt.RichText)
 
-                self.volume_label.setText(format_large_number(total_volume))
+            # Get 52-week data for high/low and average volume
+            week52_start = date.today() - timedelta(days=365)
+            week52_end = date.today()
+            week52_prices = self.data_manager.get_daily_prices(ticker, exchange, week52_start, week52_end)
+
+            if week52_prices is not None and len(week52_prices) >= 1:
+                week52_high = week52_prices["high"].max()
+                week52_low = week52_prices["low"].min()
+                avg_volume = week52_prices["volume"].mean()
+
+                self.week52_high_label.setText(f"${week52_high:.2f}")
+                self.week52_low_label.setText(f"${week52_low:.2f}")
+                self.avg_volume_label.setText(format_large_number(avg_volume))
+            else:
+                self.week52_high_label.setText("--")
+                self.week52_low_label.setText("--")
+                self.avg_volume_label.setText("--")
 
             if company:
                 # Update metrics group title with company name
@@ -743,11 +843,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Failed to update metrics for {ticker}: {e}")
 
-    def _on_chart_period_changed(self, period: str) -> None:
-        """Handle chart period change."""
-        if self._selected_ticker and self._selected_exchange:
-            self._load_stock_chart(self._selected_ticker, self._selected_exchange)
-            self._update_metrics(self._selected_ticker, self._selected_exchange)
 
     def _update_status(self) -> None:
         """Update status bar information."""
