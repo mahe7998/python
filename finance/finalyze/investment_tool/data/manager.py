@@ -8,7 +8,7 @@ from loguru import logger
 
 from investment_tool.config.settings import AppConfig
 from investment_tool.data.cache import CacheManager
-from investment_tool.data.models import CompanyInfo, NewsArticle
+from investment_tool.data.models import CompanyInfo, DailySentiment, NewsArticle
 from investment_tool.data.providers.base import DataProviderBase, ProviderError
 from investment_tool.data.providers.eodhd import EODHDProvider
 
@@ -204,25 +204,200 @@ class DataManager:
     def get_news(
         self,
         ticker: str,
-        limit: int = 50,
+        limit: int = 1000,
         use_cache: bool = True,
+        from_date: Optional[date] = None,
+        to_date: Optional[date] = None,
     ) -> List[NewsArticle]:
-        """Get news articles with caching."""
-        if use_cache:
-            cached = self.cache.get_news(ticker=ticker, limit=limit)
-            if cached:
-                return cached
+        """Get news articles with smart incremental caching.
+
+        Strategy:
+        1. Check cache for existing articles
+        2. If cache has articles, only fetch new ones since last cached date
+        3. Merge and save to cache
+        4. If no cache, fetch up to limit articles
+        """
+        today = date.today()
+        effective_to_date = to_date or today
+        effective_from_date = from_date or (today - timedelta(days=30))
+
+        # Check cache first
+        cached = self.cache.get_news(ticker=ticker, limit=limit * 2)  # Get more to check coverage
+
+        if cached and use_cache:
+            # Find the date range of cached articles
+            cached_dates = [a.published_at.date() for a in cached]
+            oldest_cached = min(cached_dates)
+            most_recent_date = max(cached_dates)
+            cache_count = len(cached)
+
+            logger.info(f"Cache has {cache_count} articles for {ticker}, range: {oldest_cached} to {most_recent_date}")
+
+            # Calculate days covered in cache
+            days_in_cache = (most_recent_date - oldest_cached).days + 1
+
+            # If cache has >= 900 articles (close to EODHD API limit of 1000)
+            # Don't try to fetch old data - EODHD won't have more
+            if cache_count >= 900:
+                if days_in_cache < 5:
+                    # Less than 5 days - need fresh load of 1000
+                    logger.info(f"Cache has {cache_count} articles but only {days_in_cache} days, fetching fresh 1000")
+                    # Fall through to fresh fetch below
+                else:
+                    # Always fetch today's news (new articles may arrive anytime)
+                    logger.info(f"Cache near EODHD limit ({cache_count}), fetching new articles from {most_recent_date} to {today}")
+
+                    new_articles = self._fetch_from_providers(
+                        "get_news",
+                        ticker=ticker,
+                        limit=limit,
+                        from_date=most_recent_date,  # Include last day
+                        to_date=today,
+                    )
+
+                    if new_articles:
+                        self.cache.store_news(new_articles)
+                        # Merge with cached, removing duplicates
+                        cached_ids = {a.id for a in cached}
+                        for article in new_articles:
+                            if article.id not in cached_ids:
+                                cached.append(article)
+
+                    # Filter and return
+                    filtered = [
+                        a for a in cached
+                        if effective_from_date <= a.published_at.date() <= effective_to_date
+                    ]
+                    logger.info(f"Returning {len(filtered)} articles for {ticker} after incremental fetch")
+                    return sorted(filtered, key=lambda a: a.published_at, reverse=True)[:limit]
+
+            # Check if cache covers the requested date range AND is fresh
+            cache_covers_range = oldest_cached <= effective_from_date
+            cache_is_fresh = most_recent_date >= today - timedelta(days=1)
+
+            if cache_covers_range and cache_is_fresh:
+                # Cache fully covers requested range and is fresh
+                filtered = [
+                    a for a in cached
+                    if effective_from_date <= a.published_at.date() <= effective_to_date
+                ]
+                if filtered:
+                    logger.info(f"Returning {len(filtered)} cached articles for {ticker}")
+                    return sorted(filtered, key=lambda a: a.published_at, reverse=True)[:limit]
+
+            # Cache doesn't cover full range - fetch from the oldest needed date
+            if not cache_covers_range:
+                # Need older articles
+                fetch_from = effective_from_date
+                logger.info(f"Cache missing old data for {ticker}, fetching from {fetch_from} to {most_recent_date}")
+
+                old_articles = self._fetch_from_providers(
+                    "get_news",
+                    ticker=ticker,
+                    limit=limit,
+                    from_date=fetch_from,
+                    to_date=most_recent_date,
+                )
+
+                if old_articles:
+                    self.cache.store_news(old_articles)
+                    cached_ids = {a.id for a in cached}
+                    for article in old_articles:
+                        if article.id not in cached_ids:
+                            cached.append(article)
+
+            # Also fetch new articles if cache is stale
+            if not cache_is_fresh:
+                logger.info(f"Cache stale for {ticker}, fetching from {most_recent_date} to {effective_to_date}")
+
+                new_articles = self._fetch_from_providers(
+                    "get_news",
+                    ticker=ticker,
+                    limit=limit,
+                    from_date=most_recent_date,
+                    to_date=effective_to_date,
+                )
+
+                if new_articles:
+                    self.cache.store_news(new_articles)
+                    cached_ids = {a.id for a in cached}
+                    for article in new_articles:
+                        if article.id not in cached_ids:
+                            cached.append(article)
+
+            # Filter by requested date range and return
+            filtered = [
+                a for a in cached
+                if effective_from_date <= a.published_at.date() <= effective_to_date
+            ]
+            return sorted(filtered, key=lambda a: a.published_at, reverse=True)[:limit]
+
+        # No cache - fetch fresh
+        logger.info(f"No cache for {ticker}, fetching {limit} articles from {effective_from_date} to {effective_to_date}")
 
         articles = self._fetch_from_providers(
             "get_news",
             ticker=ticker,
             limit=limit,
+            from_date=effective_from_date,
+            to_date=effective_to_date,
         )
 
-        if articles and use_cache:
+        # Save to cache
+        if articles:
             self.cache.store_news(articles)
+            # Log date range of fetched articles
+            dates = [a.published_at.date() for a in articles]
+            logger.info(f"Cached {len(articles)} articles for {ticker} (dates: {min(dates)} to {max(dates)})")
 
         return articles or []
+
+    def get_daily_sentiment(
+        self,
+        ticker: str,
+        days: int = 30,
+        use_cache: bool = True,
+    ) -> List[DailySentiment]:
+        """
+        Get daily sentiment data for a ticker.
+
+        Always aggregates from news articles (which use smart caching).
+
+        Args:
+            ticker: Stock ticker symbol
+            days: Number of days to look back
+            use_cache: Whether to use cached news data
+
+        Returns:
+            List of DailySentiment objects
+        """
+        from investment_tool.analysis.sentiment import SentimentAggregator
+
+        end = date.today()
+        start = end - timedelta(days=days)
+
+        # Fetch news articles for the date range (uses smart caching)
+        articles = self.get_news(
+            ticker,
+            limit=1000,
+            use_cache=use_cache,
+            from_date=start,
+            to_date=end,
+        )
+
+        if not articles:
+            return []
+
+        # Aggregate sentiment
+        aggregator = SentimentAggregator()
+        daily_sentiments = aggregator.get_sentiment_trend(ticker, articles, days=days)
+
+        # Cache results
+        if use_cache:
+            for sentiment in daily_sentiments:
+                self.cache.store_daily_sentiment(sentiment)
+
+        return daily_sentiments
 
     def get_fundamentals(
         self,

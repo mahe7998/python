@@ -31,6 +31,8 @@ from investment_tool.ui.dialogs.settings_dialog import SettingsDialog
 from investment_tool.ui.dialogs.category_dialog import CategoryDialog
 from investment_tool.ui.dialogs.add_stock_dialog import AddStockDialog
 from investment_tool.ui.widgets.market_treemap import MarketTreemap, TreemapItem
+from investment_tool.ui.widgets.news_feed import NewsFeedWidget
+from investment_tool.ui.widgets.sentiment_gauge import SentimentGaugeWidget
 from investment_tool.ui.widgets.stock_chart import StockChart
 from investment_tool.ui.widgets.watchlist import WatchlistWidget
 from investment_tool.utils.helpers import (
@@ -280,14 +282,9 @@ class MainWindow(QMainWindow):
         metrics_main_layout.addStretch()
         right_layout.addWidget(self.metrics_group)
 
-        # Sentiment placeholder
-        sentiment_group = QGroupBox("Sentiment")
-        sentiment_layout = QVBoxLayout(sentiment_group)
-        self.sentiment_label = QLabel("Sentiment analysis coming in Phase 3")
-        self.sentiment_label.setAlignment(Qt.AlignCenter)
-        self.sentiment_label.setStyleSheet("color: #9CA3AF;")
-        sentiment_layout.addWidget(self.sentiment_label)
-        right_layout.addWidget(sentiment_group)
+        # Sentiment gauge widget
+        self.sentiment_gauge = SentimentGaugeWidget()
+        right_layout.addWidget(self.sentiment_gauge)
 
         main_splitter.addWidget(right_panel)
 
@@ -304,14 +301,10 @@ class MainWindow(QMainWindow):
         self.watchlist_widget.stock_double_clicked.connect(self._on_stock_double_clicked)
         self.bottom_tabs.addTab(self.watchlist_widget, "Watchlist")
 
-        # News tab (placeholder)
-        news_tab = QWidget()
-        news_layout = QVBoxLayout(news_tab)
-        news_label = QLabel("News Feed\n(Coming in Phase 3)")
-        news_label.setAlignment(Qt.AlignCenter)
-        news_label.setStyleSheet("color: #9CA3AF;")
-        news_layout.addWidget(news_label)
-        self.bottom_tabs.addTab(news_tab, "News Feed")
+        # News feed tab
+        self.news_feed = NewsFeedWidget()
+        self.news_feed.stock_clicked.connect(self._on_stock_selected)
+        self.bottom_tabs.addTab(self.news_feed, "News Feed")
 
         # Screener tab (placeholder)
         screener_tab = QWidget()
@@ -379,9 +372,11 @@ class MainWindow(QMainWindow):
             self.data_manager = get_data_manager()
             self._update_status()
 
-            # Set data_manager first, then cache (cache triggers refresh which needs data_manager)
+            # Set data_manager on widgets
             self.watchlist_widget.set_data_manager(self.data_manager)
             self.watchlist_widget.set_cache(self.data_manager.cache)
+            self.sentiment_gauge.set_data_manager(self.data_manager)
+            self.news_feed.set_data_manager(self.data_manager)
 
             if self.data_manager.is_connected():
                 self.connection_label.setText(f"EODHD: Connected | API Calls: {self.data_manager.api_call_count}")
@@ -394,6 +389,8 @@ class MainWindow(QMainWindow):
                 period = self.treemap.get_selected_period()
                 self.watchlist_widget.set_period(period)
                 self.watchlist_widget.refresh_all()
+
+                # News feed only loads when a stock is selected
             else:
                 self.connection_label.setText("EODHD: Not Configured")
                 self.connection_label.setStyleSheet("color: #F59E0B;")
@@ -576,6 +573,13 @@ class MainWindow(QMainWindow):
 
         # Update metrics
         self._update_metrics(ticker, exchange)
+
+        # Update sentiment gauge
+        self.sentiment_gauge.set_ticker(ticker, exchange)
+
+        # Update news feed filter
+        self.news_feed.set_filter_ticker(ticker)
+        self.news_feed.refresh()
 
     def _on_stock_double_clicked(self, ticker: str, exchange: str) -> None:
         """Handle stock double-click (open in new window)."""

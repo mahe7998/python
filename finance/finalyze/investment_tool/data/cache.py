@@ -10,6 +10,7 @@ import pandas as pd
 
 from investment_tool.data.models import (
     CompanyInfo,
+    DailySentiment,
     NewsArticle,
     SentimentData,
     Fundamentals,
@@ -649,6 +650,57 @@ class CacheManager:
             ))
 
         return articles
+
+    # ---- Daily Sentiment Methods ----
+
+    def store_daily_sentiment(self, sentiment: DailySentiment) -> None:
+        """Store or update daily sentiment data."""
+        self.conn.execute("""
+            INSERT OR REPLACE INTO daily_sentiment
+            (ticker, date, news_count, avg_polarity, positive_ratio, negative_ratio,
+             social_mentions, social_positive, social_negative)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [
+            sentiment.ticker,
+            sentiment.date,
+            sentiment.news_count,
+            sentiment.avg_polarity,
+            sentiment.positive_ratio,
+            sentiment.negative_ratio,
+            sentiment.social_mentions,
+            sentiment.social_positive,
+            sentiment.social_negative,
+        ])
+
+    def get_daily_sentiment(
+        self,
+        ticker: str,
+        start: date,
+        end: date,
+    ) -> List[DailySentiment]:
+        """Get daily sentiment data for a ticker within date range."""
+        results = self.conn.execute("""
+            SELECT ticker, date, news_count, avg_polarity, positive_ratio,
+                   negative_ratio, social_mentions, social_positive, social_negative
+            FROM daily_sentiment
+            WHERE ticker = ? AND date >= ? AND date <= ?
+            ORDER BY date
+        """, [ticker, start, end]).fetchall()
+
+        return [
+            DailySentiment(
+                ticker=r[0],
+                date=r[1],
+                news_count=r[2],
+                avg_polarity=r[3],
+                positive_ratio=r[4],
+                negative_ratio=r[5],
+                social_mentions=r[6],
+                social_positive=r[7],
+                social_negative=r[8],
+            )
+            for r in results
+        ]
 
     # ---- Fundamentals Methods ----
 

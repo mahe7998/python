@@ -1,12 +1,16 @@
 """UI Widgets."""
 
 from investment_tool.ui.widgets.market_treemap import MarketTreemap, TreemapItem
+from investment_tool.ui.widgets.news_feed import NewsFeedWidget
+from investment_tool.ui.widgets.sentiment_gauge import SentimentGaugeWidget
 from investment_tool.ui.widgets.stock_chart import StockChart
 from investment_tool.ui.widgets.watchlist import WatchlistWidget
 
 __all__ = [
     "MarketTreemap",
-    "TreemapItem",
+    "NewsFeedWidget",
+    "SentimentGaugeWidget",
     "StockChart",
+    "TreemapItem",
     "WatchlistWidget",
 ]

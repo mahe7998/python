@@ -475,11 +475,14 @@ class StockChart(QWidget):
         self.price_widget.addItem(self.vline, ignoreBounds=True)
         self.price_widget.addItem(self.hline, ignoreBounds=True)
 
-        # Crosshair label
+        # Crosshair label - stays fixed in top-left of visible area
         self.crosshair_label = pg.TextItem(anchor=(0, 0), color="#F9FAFB")
         self.price_widget.addItem(self.crosshair_label, ignoreBounds=True)
 
         self.price_widget.scene().sigMouseMoved.connect(self._on_mouse_moved)
+
+        # Update label position when view changes (zoom/pan)
+        self.price_widget.getViewBox().sigRangeChanged.connect(self._update_label_position)
 
         splitter.addWidget(self.price_widget)
 
@@ -865,10 +868,17 @@ class StockChart(QWidget):
                             last_hour = hour
                 ticks = hourly_ticks
         else:
+            # Use year format for long periods (1Y, 2Y, 5Y)
+            long_periods = ("1Y", "2Y", "5Y")
+            use_year_format = getattr(self, '_current_period', '') in long_periods
+
             for i in range(0, len(dates), step):
                 dt = dates[i]
                 if hasattr(dt, 'strftime'):
-                    ticks.append((i, dt.strftime("%b %d")))
+                    if use_year_format:
+                        ticks.append((i, dt.strftime("%b '%y")))  # e.g., "Jan '23"
+                    else:
+                        ticks.append((i, dt.strftime("%b %d")))
                 else:
                     ticks.append((i, str(dt)[:10]))
 
@@ -923,7 +933,19 @@ class StockChart(QWidget):
                 f"L: {row['low']:.2f}  C: {row['close']:.2f}  "
                 f"V: {vol_str}"
             )
-            self.crosshair_label.setPos(0, display_data["high"].max())
+            # Position label in top-left of visible area
+            self._update_label_position()
+
+    def _update_label_position(self, *args) -> None:
+        """Update crosshair label to stay in top-left of visible area."""
+        view_range = self.price_widget.getViewBox().viewRange()
+        if view_range:
+            x_min = view_range[0][0]
+            y_min = view_range[1][0]
+            y_max = view_range[1][1]
+            # Position at top-left with offset from top (5% of visible range)
+            y_offset = (y_max - y_min) * 0.02
+            self.crosshair_label.setPos(x_min + 0.5, y_max - y_offset)
 
     def _on_measure_toggled(self, enabled: bool) -> None:
         """Handle measure mode toggle."""

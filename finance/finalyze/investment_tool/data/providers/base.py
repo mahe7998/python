@@ -97,6 +97,8 @@ class DataProviderBase(ABC):
         self,
         ticker: str,
         limit: int = 50,
+        from_date: Optional[date] = None,
+        to_date: Optional[date] = None,
     ) -> List[NewsArticle]:
         """
         Fetch news with sentiment.
@@ -104,6 +106,8 @@ class DataProviderBase(ABC):
         Args:
             ticker: Stock ticker symbol
             limit: Maximum number of articles to return
+            from_date: Start date for news (optional)
+            to_date: End date for news (optional)
 
         Returns:
             List of NewsArticle objects

@@ -229,15 +229,20 @@ class EODHDProvider(DataProviderBase):
         self,
         ticker: str,
         limit: int = 50,
+        from_date: Optional[date] = None,
+        to_date: Optional[date] = None,
     ) -> List[NewsArticle]:
         """Fetch news with sentiment from EODHD."""
-        data = self._request(
-            f"news",
-            params={
-                "s": ticker,
-                "limit": limit,
-            }
-        )
+        params = {
+            "s": ticker,
+            "limit": limit,
+        }
+        if from_date:
+            params["from"] = from_date.isoformat()
+        if to_date:
+            params["to"] = to_date.isoformat()
+
+        data = self._request(f"news", params=params)
 
         if not data:
             return []
@@ -260,9 +265,16 @@ class EODHDProvider(DataProviderBase):
                 f"{item.get('title', '')}{item.get('date', '')}".encode()
             ).hexdigest()
 
-            published_at = datetime.fromisoformat(
-                item.get("date", "").replace("Z", "+00:00")
-            ) if item.get("date") else datetime.now()
+            published_at_str = item.get("date", "")
+            if published_at_str:
+                published_at = datetime.fromisoformat(
+                    published_at_str.replace("Z", "+00:00")
+                )
+                # Convert to naive datetime for consistency
+                if published_at.tzinfo is not None:
+                    published_at = published_at.replace(tzinfo=None)
+            else:
+                published_at = datetime.now()
 
             articles.append(NewsArticle(
                 id=article_id,
