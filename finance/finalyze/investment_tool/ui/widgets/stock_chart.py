@@ -536,7 +536,7 @@ class StockChart(QWidget):
         toolbar.addWidget(self.chart_type_combo)
 
         # Measure mode checkbox
-        self.measure_checkbox = QCheckBox("Measure")
+        self.measure_checkbox = QCheckBox("Measure Period ")
         self.measure_checkbox.setToolTip("Drag to measure price range (right-click to clear)")
         self.measure_checkbox.setChecked(True)  # Default to enabled
         self.measure_checkbox.toggled.connect(self._on_measure_toggled)

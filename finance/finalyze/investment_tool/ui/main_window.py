@@ -804,7 +804,7 @@ class MainWindow(QMainWindow):
                 )
                 self.change_label.setTextFormat(Qt.RichText)
 
-            # Get 52-week data for high/low and average volume
+            # Get 52-week data for high/low
             week52_start = date.today() - timedelta(days=365)
             week52_end = date.today()
             week52_prices = self.data_manager.get_daily_prices(ticker, exchange, week52_start, week52_end)
@@ -812,14 +812,20 @@ class MainWindow(QMainWindow):
             if week52_prices is not None and len(week52_prices) >= 1:
                 week52_high = week52_prices["high"].max()
                 week52_low = week52_prices["low"].min()
-                avg_volume = week52_prices["volume"].mean()
-
                 self.week52_high_label.setText(f"${week52_high:.2f}")
                 self.week52_low_label.setText(f"${week52_low:.2f}")
-                self.avg_volume_label.setText(format_large_number(avg_volume))
             else:
                 self.week52_high_label.setText("--")
                 self.week52_low_label.setText("--")
+
+            # Calculate average volume based on selected period
+            period_start, period_end = get_date_range(period, min_trading_days=0)
+            period_prices = self.data_manager.get_daily_prices(ticker, exchange, period_start, period_end)
+
+            if period_prices is not None and len(period_prices) >= 1:
+                avg_volume = period_prices["volume"].mean()
+                self.avg_volume_label.setText(format_large_number(avg_volume))
+            else:
                 self.avg_volume_label.setText("--")
 
             if company:
