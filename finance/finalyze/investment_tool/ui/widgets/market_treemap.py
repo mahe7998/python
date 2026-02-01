@@ -68,6 +68,7 @@ class MarketTreemap(QWidget):
     stock_selected = Signal(str, str)  # ticker, exchange
     stock_double_clicked = Signal(str, str)  # ticker, exchange
     stocks_compare_requested = Signal(list)  # list of (ticker, exchange) tuples
+    stock_remove_requested = Signal(str, str, str)  # ticker, exchange, category_id (empty for all)
     filter_changed = Signal(str)  # category name or "All Stocks"
     period_changed = Signal(str)  # period like "1D", "1W", etc.
 
@@ -82,6 +83,7 @@ class MarketTreemap(QWidget):
         self._selected_ticker: Optional[str] = None
         self._hovered_index: int = -1
         self._compare_selection: List[int] = []
+        self._current_category_id: Optional[str] = None  # Track current category for removal
 
         # View state
         self._zoom = 1.0
@@ -210,6 +212,10 @@ class MarketTreemap(QWidget):
         """Get the currently selected filter."""
         return self.filter_combo.currentText()
 
+    def set_current_category_id(self, category_id: Optional[str]) -> None:
+        """Set the current category ID for removal operations."""
+        self._current_category_id = category_id
+
     def _compute_layout(self) -> None:
         """Compute treemap layout using squarify algorithm."""
         if not self._items:
@@ -295,6 +301,25 @@ class MarketTreemap(QWidget):
 
         watchlist_menu = menu.addMenu("Add to Watchlist")
         watchlist_menu.addAction("Default Watchlist")
+
+        # Add remove from category option
+        menu.addSeparator()
+        current_filter = self.filter_combo.currentText()
+        market_cap_filters = ("All Stocks", "Large Cap (>$200B)", "Mid Cap ($20B-$200B)",
+                              "Small Cap ($2B-$20B)", "Tiny Stocks (<$2B)")
+
+        if current_filter == "All Stocks":
+            remove_action = menu.addAction("Remove from All Categories")
+            remove_action.triggered.connect(
+                lambda: self.stock_remove_requested.emit(item.ticker, item.exchange, "")
+            )
+        elif current_filter not in market_cap_filters and self._current_category_id:
+            remove_action = menu.addAction(f"Remove from {current_filter}")
+            remove_action.triggered.connect(
+                lambda: self.stock_remove_requested.emit(
+                    item.ticker, item.exchange, self._current_category_id
+                )
+            )
 
         menu.exec(self.mapToGlobal(pos.toPoint()))
 
@@ -546,6 +571,6 @@ class TreemapCanvas(QWidget):
 
     def contextMenuEvent(self, event) -> None:
         """Handle context menu."""
-        index = self._get_item_at(event.position())
+        index = self._get_item_at(event.pos())
         if index >= 0:
-            self.context_menu_requested.emit(index, event.position())
+            self.context_menu_requested.emit(index, event.pos())

@@ -20,6 +20,7 @@ from app.models import (
     Transcription,
     TranscriptionDiff,
     DeletedTranscription,
+    SpeakerProfile,
     TranscriptionCreate,
     TranscriptionUpdate,
     TranscriptionResponse,
@@ -27,6 +28,10 @@ from app.models import (
     TranscriptionSummary,
     DiffResponse,
     AIReviewRequest,
+    SpeakerInfo,
+    SpeakerProfileResponse,
+    UpdateSpeakersRequest,
+    EnrollSpeakerRequest,
 )
 from app.whisper_service import get_whisper_service, MLXWhisperService
 from app.ollama_client import get_ollama_client, OllamaClient
@@ -140,6 +145,8 @@ async def create_transcription(
             speaker_map=transcription.speaker_map,
             extra_metadata=transcription.extra_metadata,
             is_reviewed=transcription.is_reviewed,
+            is_diarized=transcription.is_diarized,
+            speakers=transcription.speakers or [],
             created_at=transcription.created_at,
             updated_at=transcription.updated_at,
             last_modified_at=transcription.last_modified_at,
@@ -252,6 +259,8 @@ async def list_transcriptions(
                 speaker_map=t.speaker_map,
                 extra_metadata=t.extra_metadata,
                 is_reviewed=t.is_reviewed,
+                is_diarized=t.is_diarized,
+                speakers=t.speakers or [],
                 created_at=t.created_at,
                 updated_at=t.updated_at,
                 last_modified_at=t.last_modified_at,
@@ -405,6 +414,7 @@ class TranscribePathRequest(BaseModel):
     """Request body for transcribing by file path"""
     audio_path: str
     language: Optional[str] = None
+    diarize: bool = False
 
 
 async def get_audio_duration(audio_path: str) -> float:
@@ -517,7 +527,7 @@ async def transcribe_audio_by_path(
             raise HTTPException(status_code=404, detail=f"Audio file not found: {request.audio_path}")
 
         # Transcribe with optional language
-        logger.info(f"Re-transcribing file: {audio_path}, language: {request.language}")
+        logger.info(f"Re-transcribing file: {audio_path}, language: {request.language}, diarize: {request.diarize}")
         segments = await whisper_service.transcribe_audio(
             audio_path,
             language=request.language if request.language and request.language != 'auto' else None
@@ -525,6 +535,37 @@ async def transcribe_audio_by_path(
 
         # Build full text from segments
         full_text = " ".join(seg.text.strip() for seg in segments if seg.text.strip())
+
+        # Apply speaker diarization if requested
+        speakers_info = []
+        if request.diarize:
+            # Step 1: Run pyannote speaker diarization
+            logger.info("Running speaker diarization...")
+            speaker_turns = await whisper_service.run_diarization(audio_path)
+
+            # Step 2: Get word-level timestamps using CTC forced alignment (wav2vec2)
+            # This provides much more accurate timing than Whisper's segment-level timestamps
+            logger.info("Running word-level alignment for accurate speaker assignment...")
+            word_timestamps = await whisper_service.get_word_alignments(audio_path, full_text)
+
+            # Step 3: Assign speakers to each word based on diarization
+            words_with_speakers = whisper_service.assign_speakers_to_words(word_timestamps, speaker_turns)
+
+            # Step 4: Convert back to segments grouped by speaker
+            segments = whisper_service.words_to_speaker_segments(words_with_speakers)
+
+            # Step 5: Extract embeddings for each speaker
+            logger.info("Extracting speaker embeddings...")
+            speaker_embeddings = await whisper_service.extract_all_speaker_embeddings(audio_path, speaker_turns)
+
+            # Step 6: Match against known profiles
+            from app.database import async_session_maker
+            async with async_session_maker() as db:
+                speakers_info = await match_speakers_against_profiles(
+                    speaker_embeddings, db, whisper_service
+                )
+                logger.info(f"Speaker matching complete: {len(speakers_info)} speakers, "
+                           f"{sum(1 for s in speakers_info if s.get('profile_id'))} matched to profiles")
 
         # Format as markdown
         markdown = whisper_service.format_as_markdown(segments)
@@ -534,12 +575,51 @@ async def transcribe_audio_by_path(
             "text": full_text,
             "markdown": markdown,
             "duration": segments[-1].end if segments else 0.0,
+            "is_diarized": request.diarize,
+            "speakers": speakers_info,
         }
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error re-transcribing audio: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Speaker Profile Endpoints (must be before /{transcription_id} routes)
+# ============================================================================
+
+@router.get("/speaker-profiles", response_model=List[SpeakerProfileResponse])
+async def list_speaker_profiles(
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    List all known speaker profiles.
+
+    Returns:
+        List of speaker profiles (without embeddings for efficiency)
+    """
+    try:
+        result = await db.execute(
+            select(SpeakerProfile).order_by(SpeakerProfile.name)
+        )
+        profiles = result.scalars().all()
+
+        return [
+            SpeakerProfileResponse(
+                id=p.id,
+                name=p.name,
+                created_at=p.created_at,
+                updated_at=p.updated_at,
+                audio_sample_path=p.audio_sample_path,
+                extra_data=p.extra_data or {}
+            )
+            for p in profiles
+        ]
+
+    except Exception as e:
+        logger.error(f"Error listing speaker profiles: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -604,6 +684,8 @@ async def get_transcription(
             speaker_map=transcription.speaker_map,
             extra_metadata=transcription.extra_metadata,
             is_reviewed=transcription.is_reviewed,
+            is_diarized=transcription.is_diarized,
+            speakers=transcription.speakers or [],
             created_at=transcription.created_at,
             updated_at=transcription.updated_at,
             last_modified_at=transcription.last_modified_at,
@@ -731,6 +813,8 @@ async def update_transcription(
             speaker_map=transcription.speaker_map,
             extra_metadata=transcription.extra_metadata,
             is_reviewed=transcription.is_reviewed,
+            is_diarized=transcription.is_diarized,
+            speakers=transcription.speakers or [],
             created_at=transcription.created_at,
             updated_at=transcription.updated_at,
             last_modified_at=transcription.last_modified_at,
@@ -1213,3 +1297,250 @@ async def ai_review_text_stream(
             "X-Accel-Buffering": "no",  # Disable nginx buffering
         }
     )
+
+
+@router.post("/{transcription_id}/enroll-speaker", response_model=SpeakerProfileResponse)
+async def enroll_speaker(
+    transcription_id: int,
+    request: EnrollSpeakerRequest,
+    db: AsyncSession = Depends(get_db),
+    whisper_service: MLXWhisperService = Depends(get_whisper_service),
+):
+    """
+    Enroll a speaker from a transcription by extracting and saving their voice embedding.
+
+    Args:
+        transcription_id: ID of the transcription
+        request: Speaker ID and name to enroll
+
+    Returns:
+        Created speaker profile
+    """
+    try:
+        # Get transcription
+        result = await db.execute(
+            select(Transcription).where(Transcription.id == transcription_id)
+        )
+        transcription = result.scalar_one_or_none()
+
+        if not transcription:
+            raise HTTPException(status_code=404, detail="Transcription not found")
+
+        if not transcription.audio_file_path:
+            raise HTTPException(status_code=400, detail="Transcription has no audio file")
+
+        # Get speaker embeddings from the transcription's speakers array
+        speakers = transcription.speakers or []
+        speaker_data = next((s for s in speakers if s.get('id') == request.speaker_id), None)
+
+        # Get audio path
+        from pathlib import Path
+        audio_path = transcription.audio_file_path
+        if audio_path.startswith('/api/audio/'):
+            filename = audio_path.replace('/api/audio/', '')
+            audio_dir = Path.home() / "projects" / "python" / "mlx_whisper" / "audio"
+            audio_path = str(audio_dir / filename)
+
+        # Check if embedding already exists in speaker_data
+        if speaker_data and speaker_data.get('embedding'):
+            # Use existing embedding
+            embedding_bytes = bytes.fromhex(speaker_data['embedding'])
+            logger.info(f"Using existing embedding for {request.speaker_id}")
+        else:
+            # Extract embedding from audio - need to run diarization to find speaker segments
+            logger.info(f"Extracting embedding for {request.speaker_id} from audio")
+
+            # Run diarization to get speaker segments
+            speaker_turns = await whisper_service.run_diarization(audio_path)
+
+            # Find longest segment for this speaker
+            best_segment = None
+            best_duration = 0
+            for start, end, speaker in speaker_turns:
+                if speaker == request.speaker_id:
+                    duration = end - start
+                    if duration > best_duration:
+                        best_duration = duration
+                        best_segment = (start, end)
+
+            if not best_segment:
+                raise HTTPException(status_code=404, detail=f"No audio segments found for speaker {request.speaker_id}")
+
+            # Extract embedding
+            embedding_bytes = await whisper_service.extract_speaker_embedding(
+                audio_path, best_segment[0], best_segment[1]
+            )
+            logger.info(f"Extracted embedding: {len(embedding_bytes)} bytes")
+
+        # Create speaker profile
+        profile = SpeakerProfile(
+            name=request.name,
+            embedding=embedding_bytes,
+            audio_sample_path=transcription.audio_file_path,
+            extra_data={"enrolled_from_transcription": transcription_id, "original_speaker_id": request.speaker_id}
+        )
+        db.add(profile)
+        await db.commit()
+        await db.refresh(profile)
+
+        # Update the transcription's speakers array to link to this profile
+        for s in speakers:
+            if s.get('id') == request.speaker_id:
+                s['name'] = request.name
+                s['profile_id'] = profile.id
+                break
+
+        transcription.speakers = speakers
+
+        # Also update speaker_map for display
+        speaker_map = transcription.speaker_map or {}
+        speaker_map[request.speaker_id] = request.name
+        transcription.speaker_map = speaker_map
+
+        await db.commit()
+
+        logger.info(f"Enrolled speaker {request.speaker_id} as '{request.name}' (profile ID: {profile.id})")
+
+        return SpeakerProfileResponse(
+            id=profile.id,
+            name=profile.name,
+            created_at=profile.created_at,
+            updated_at=profile.updated_at,
+            audio_sample_path=profile.audio_sample_path,
+            extra_data=profile.extra_data or {}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Error enrolling speaker: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.patch("/{transcription_id}/speakers", response_model=TranscriptionResponse)
+async def update_transcription_speakers(
+    transcription_id: int,
+    request: UpdateSpeakersRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Update speaker names for a transcription.
+
+    Args:
+        transcription_id: ID of the transcription
+        request: Updated speakers and speaker_map
+
+    Returns:
+        Updated transcription
+    """
+    try:
+        result = await db.execute(
+            select(Transcription).where(Transcription.id == transcription_id)
+        )
+        transcription = result.scalar_one_or_none()
+
+        if not transcription:
+            raise HTTPException(status_code=404, detail="Transcription not found")
+
+        # Update speakers array
+        transcription.speakers = [s.model_dump() for s in request.speakers]
+
+        # Update speaker_map
+        transcription.speaker_map = request.speaker_map
+
+        # Also update speaker_profiles for any matched speakers whose names changed
+        for speaker in request.speakers:
+            if speaker.profile_id and speaker.name:
+                # Get the profile and update its name if different
+                profile_result = await db.execute(
+                    select(SpeakerProfile).where(SpeakerProfile.id == speaker.profile_id)
+                )
+                profile = profile_result.scalar_one_or_none()
+                if profile and profile.name != speaker.name:
+                    logger.info(f"Updating speaker profile {profile.id} name: '{profile.name}' -> '{speaker.name}'")
+                    profile.name = speaker.name
+
+        await db.commit()
+        await db.refresh(transcription)
+
+        logger.info(f"Updated speakers for transcription {transcription_id}")
+
+        return TranscriptionResponse(
+            id=transcription.id,
+            title=transcription.title,
+            content_md=transcription.current_content_md,
+            audio_file_path=transcription.audio_file_path,
+            duration_seconds=transcription.duration_seconds,
+            speaker_map=transcription.speaker_map,
+            extra_metadata=transcription.extra_metadata,
+            is_reviewed=transcription.is_reviewed,
+            is_diarized=transcription.is_diarized,
+            speakers=transcription.speakers,
+            created_at=transcription.created_at,
+            updated_at=transcription.updated_at,
+            last_modified_at=transcription.last_modified_at,
+            current_diff_id=transcription.current_diff_id
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"Error updating speakers: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def match_speakers_against_profiles(
+    speaker_embeddings: dict,
+    db: AsyncSession,
+    whisper_service: MLXWhisperService,
+    threshold: float = 0.6
+) -> List[dict]:
+    """
+    Match speaker embeddings against known profiles in the database.
+
+    Args:
+        speaker_embeddings: Dict mapping speaker_id to embedding bytes
+        db: Database session
+        whisper_service: Whisper service for embedding comparison
+        threshold: Cosine distance threshold for matching
+
+    Returns:
+        List of speaker info dicts with matches
+    """
+    # Get all profiles from DB
+    result = await db.execute(select(SpeakerProfile))
+    profiles = result.scalars().all()
+    logger.info(f"Matching against {len(profiles)} speaker profiles in database")
+
+    speakers = []
+    for speaker_id, embedding in speaker_embeddings.items():
+        best_match = None
+        best_confidence = 0
+
+        for profile in profiles:
+            is_match, confidence = whisper_service.compare_embeddings(
+                embedding, profile.embedding, threshold
+            )
+            logger.info(f"  {speaker_id} vs '{profile.name}' (id={profile.id}): "
+                       f"confidence={confidence:.3f}, threshold={threshold}, match={is_match}")
+            if is_match and confidence > best_confidence:
+                best_match = profile
+                best_confidence = confidence
+
+        if best_match:
+            logger.info(f"  -> {speaker_id} MATCHED to '{best_match.name}' with confidence {best_confidence:.3f}")
+        else:
+            logger.info(f"  -> {speaker_id} NO MATCH (best confidence was {best_confidence:.3f})")
+
+        speaker_info = {
+            "id": speaker_id,
+            "name": best_match.name if best_match else None,
+            "profile_id": best_match.id if best_match else None,
+            "confidence": float(round(best_confidence, 3)) if best_match else None,
+            "embedding": embedding.hex()  # Store as hex string for later enrollment
+        }
+        speakers.append(speaker_info)
+
+    return speakers

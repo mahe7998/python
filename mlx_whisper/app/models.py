@@ -3,7 +3,7 @@ SQLAlchemy models for WhisperX transcription system
 """
 from datetime import datetime
 from typing import Optional, Dict, Any
-from sqlalchemy import Column, Integer, String, Text, Float, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Text, Float, Boolean, DateTime, ForeignKey, LargeBinary
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from pydantic import BaseModel, Field
@@ -30,6 +30,8 @@ class Transcription(Base):
     speaker_map = Column(JSONB, default={}, nullable=False)
     extra_metadata = Column(JSONB, default={}, nullable=False)
     is_reviewed = Column(Boolean, default=False, nullable=False, index=True)
+    is_diarized = Column(Boolean, default=False, nullable=False)
+    speakers = Column(JSONB, default=[], nullable=False)  # [{"id": "SPEAKER_00", "name": "John", "profile_id": 1, "confidence": 0.85}, ...]
 
     # Relationships
     diffs = relationship("TranscriptionDiff", back_populates="transcription", foreign_keys="TranscriptionDiff.transcription_id")
@@ -76,6 +78,22 @@ class DeletedTranscription(Base):
     is_reviewed = Column(Boolean, default=False, nullable=False)
     deleted_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     deleted_reason = Column(Text, nullable=True)
+
+
+class SpeakerProfile(Base):
+    """
+    SQLAlchemy model for speaker_profiles table
+    Stores voice embeddings for known speakers to enable automatic recognition
+    """
+    __tablename__ = "speaker_profiles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False, index=True)
+    embedding = Column(LargeBinary, nullable=False)  # 512-dim float32 numpy array as bytes (~2KB)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    audio_sample_path = Column(String(500), nullable=True)  # Optional: path to enrollment audio
+    extra_data = Column(JSONB, default={}, nullable=False)  # Extra info (e.g., organization, notes)
 
 
 # Pydantic schemas for API request/response validation
@@ -133,6 +151,8 @@ class TranscriptionResponse(BaseModel):
         serialization_alias='metadata'
     )
     is_reviewed: bool = False
+    is_diarized: bool = False
+    speakers: list[Dict[str, Any]] = Field(default_factory=list)  # [{"id": "SPEAKER_00", "name": "John", ...}]
     created_at: datetime
     updated_at: datetime
     last_modified_at: Optional[datetime] = None
@@ -197,3 +217,47 @@ class TranscriptionSegment(BaseModel):
     start: float
     end: float
     speaker: Optional[str] = None  # Optional for backwards compatibility
+
+
+# Speaker Profile schemas
+
+class SpeakerInfo(BaseModel):
+    """Schema for speaker info in transcription"""
+    id: str  # e.g. "SPEAKER_00"
+    name: Optional[str] = None
+    profile_id: Optional[int] = None
+    confidence: Optional[float] = None  # 0-1 confidence score
+
+    model_config = {"from_attributes": True}
+
+
+class SpeakerProfileCreate(BaseModel):
+    """Schema for creating a new speaker profile"""
+    name: str = Field(..., min_length=1, max_length=255)
+    embedding: bytes  # 512-dim float32 numpy array as bytes
+    audio_sample_path: Optional[str] = None
+    extra_data: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SpeakerProfileResponse(BaseModel):
+    """Schema for speaker profile response"""
+    id: int
+    name: str
+    created_at: datetime
+    updated_at: datetime
+    audio_sample_path: Optional[str] = None
+    extra_data: Dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {"from_attributes": True}
+
+
+class UpdateSpeakersRequest(BaseModel):
+    """Schema for updating speakers in a transcription"""
+    speakers: list[SpeakerInfo]
+    speaker_map: Dict[str, str] = Field(default_factory=dict)  # {"SPEAKER_00": "John Doe"}
+
+
+class EnrollSpeakerRequest(BaseModel):
+    """Schema for enrolling a new speaker from a transcription"""
+    speaker_id: str  # e.g. "SPEAKER_00"
+    name: str = Field(..., min_length=1, max_length=255)

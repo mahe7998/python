@@ -54,7 +54,7 @@ async def init_db():
     """
     async with engine.begin() as conn:
         # Import models here to ensure they're registered
-        from app.models import Transcription, TranscriptionDiff, DeletedTranscription  # noqa: F401
+        from app.models import Transcription, TranscriptionDiff, DeletedTranscription, SpeakerProfile  # noqa: F401
 
         # Create all tables
         await conn.run_sync(Base.metadata.create_all)

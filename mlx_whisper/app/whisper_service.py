@@ -233,6 +233,373 @@ class MLXWhisperService:
 
         return segments
 
+    async def run_diarization(self, audio_path: str) -> list:
+        """
+        Run speaker diarization on audio file.
+
+        Args:
+            audio_path: Path to audio file
+
+        Returns:
+            List of (start, end, speaker_id) tuples
+        """
+        from pyannote.audio import Pipeline
+        import torch
+        import torchaudio
+
+        hf_token = os.environ.get("HF_TOKEN")
+        if not hf_token:
+            raise ValueError("HF_TOKEN environment variable required for diarization")
+
+        logger.info(f"Loading speaker diarization model...")
+        pipeline = Pipeline.from_pretrained(
+            "pyannote/speaker-diarization-3.1",
+            token=hf_token
+        )
+        # Use CPU for accurate timestamps (MPS has known issues on Apple Silicon)
+        pipeline.to(torch.device("cpu"))
+
+        logger.info(f"Running speaker diarization on: {audio_path}")
+
+        # Convert to WAV if needed (torchaudio doesn't support WebM)
+        import subprocess
+        import tempfile
+
+        if audio_path.endswith('.webm'):
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
+                wav_path = tmp.name
+            subprocess.run(['ffmpeg', '-y', '-i', audio_path, '-ar', '16000', '-ac', '1', wav_path],
+                          capture_output=True, check=True)
+            logger.info(f"Converted WebM to WAV: {wav_path}")
+        else:
+            wav_path = audio_path
+
+        # Load audio with torchaudio to avoid torchcodec issues
+        waveform, sample_rate = torchaudio.load(wav_path)
+        audio_dict = {"waveform": waveform, "sample_rate": sample_rate}
+
+        # Cleanup temp file after loading
+        if audio_path.endswith('.webm'):
+            import os as os_module
+            os_module.unlink(wav_path)
+
+        def run_pipeline():
+            return pipeline(audio_dict)
+
+        loop = asyncio.get_event_loop()
+        diarization_output = await loop.run_in_executor(executor, run_pipeline)
+
+        # Build list of speaker turns
+        # pyannote 4.0+ returns DiarizeOutput dataclass, access .speaker_diarization for Annotation
+        diarization = diarization_output.speaker_diarization
+        speaker_turns = []
+        for turn, _, speaker in diarization.itertracks(yield_label=True):
+            speaker_turns.append((turn.start, turn.end, speaker))
+
+        logger.info(f"Diarization complete: found {len(set(s[2] for s in speaker_turns))} speakers")
+        return speaker_turns
+
+    async def get_word_alignments(self, audio_path: str, text: str, language: str = "eng") -> list:
+        """
+        Get word-level timestamps using CTC forced alignment (wav2vec2).
+        This provides much more accurate timing than Whisper's segment-level timestamps.
+
+        Args:
+            audio_path: Path to audio file (WAV format preferred)
+            text: Full transcription text
+            language: ISO 639-3 language code (default: "eng" for English)
+
+        Returns:
+            List of dicts with 'start', 'end', 'text' for each word
+        """
+        from ctc_forced_aligner import (
+            load_audio,
+            generate_emissions,
+            preprocess_text,
+            get_alignments,
+            get_spans,
+            postprocess_results,
+            AlignmentSingleton,
+        )
+        import subprocess
+        import tempfile
+
+        logger.info(f"Running word-level alignment on: {audio_path}")
+
+        # Convert to WAV if needed
+        if audio_path.endswith('.webm'):
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
+                wav_path = tmp.name
+            subprocess.run(['ffmpeg', '-y', '-i', audio_path, '-ar', '16000', '-ac', '1', wav_path],
+                          capture_output=True, check=True)
+            logger.info(f"Converted WebM to WAV for alignment: {wav_path}")
+        else:
+            wav_path = audio_path
+
+        def run_alignment():
+            # Load the alignment model (singleton - loads once)
+            aligner = AlignmentSingleton()
+
+            # Load audio
+            audio_waveform = load_audio(wav_path)
+
+            # Generate emissions from alignment model
+            emissions, stride = generate_emissions(aligner.model, audio_waveform, batch_size=4)
+
+            # Preprocess text for alignment
+            tokens_starred, text_starred = preprocess_text(
+                text,
+                romanize=True,
+                language=language
+            )
+
+            # Get alignments
+            segments, scores, blank_token = get_alignments(
+                emissions,
+                tokens_starred,
+                aligner.tokenizer
+            )
+
+            # Get word spans
+            spans = get_spans(tokens_starred, segments, blank_token)
+
+            # Post-process to get word timestamps
+            word_timestamps = postprocess_results(text_starred, spans, stride, scores)
+
+            return word_timestamps
+
+        loop = asyncio.get_event_loop()
+        word_timestamps = await loop.run_in_executor(executor, run_alignment)
+
+        # Cleanup temp file
+        if audio_path.endswith('.webm'):
+            import os as os_module
+            os_module.unlink(wav_path)
+
+        logger.info(f"Word alignment complete: {len(word_timestamps)} words aligned")
+        return word_timestamps
+
+    def assign_speakers_to_words(self, word_timestamps: list, speaker_turns: list) -> list:
+        """
+        Assign speakers to words based on diarization output.
+
+        Args:
+            word_timestamps: List of {'start', 'end', 'text'} for each word
+            speaker_turns: List of (start, end, speaker_id) tuples from diarization
+
+        Returns:
+            List of {'start', 'end', 'text', 'speaker'} for each word
+        """
+        result = []
+        for word in word_timestamps:
+            word_mid = (word['start'] + word['end']) / 2
+            speaker = None
+
+            # Find which speaker turn contains this word's midpoint
+            for turn_start, turn_end, turn_speaker in speaker_turns:
+                if turn_start <= word_mid <= turn_end:
+                    speaker = turn_speaker
+                    break
+
+            result.append({
+                'start': word['start'],
+                'end': word['end'],
+                'text': word['text'],
+                'speaker': speaker
+            })
+
+        return result
+
+    def words_to_speaker_segments(self, words_with_speakers: list) -> List[TranscriptionSegment]:
+        """
+        Convert word-level speaker assignments to sentence-like segments.
+        Groups consecutive words by same speaker.
+
+        Args:
+            words_with_speakers: List of {'start', 'end', 'text', 'speaker'} dicts
+
+        Returns:
+            List of TranscriptionSegment with speaker assignments
+        """
+        if not words_with_speakers:
+            return []
+
+        segments = []
+        current_speaker = words_with_speakers[0].get('speaker')
+        current_text = []
+        segment_start = words_with_speakers[0]['start']
+        segment_end = words_with_speakers[0]['end']
+
+        for word in words_with_speakers:
+            if word.get('speaker') == current_speaker:
+                current_text.append(word['text'])
+                segment_end = word['end']
+            else:
+                # Speaker changed - save current segment
+                if current_text:
+                    segments.append(TranscriptionSegment(
+                        text=" ".join(current_text),
+                        start=segment_start,
+                        end=segment_end,
+                        speaker=current_speaker
+                    ))
+                # Start new segment
+                current_speaker = word.get('speaker')
+                current_text = [word['text']]
+                segment_start = word['start']
+                segment_end = word['end']
+
+        # Don't forget the last segment
+        if current_text:
+            segments.append(TranscriptionSegment(
+                text=" ".join(current_text),
+                start=segment_start,
+                end=segment_end,
+                speaker=current_speaker
+            ))
+
+        return segments
+
+    async def extract_speaker_embedding(self, audio_path: str, start: float, end: float) -> bytes:
+        """
+        Extract 256-dim voice embedding for a speaker segment.
+
+        Args:
+            audio_path: Path to audio file
+            start: Start time in seconds
+            end: End time in seconds
+
+        Returns:
+            Embedding as bytes (256 float32 values, ~1KB)
+        """
+        import numpy as np
+        import subprocess
+        import tempfile
+        import torch
+        import torchaudio
+        from pyannote.audio import Model, Inference
+
+        hf_token = os.environ.get("HF_TOKEN")
+        if not hf_token:
+            raise ValueError("HF_TOKEN environment variable required for embedding extraction")
+
+        logger.info(f"Extracting embedding for segment {start:.2f}-{end:.2f}s")
+
+        # Convert to WAV if needed
+        if audio_path.endswith('.webm'):
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
+                wav_path = tmp.name
+            subprocess.run(['ffmpeg', '-y', '-i', audio_path, '-ar', '16000', '-ac', '1', wav_path],
+                          capture_output=True, check=True)
+        else:
+            wav_path = audio_path
+
+        def run_embedding():
+            # Load audio manually using torchaudio to avoid pyannote's AudioDecoder issues
+            waveform, sample_rate = torchaudio.load(wav_path)
+
+            # Resample to 16kHz if needed
+            if sample_rate != 16000:
+                resampler = torchaudio.transforms.Resample(sample_rate, 16000)
+                waveform = resampler(waveform)
+                sample_rate = 16000
+
+            # Convert to mono if stereo
+            if waveform.shape[0] > 1:
+                waveform = waveform.mean(dim=0, keepdim=True)
+
+            # Extract the segment
+            start_sample = int(start * sample_rate)
+            end_sample = int(end * sample_rate)
+            segment_waveform = waveform[:, start_sample:end_sample]
+
+            # Create audio dict for pyannote
+            audio_dict = {"waveform": segment_waveform, "sample_rate": sample_rate}
+
+            # Load wespeaker model (same as used by diarization, already cached)
+            model = Model.from_pretrained("pyannote/wespeaker-voxceleb-resnet34-LM", token=hf_token)
+            inference = Inference(model, window="whole")
+
+            # Get embedding
+            embedding = inference(audio_dict)
+            return embedding
+
+        loop = asyncio.get_event_loop()
+        embedding = await loop.run_in_executor(executor, run_embedding)
+
+        # Cleanup temp file
+        if audio_path.endswith('.webm'):
+            import os as os_module
+            os_module.unlink(wav_path)
+
+        # Convert numpy array to bytes for storage
+        embedding_bytes = np.array(embedding).astype(np.float32).tobytes()
+        logger.info(f"Extracted embedding: {len(embedding_bytes)} bytes")
+        return embedding_bytes
+
+    def compare_embeddings(self, emb1: bytes, emb2: bytes, threshold: float = 0.6) -> tuple:
+        """
+        Compare two embeddings using cosine distance.
+
+        Args:
+            emb1: First embedding as bytes
+            emb2: Second embedding as bytes
+            threshold: Distance threshold (lower = more strict)
+
+        Returns:
+            (is_match: bool, confidence: float) - confidence is 0-1 where 1 = identical
+        """
+        import numpy as np
+        from scipy.spatial.distance import cosine
+
+        # Convert bytes to numpy arrays
+        arr1 = np.frombuffer(emb1, dtype=np.float32)
+        arr2 = np.frombuffer(emb2, dtype=np.float32)
+
+        # Calculate cosine distance (0 = identical, 2 = opposite)
+        distance = cosine(arr1, arr2)
+
+        # Convert distance to confidence (0-1 where 1 = identical)
+        confidence = float(1 - (distance / 2))
+
+        is_match = bool(distance < threshold)
+        return is_match, confidence
+
+    async def extract_all_speaker_embeddings(
+        self, audio_path: str, speaker_turns: list
+    ) -> dict:
+        """
+        Extract embeddings for all speakers from diarization output.
+        Uses the longest segment for each speaker for best embedding quality.
+
+        Args:
+            audio_path: Path to audio file
+            speaker_turns: List of (start, end, speaker_id) tuples
+
+        Returns:
+            Dict mapping speaker_id to embedding bytes
+        """
+        import numpy as np
+
+        # Find longest segment for each speaker
+        speaker_best_segments = {}
+        for start, end, speaker_id in speaker_turns:
+            duration = end - start
+            if speaker_id not in speaker_best_segments or duration > speaker_best_segments[speaker_id][1]:
+                speaker_best_segments[speaker_id] = (start, end - start, end)
+
+        # Extract embedding for each speaker's longest segment
+        embeddings = {}
+        for speaker_id, (start, duration, end) in speaker_best_segments.items():
+            try:
+                embedding = await self.extract_speaker_embedding(audio_path, start, end)
+                embeddings[speaker_id] = embedding
+                logger.info(f"Extracted embedding for {speaker_id} from {start:.2f}-{end:.2f}s")
+            except Exception as e:
+                logger.error(f"Failed to extract embedding for {speaker_id}: {e}")
+
+        return embeddings
+
     def format_as_markdown(
         self,
         segments: List[TranscriptionSegment],
@@ -252,24 +619,35 @@ class MLXWhisperService:
             return ""
 
         speaker_map = speaker_map or {}
-        markdown_lines = []
+        markdown_parts = []
 
         current_speaker = None
+        current_texts = []
+
         for segment in segments:
             speaker_id = segment.speaker
             speaker_name = speaker_map.get(speaker_id, speaker_id)
 
-            # Add speaker label if changed
             if speaker_id != current_speaker:
-                if current_speaker is not None:
-                    markdown_lines.append("")  # Blank line between speakers
-                markdown_lines.append(f"**{speaker_name}**: {segment.text}")
-                current_speaker = speaker_id
-            else:
-                # Continue same speaker
-                markdown_lines.append(segment.text)
+                # Flush previous speaker's text
+                if current_texts:
+                    markdown_parts.append(" ".join(current_texts))
+                    current_texts = []
 
-        return " ".join(markdown_lines)
+                # Start new speaker section
+                if speaker_id is not None:
+                    # Add line break before speaker label (except first)
+                    prefix = "\n\n" if markdown_parts else ""
+                    markdown_parts.append(f"{prefix}**{speaker_name}**:")
+                current_speaker = speaker_id
+
+            current_texts.append(segment.text.strip())
+
+        # Flush remaining text
+        if current_texts:
+            markdown_parts.append(" ".join(current_texts))
+
+        return " ".join(markdown_parts)
 
     async def save_audio_chunk(self, audio_data: bytes, filename: str) -> str:
         """

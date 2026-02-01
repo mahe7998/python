@@ -129,12 +129,21 @@ class DataProviderBase(ABC):
         pass
 
     @abstractmethod
-    def search_tickers(self, query: str) -> List[CompanyInfo]:
+    def search_tickers(
+        self,
+        query: str,
+        limit: int = 50,
+        asset_type: Optional[str] = None,
+        exchange: Optional[str] = None,
+    ) -> List[CompanyInfo]:
         """
         Search for tickers by name or symbol.
 
         Args:
-            query: Search query
+            query: Search query (ticker, company name, or ISIN)
+            limit: Maximum number of results
+            asset_type: Filter by type: stock, etf, fund, bond, index, crypto
+            exchange: Filter by exchange code
 
         Returns:
             List of matching CompanyInfo objects
