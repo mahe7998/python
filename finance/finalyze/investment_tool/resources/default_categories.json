@@ -1,0 +1,154 @@
+{
+  "categories": [
+    {
+      "id": 1,
+      "name": "AI & Machine Learning",
+      "color": "#8B5CF6",
+      "stocks": [
+        {"ticker": "NVDA", "exchange": "US"},
+        {"ticker": "AMD", "exchange": "US"},
+        {"ticker": "GOOGL", "exchange": "US"},
+        {"ticker": "MSFT", "exchange": "US"},
+        {"ticker": "META", "exchange": "US"},
+        {"ticker": "AMZN", "exchange": "US"},
+        {"ticker": "PLTR", "exchange": "US"},
+        {"ticker": "AI", "exchange": "US"},
+        {"ticker": "PATH", "exchange": "US"},
+        {"ticker": "SNOW", "exchange": "US"}
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Semiconductors",
+      "color": "#06B6D4",
+      "stocks": [
+        {"ticker": "NVDA", "exchange": "US"},
+        {"ticker": "AMD", "exchange": "US"},
+        {"ticker": "INTC", "exchange": "US"},
+        {"ticker": "AVGO", "exchange": "US"},
+        {"ticker": "QCOM", "exchange": "US"},
+        {"ticker": "TSM", "exchange": "US"},
+        {"ticker": "ASML", "exchange": "US"},
+        {"ticker": "LRCX", "exchange": "US"},
+        {"ticker": "AMAT", "exchange": "US"},
+        {"ticker": "MU", "exchange": "US"}
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Defense & Aerospace",
+      "color": "#EF4444",
+      "stocks": [
+        {"ticker": "LMT", "exchange": "US"},
+        {"ticker": "RTX", "exchange": "US"},
+        {"ticker": "NOC", "exchange": "US"},
+        {"ticker": "GD", "exchange": "US"},
+        {"ticker": "BA", "exchange": "US"},
+        {"ticker": "LHX", "exchange": "US"},
+        {"ticker": "HII", "exchange": "US"},
+        {"ticker": "TDG", "exchange": "US"}
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Finance & Banks",
+      "color": "#10B981",
+      "stocks": [
+        {"ticker": "JPM", "exchange": "US"},
+        {"ticker": "BAC", "exchange": "US"},
+        {"ticker": "WFC", "exchange": "US"},
+        {"ticker": "GS", "exchange": "US"},
+        {"ticker": "MS", "exchange": "US"},
+        {"ticker": "C", "exchange": "US"},
+        {"ticker": "BLK", "exchange": "US"},
+        {"ticker": "SCHW", "exchange": "US"}
+      ]
+    },
+    {
+      "id": 5,
+      "name": "Electric Vehicles",
+      "color": "#F59E0B",
+      "stocks": [
+        {"ticker": "TSLA", "exchange": "US"},
+        {"ticker": "RIVN", "exchange": "US"},
+        {"ticker": "LCID", "exchange": "US"},
+        {"ticker": "NIO", "exchange": "US"},
+        {"ticker": "XPEV", "exchange": "US"},
+        {"ticker": "LI", "exchange": "US"},
+        {"ticker": "F", "exchange": "US"},
+        {"ticker": "GM", "exchange": "US"}
+      ]
+    },
+    {
+      "id": 6,
+      "name": "Healthcare & Biotech",
+      "color": "#EC4899",
+      "stocks": [
+        {"ticker": "JNJ", "exchange": "US"},
+        {"ticker": "UNH", "exchange": "US"},
+        {"ticker": "PFE", "exchange": "US"},
+        {"ticker": "ABBV", "exchange": "US"},
+        {"ticker": "MRK", "exchange": "US"},
+        {"ticker": "LLY", "exchange": "US"},
+        {"ticker": "TMO", "exchange": "US"},
+        {"ticker": "ABT", "exchange": "US"}
+      ]
+    },
+    {
+      "id": 7,
+      "name": "Energy & Oil",
+      "color": "#6366F1",
+      "stocks": [
+        {"ticker": "XOM", "exchange": "US"},
+        {"ticker": "CVX", "exchange": "US"},
+        {"ticker": "COP", "exchange": "US"},
+        {"ticker": "SLB", "exchange": "US"},
+        {"ticker": "EOG", "exchange": "US"},
+        {"ticker": "PXD", "exchange": "US"},
+        {"ticker": "OXY", "exchange": "US"}
+      ]
+    },
+    {
+      "id": 8,
+      "name": "China Tech",
+      "color": "#DC2626",
+      "stocks": [
+        {"ticker": "BABA", "exchange": "US"},
+        {"ticker": "9988", "exchange": "HK"},
+        {"ticker": "JD", "exchange": "US"},
+        {"ticker": "PDD", "exchange": "US"},
+        {"ticker": "BIDU", "exchange": "US"},
+        {"ticker": "NTES", "exchange": "US"},
+        {"ticker": "TME", "exchange": "US"}
+      ]
+    },
+    {
+      "id": 9,
+      "name": "European Leaders",
+      "color": "#0EA5E9",
+      "stocks": [
+        {"ticker": "ASML", "exchange": "AS"},
+        {"ticker": "SAP", "exchange": "XETRA"},
+        {"ticker": "NVO", "exchange": "US"},
+        {"ticker": "MC", "exchange": "PA"},
+        {"ticker": "OR", "exchange": "PA"},
+        {"ticker": "SIE", "exchange": "XETRA"}
+      ]
+    },
+    {
+      "id": 10,
+      "name": "Consumer & Retail",
+      "color": "#84CC16",
+      "stocks": [
+        {"ticker": "AMZN", "exchange": "US"},
+        {"ticker": "WMT", "exchange": "US"},
+        {"ticker": "COST", "exchange": "US"},
+        {"ticker": "HD", "exchange": "US"},
+        {"ticker": "TGT", "exchange": "US"},
+        {"ticker": "NKE", "exchange": "US"},
+        {"ticker": "SBUX", "exchange": "US"},
+        {"ticker": "MCD", "exchange": "US"}
+      ]
+    }
+  ]
+}
