@@ -1,0 +1,93 @@
+services:
+  # Traefik reverse proxy
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - traefik-certs:/letsencrypt
+    networks:
+      - web
+      - internal
+
+  # Tailscale sidecar for VPN access
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tailscale
+    hostname: data-server
+    restart: unless-stopped
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SERVE_CONFIG=/config/serve.json
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./tailscale:/config
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    networks:
+      - internal
+
+  # PostgreSQL database
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dataserver}
+      POSTGRES_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-data_cache}
+    volumes:
+      - ${FINALYZE_DATABASE_PATH:-./data/postgres}:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dataserver}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Data Server (FastAPI)
+  data-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: data-server
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-dataserver}:${MYSQL_ROOT_PASSWORD}@postgres:5432/${POSTGRES_DB:-data_cache}
+      EODHD_API_KEY: ${EODHD_API_KEY}
+      GOOGLE_YOUTUBE_API_KEY: ${GOOGLE_YOUTUBE_API_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+      - web
+    labels:
+      # Traefik configuration
+      - "traefik.enable=true"
+      - "traefik.http.routers.dataserver.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.dataserver.entrypoints=websecure"
+      - "traefik.http.routers.dataserver.tls.certresolver=letsencrypt"
+      - "traefik.http.services.dataserver.loadbalancer.server.port=8000"
+      # WebSocket support
+      - "traefik.http.routers.dataserver-ws.rule=Host(`${DOMAIN}`) && PathPrefix(`/ws`)"
+      - "traefik.http.routers.dataserver-ws.entrypoints=websecure"
+      - "traefik.http.routers.dataserver-ws.tls.certresolver=letsencrypt"
+
+networks:
+  web:
+    external: true
+  internal:
+    driver: bridge
+
+volumes:
+  traefik-certs:
+  tailscale-state:

@@ -1,0 +1,170 @@
+"""EODHD API client for making actual API calls."""
+
+import logging
+from datetime import datetime
+from typing import Any, Optional
+
+import httpx
+
+from data_server.config import get_settings
+
+logger = logging.getLogger(__name__)
+settings = get_settings()
+
+
+class EODHDClient:
+    """Client for EODHD API."""
+
+    def __init__(self):
+        self.base_url = settings.eodhd_base_url
+        self.api_key = settings.eodhd_api_key
+        self.client = httpx.AsyncClient(timeout=30.0)
+
+    async def close(self):
+        """Close the HTTP client."""
+        await self.client.aclose()
+
+    def _build_url(self, endpoint: str) -> str:
+        """Build full URL for an endpoint."""
+        return f"{self.base_url}/{endpoint}"
+
+    async def _request(
+        self,
+        endpoint: str,
+        params: Optional[dict] = None,
+    ) -> Any:
+        """Make a request to EODHD API."""
+        url = self._build_url(endpoint)
+        params = params or {}
+        params["api_token"] = self.api_key
+        params["fmt"] = "json"
+
+        logger.debug(f"EODHD request: {endpoint} with params {params}")
+
+        try:
+            response = await self.client.get(url, params=params)
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"EODHD HTTP error: {e.response.status_code} - {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"EODHD request error: {e}")
+            raise
+
+    # Daily Prices
+    async def get_eod(
+        self,
+        symbol: str,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+        period: str = "d",
+    ) -> list[dict]:
+        """Get end-of-day prices."""
+        params = {"period": period}
+        if from_date:
+            params["from"] = from_date
+        if to_date:
+            params["to"] = to_date
+
+        data = await self._request(f"eod/{symbol}", params)
+        return data if isinstance(data, list) else []
+
+    # Intraday Prices
+    async def get_intraday(
+        self,
+        symbol: str,
+        interval: str = "1m",
+        from_timestamp: Optional[int] = None,
+        to_timestamp: Optional[int] = None,
+    ) -> list[dict]:
+        """Get intraday prices."""
+        params = {"interval": interval}
+        if from_timestamp:
+            params["from"] = from_timestamp
+        if to_timestamp:
+            params["to"] = to_timestamp
+
+        data = await self._request(f"intraday/{symbol}", params)
+        return data if isinstance(data, list) else []
+
+    # Real-time Quote
+    async def get_real_time(self, symbol: str) -> dict:
+        """Get real-time quote."""
+        # EODHD uses a different endpoint for real-time
+        params = {"s": symbol}
+        data = await self._request("real-time/" + symbol, {})
+        return data if isinstance(data, dict) else {}
+
+    # Fundamentals
+    async def get_fundamentals(self, symbol: str) -> dict:
+        """Get company fundamentals."""
+        data = await self._request(f"fundamentals/{symbol}")
+        return data if isinstance(data, dict) else {}
+
+    # News
+    async def get_news(
+        self,
+        symbol: Optional[str] = None,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict]:
+        """Get news articles."""
+        params = {"limit": limit, "offset": offset}
+        if symbol:
+            params["s"] = symbol
+        if from_date:
+            params["from"] = from_date
+        if to_date:
+            params["to"] = to_date
+
+        data = await self._request("news", params)
+        return data if isinstance(data, list) else []
+
+    # Search
+    async def search(
+        self,
+        query: str,
+        limit: int = 15,
+        exchange: Optional[str] = None,
+    ) -> list[dict]:
+        """Search for tickers."""
+        params = {"query_string": query, "limit": limit}
+        if exchange:
+            params["exchange"] = exchange
+
+        data = await self._request("search/" + query, {})
+        return data if isinstance(data, list) else []
+
+    # Exchanges
+    async def get_exchanges_list(self) -> list[dict]:
+        """Get list of exchanges."""
+        data = await self._request("exchanges-list")
+        return data if isinstance(data, list) else []
+
+    async def get_exchange_symbol_list(self, exchange: str) -> list[dict]:
+        """Get symbols for an exchange."""
+        data = await self._request(f"exchange-symbol-list/{exchange}")
+        return data if isinstance(data, list) else []
+
+
+# Global client instance
+_client: Optional[EODHDClient] = None
+
+
+async def get_eodhd_client() -> EODHDClient:
+    """Get or create EODHD client instance."""
+    global _client
+    if _client is None:
+        _client = EODHDClient()
+    return _client
+
+
+async def close_eodhd_client():
+    """Close the EODHD client."""
+    global _client
+    if _client is not None:
+        await _client.close()
+        _client = None

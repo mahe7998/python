@@ -1,0 +1,16 @@
+{
+  "TCP": {
+    "443": {
+      "HTTPS": true
+    }
+  },
+  "Web": {
+    "data-server.tailnet-name.ts.net:443": {
+      "Handlers": {
+        "/": {
+          "Proxy": "http://data-server:8000"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,34 @@
+services:
+  # PostgreSQL database
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dataserver
+      POSTGRES_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      POSTGRES_DB: data_cache
+    ports:
+      - "5433:5432"
+    volumes:
+      - ${FINALYZE_DATABASE_PATH:-./data/postgres}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dataserver"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Data Server (FastAPI)
+  data-server:
+    image: data-server
+    container_name: data-server-dev
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://dataserver:${MYSQL_ROOT_PASSWORD}@postgres:5432/data_cache
+      EODHD_API_KEY: ${EODHD_API_KEY}
+      GOOGLE_YOUTUBE_API_KEY: ${GOOGLE_YOUTUBE_API_KEY}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
