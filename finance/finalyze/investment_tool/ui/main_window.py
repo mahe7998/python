@@ -62,6 +62,7 @@ class MainWindow(QMainWindow):
         self._selected_ticker: Optional[str] = None
         self._selected_exchange: Optional[str] = None
         self._chart_loading: bool = False  # Prevent concurrent chart loads
+        self._selecting: bool = False  # Prevent circular selection
 
         self._setup_window()
         self._create_menu_bar()
@@ -702,60 +703,78 @@ class MainWindow(QMainWindow):
 
     def _on_stock_selected(self, ticker: str, exchange: str) -> None:
         """Handle stock selection."""
-        import time
-        total_start = time.perf_counter()
+        # Prevent circular selection
+        if self._selecting:
+            return
 
-        self._selected_ticker = ticker
-        self._selected_exchange = exchange
+        # Skip if already selected
+        if self._selected_ticker == ticker and self._selected_exchange == exchange:
+            return
 
-        logger.info(f"Stock selected: {ticker}.{exchange}")
+        self._selecting = True
+        try:
+            import time
+            total_start = time.perf_counter()
 
-        # Fetch all data in parallel using threads
-        articles = None
-        if self.data_manager:
-            end_date = date.today()
-            start_date = end_date - timedelta(days=30)
+            self._selected_ticker = ticker
+            self._selected_exchange = exchange
 
-            # Define fetch functions
-            def fetch_news():
-                t0 = time.perf_counter()
-                # Fetch only 100 initially for fast loading - more loaded on demand
-                result = self.data_manager.get_news(
-                    ticker, limit=100, from_date=start_date, to_date=end_date
-                )
-                logger.info(f"[TIMING] News fetch: {(time.perf_counter() - t0)*1000:.0f}ms ({len(result) if result else 0} articles)")
-                return result
+            logger.info(f"Stock selected: {ticker}.{exchange}")
 
-            # Run news fetch in parallel with chart/metrics (which share some data)
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                news_future = executor.submit(fetch_news)
+            # Select the stock in the treemap (if visible in current view)
+            self.treemap.select_stock(ticker, exchange)
 
-                # Load chart and metrics on main thread (they update UI)
-                t1 = time.perf_counter()
-                self._load_stock_chart(ticker, exchange)
-                logger.info(f"[TIMING] Chart load: {(time.perf_counter() - t1)*1000:.0f}ms")
+            # Select the stock in the watchlist (if present)
+            self.watchlist_widget.select_stock(ticker, exchange)
 
-                t2 = time.perf_counter()
-                self._update_metrics(ticker, exchange)
-                logger.info(f"[TIMING] Metrics update: {(time.perf_counter() - t2)*1000:.0f}ms")
+            # Fetch all data in parallel using threads
+            articles = None
+            if self.data_manager:
+                end_date = date.today()
+                start_date = end_date - timedelta(days=30)
 
-                # Get news result
-                t3 = time.perf_counter()
-                articles = news_future.result()
-                logger.info(f"[TIMING] News future.result(): {(time.perf_counter() - t3)*1000:.0f}ms")
+                # Define fetch functions
+                def fetch_news():
+                    t0 = time.perf_counter()
+                    # Fetch only 100 initially for fast loading - more loaded on demand
+                    result = self.data_manager.get_news(
+                        ticker, limit=100, from_date=start_date, to_date=end_date
+                    )
+                    logger.info(f"[TIMING] News fetch: {(time.perf_counter() - t0)*1000:.0f}ms ({len(result) if result else 0} articles)")
+                    return result
 
-        # Update sentiment gauge with pre-fetched articles
-        t4 = time.perf_counter()
-        self.sentiment_gauge.set_ticker(ticker, exchange, articles=articles)
-        logger.info(f"[TIMING] Sentiment gauge: {(time.perf_counter() - t4)*1000:.0f}ms")
+                # Run news fetch in parallel with chart/metrics (which share some data)
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    news_future = executor.submit(fetch_news)
 
-        # Update news feed with pre-fetched articles
-        t5 = time.perf_counter()
-        self.news_feed.set_filter_ticker(ticker)
-        self.news_feed.refresh(articles=articles)
-        logger.info(f"[TIMING] News feed refresh: {(time.perf_counter() - t5)*1000:.0f}ms")
+                    # Load chart and metrics on main thread (they update UI)
+                    t1 = time.perf_counter()
+                    self._load_stock_chart(ticker, exchange)
+                    logger.info(f"[TIMING] Chart load: {(time.perf_counter() - t1)*1000:.0f}ms")
 
-        logger.info(f"[TIMING] TOTAL _on_stock_selected: {(time.perf_counter() - total_start)*1000:.0f}ms")
+                    t2 = time.perf_counter()
+                    self._update_metrics(ticker, exchange)
+                    logger.info(f"[TIMING] Metrics update: {(time.perf_counter() - t2)*1000:.0f}ms")
+
+                    # Get news result
+                    t3 = time.perf_counter()
+                    articles = news_future.result()
+                    logger.info(f"[TIMING] News future.result(): {(time.perf_counter() - t3)*1000:.0f}ms")
+
+            # Update sentiment gauge with pre-fetched articles
+            t4 = time.perf_counter()
+            self.sentiment_gauge.set_ticker(ticker, exchange, articles=articles)
+            logger.info(f"[TIMING] Sentiment gauge: {(time.perf_counter() - t4)*1000:.0f}ms")
+
+            # Update news feed with pre-fetched articles
+            t5 = time.perf_counter()
+            self.news_feed.set_filter_ticker(ticker)
+            self.news_feed.refresh(articles=articles)
+            logger.info(f"[TIMING] News feed refresh: {(time.perf_counter() - t5)*1000:.0f}ms")
+
+            logger.info(f"[TIMING] TOTAL _on_stock_selected: {(time.perf_counter() - total_start)*1000:.0f}ms")
+        finally:
+            self._selecting = False
 
     def _on_stock_double_clicked(self, ticker: str, exchange: str) -> None:
         """Handle stock double-click (open in new window)."""

@@ -185,7 +185,7 @@ async def get_intraday_prices(
     if to_timestamp:
         query = query.where(IntradayPrice.timestamp <= to_timestamp)
 
-    query = query.order_by(IntradayPrice.timestamp.desc())
+    query = query.order_by(IntradayPrice.timestamp.asc())
     result = await session.execute(query)
     prices = result.scalars().all()
 

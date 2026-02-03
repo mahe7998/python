@@ -218,6 +218,21 @@ class MarketTreemap(QWidget):
         """Set the current category ID for removal operations."""
         self._current_category_id = category_id
 
+    def select_stock(self, ticker: str, exchange: str) -> bool:
+        """Select a stock in the treemap by ticker.
+
+        Returns True if the stock was found and selected, False otherwise.
+        """
+        for i, item in enumerate(self._items):
+            if item.ticker == ticker and item.exchange == exchange:
+                self._selected_ticker = ticker
+                self.canvas.set_selected(i)
+                return True
+        # Stock not found in current view - clear selection
+        self._selected_ticker = None
+        self.canvas.set_selected(-1)
+        return False
+
     def _compute_layout(self) -> None:
         """Compute treemap layout using squarify algorithm."""
         if not self._items:

@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -18,6 +18,32 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 router = APIRouter()
+
+
+def is_us_market_open() -> bool:
+    """Check if US stock market is currently open.
+
+    NYSE/NASDAQ hours: Monday-Friday, 9:30 AM - 4:00 PM Eastern Time.
+    Returns False on weekends and outside market hours.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo
+
+    # Get current time in Eastern Time
+    eastern = ZoneInfo("America/New_York")
+    now_et = datetime.now(eastern)
+
+    # Check if it's a weekend (Saturday=5, Sunday=6)
+    if now_et.weekday() >= 5:
+        return False
+
+    # Check if within market hours (9:30 AM - 4:00 PM ET)
+    market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+
+    return market_open <= now_et <= market_close
 
 # Per-key locks to prevent concurrent fetches for the same data
 _fetch_locks: Dict[str, asyncio.Lock] = {}
@@ -51,42 +77,69 @@ async def get_eod_prices(
     fmt: str = Query("json", description="Format (always json)"),
     session: AsyncSession = Depends(get_session),
 ):
-    """Get end-of-day prices for a symbol (cached)."""
+    """Get end-of-day prices for a symbol (cached).
+
+    Caching strategy:
+    1. First check if we have price records in the database for the requested date range
+    2. If we have data covering the range, return it (no EODHD call needed)
+    3. Only fetch from EODHD if data is missing
+    """
     start_time = time.time()
-    cache_key = f"eod:{symbol}:{from_}:{to}:{period}"
     endpoint = f"GET /eod/{symbol}?from={from_}&to={to}"
 
-    # Check cache validity
+    # Parse dates
+    from_date = datetime.fromisoformat(from_) if from_ else None
+    to_date = datetime.fromisoformat(to) if to else None
+
+    # First: check if we have actual price data in the database for this range
     cache_start = time.time()
-    is_valid = await cache.is_cache_valid(session, cache_key, settings.cache_daily_prices)
+    cached_data = await cache.get_daily_prices(session, symbol, from_date, to_date)
     cache_time = (time.time() - cache_start) * 1000
 
-    if is_valid:
-        from_date = datetime.fromisoformat(from_) if from_ else None
-        to_date = datetime.fromisoformat(to) if to else None
-        cached_data = await cache.get_daily_prices(session, symbol, from_date, to_date)
-        # Return cached data even if empty list (empty means no data exists for this symbol)
-        if cached_data is not None:
-            total_time = (time.time() - start_time) * 1000
-            log_timing(endpoint, True, cache_time, 0, total_time)
-            return cached_data
+    if cached_data and len(cached_data) > 0:
+        # We have data! Check if it covers the requested range adequately
+        # For daily prices, having at least 1 record in the range is usually sufficient
+        # The data is ordered by date DESC, so first item is newest, last is oldest
+        newest_date = cached_data[0].get("date")
+        oldest_date = cached_data[-1].get("date")
 
-    # Use lock to prevent concurrent fetches for the same data
+        # Check if we need to fetch more recent data (today's data might be missing)
+        today = datetime.now().date()
+        to_date_obj = to_date.date() if to_date else today
+
+        # If the newest cached date is recent enough (within 1 day of requested end),
+        # consider it a cache hit
+        if newest_date:
+            newest_date_obj = datetime.fromisoformat(newest_date).date() if isinstance(newest_date, str) else newest_date
+            days_behind = (to_date_obj - newest_date_obj).days
+
+            # Cache hit if we're at most 1 trading day behind (weekends don't count)
+            # Or if the to_date is in the past (historical data won't change)
+            if days_behind <= 1 or to_date_obj < today:
+                total_time = (time.time() - start_time) * 1000
+                log_timing(endpoint, True, cache_time, 0, total_time)
+                return cached_data
+
+    # Cache miss - need to fetch from EODHD
+    cache_key = f"eod:{symbol}:{from_}:{to}:{period}"
     fetch_lock = await get_fetch_lock(cache_key)
     async with fetch_lock:
         # Expire session cache to see changes from other transactions
         session.expire_all()
 
         # Double-check cache after acquiring lock (another request may have populated it)
-        is_valid = await cache.is_cache_valid(session, cache_key, settings.cache_daily_prices)
-        if is_valid:
-            from_date = datetime.fromisoformat(from_) if from_ else None
-            to_date = datetime.fromisoformat(to) if to else None
-            cached_data = await cache.get_daily_prices(session, symbol, from_date, to_date)
-            if cached_data is not None:  # Note: check for None, not truthiness (empty list is valid)
-                total_time = (time.time() - start_time) * 1000
-                logger.info(f"[CACHE HIT after lock] {endpoint}")
-                return cached_data
+        cached_data = await cache.get_daily_prices(session, symbol, from_date, to_date)
+        if cached_data and len(cached_data) > 0:
+            newest_date = cached_data[0].get("date")
+            if newest_date:
+                today = datetime.now().date()
+                to_date_obj = to_date.date() if to_date else today
+                newest_date_obj = datetime.fromisoformat(newest_date).date() if isinstance(newest_date, str) else newest_date
+                days_behind = (to_date_obj - newest_date_obj).days
+                if days_behind <= 1 or to_date_obj < today:
+                    total_time = (time.time() - start_time) * 1000
+                    logger.info(f"[CACHE HIT after lock] {endpoint}")
+                    return cached_data
 
         # Fetch from EODHD
         eodhd_start = time.time()
@@ -237,38 +290,56 @@ async def get_real_time_quote(
     fmt: str = Query("json"),
     session: AsyncSession = Depends(get_session),
 ):
-    """Get real-time quote for a symbol (from cached live_prices or EODHD)."""
+    """Get real-time quote for a symbol (from cached live_prices or EODHD).
+
+    When market is closed, returns cached data without calling EODHD.
+    """
     from sqlalchemy import select
     from data_server.db.models import LivePrice
 
     ticker = symbol.split(".")[0]
+    market_open = is_us_market_open()
 
-    # First, check if we have a recent live price in the database
+    # Check if we have a cached live price in the database
     result = await session.execute(
         select(LivePrice).where(LivePrice.ticker == ticker)
     )
     live_price = result.scalar_one_or_none()
 
-    # If we have a recent price (less than 30 seconds old), return it
+    # Helper to format live price response
+    def format_live_price(lp):
+        return {
+            "code": symbol,
+            "timestamp": int(lp.market_timestamp.timestamp()) if lp.market_timestamp else None,
+            "gmtoffset": 0,
+            "open": float(lp.open) if lp.open else None,
+            "high": float(lp.high) if lp.high else None,
+            "low": float(lp.low) if lp.low else None,
+            "close": float(lp.price) if lp.price else None,
+            "volume": lp.volume,
+            "previousClose": float(lp.previous_close) if lp.previous_close else None,
+            "change": float(lp.change) if lp.change else None,
+            "change_p": float(lp.change_percent) if lp.change_percent else None,
+        }
+
+    # If market is closed, return cached data (no EODHD call needed)
+    if not market_open:
+        if live_price:
+            logger.info(f"[MARKET CLOSED] Returning cached price for {ticker}")
+            return format_live_price(live_price)
+        else:
+            # No cached data and market closed - return empty response
+            logger.info(f"[MARKET CLOSED] No cached price for {ticker}")
+            return {"code": symbol, "close": None, "change": None, "change_p": None}
+
+    # Market is open - check if cached price is fresh enough (less than 30 seconds old)
     if live_price and live_price.updated_at:
         age = (datetime.utcnow() - live_price.updated_at).total_seconds()
         if age < 30:
             logger.debug(f"Returning cached live price for {ticker} (age: {age:.1f}s)")
-            return {
-                "code": symbol,
-                "timestamp": int(live_price.market_timestamp.timestamp()) if live_price.market_timestamp else None,
-                "gmtoffset": 0,
-                "open": float(live_price.open) if live_price.open else None,
-                "high": float(live_price.high) if live_price.high else None,
-                "low": float(live_price.low) if live_price.low else None,
-                "close": float(live_price.price) if live_price.price else None,
-                "volume": live_price.volume,
-                "previousClose": float(live_price.previous_close) if live_price.previous_close else None,
-                "change": float(live_price.change) if live_price.change else None,
-                "change_p": float(live_price.change_percent) if live_price.change_percent else None,
-            }
+            return format_live_price(live_price)
 
-    # Fetch from EODHD if no cached price or it's stale
+    # Market is open and cached price is stale - fetch from EODHD
     client = await get_eodhd_client()
     try:
         data = await client.get_real_time(symbol)

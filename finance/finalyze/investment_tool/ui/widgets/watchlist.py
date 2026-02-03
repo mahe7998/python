@@ -266,6 +266,11 @@ class WatchlistWidget(QWidget):
         proxy.setSourceModel(model)
         table.setModel(proxy)
 
+        # Connect selection model for keyboard navigation (must be after setModel)
+        table.selectionModel().currentChanged.connect(
+            lambda current, previous, t=table: self._on_selection_changed(t, current)
+        )
+
         # Store reference
         table.setProperty("watchlist_id", watchlist.id)
         table.setProperty("model", model)
@@ -440,9 +445,13 @@ class WatchlistWidget(QWidget):
                         logger.info(f"Got daily prices for {item.ticker}: {len(prices) if prices is not None else 'None'}")
 
                         if prices is not None and len(prices) >= 1:
-                            first = prices.iloc[0]
+                            # Sort by date ascending to ensure correct first/last
+                            prices_sorted = prices.sort_index(ascending=True)
+                            first = prices_sorted.iloc[0]  # Oldest (period start)
+                            latest = prices_sorted.iloc[-1]  # Newest (period end)
+
                             row["open"] = first.get("open") or first.get("Open")  # Period start open
-                            row["volume"] = prices["volume"].sum() if "volume" in prices.columns else (prices["Volume"].sum() if "Volume" in prices.columns else None)
+                            row["volume"] = prices_sorted["volume"].sum() if "volume" in prices_sorted.columns else (prices_sorted["Volume"].sum() if "Volume" in prices_sorted.columns else None)
 
                             # Get today's live price for current value
                             live = self.data_manager.get_live_price(item.ticker, "US")
@@ -450,7 +459,6 @@ class WatchlistWidget(QWidget):
                                 row["price"] = live.get("price")
                             else:
                                 # Fallback to latest close if live price unavailable
-                                latest = prices.iloc[-1]
                                 row["price"] = latest.get("close") or latest.get("Close")
 
                             # Change is from period's open to current price
@@ -535,6 +543,44 @@ class WatchlistWidget(QWidget):
         self._add_to_uncategorized(ticker, exchange)
         self._refresh_current()
         self.stock_added.emit(ticker, exchange)
+
+    def select_stock(self, ticker: str, exchange: str = "US") -> bool:
+        """Select a stock in the current watchlist by ticker.
+
+        Returns True if the stock was found and selected, False otherwise.
+        """
+        table = self._get_table_for_watchlist(self._current_watchlist_id)
+        if not table:
+            return False
+
+        model = table.property("model")
+        if not model:
+            return False
+
+        # Find the row with this ticker
+        for row in range(len(model._data)):
+            if model._data[row].get("ticker") == ticker:
+                # Get the proxy model to handle sorting
+                proxy = table.model()
+                if isinstance(proxy, QSortFilterProxyModel):
+                    # Map source row to proxy row
+                    source_index = model.index(row, 0)
+                    proxy_index = proxy.mapFromSource(source_index)
+                    if proxy_index.isValid():
+                        # Select the row without emitting signal (to avoid loop)
+                        table.selectionModel().blockSignals(True)
+                        table.selectRow(proxy_index.row())
+                        table.scrollTo(proxy_index)
+                        table.selectionModel().blockSignals(False)
+                        return True
+                else:
+                    table.selectionModel().blockSignals(True)
+                    table.selectRow(row)
+                    table.scrollTo(model.index(row, 0))
+                    table.selectionModel().blockSignals(False)
+                    return True
+
+        return False
 
     def _add_to_uncategorized(self, ticker: str, exchange: str) -> None:
         """Add stock to Uncategorized category if not already in any category."""
@@ -700,6 +746,15 @@ class WatchlistWidget(QWidget):
 
     def _on_row_clicked(self, table: QTableView, index: QModelIndex) -> None:
         """Handle row click."""
+        self._emit_selection(table, index)
+
+    def _on_selection_changed(self, table: QTableView, current: QModelIndex) -> None:
+        """Handle selection change (keyboard navigation)."""
+        if current.isValid():
+            self._emit_selection(table, current)
+
+    def _emit_selection(self, table: QTableView, index: QModelIndex) -> None:
+        """Emit stock_selected signal for the given index."""
         model = table.property("model")
         if not model:
             return

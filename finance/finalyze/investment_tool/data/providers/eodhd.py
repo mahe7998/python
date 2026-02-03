@@ -347,7 +347,7 @@ class EODHDProvider(DataProviderBase):
                 id=article_id,
                 ticker=ticker,
                 title=item.get("title", ""),
-                summary=item.get("content", "")[:500] if item.get("content") else "",
+                summary=item.get("content", "") if item.get("content") else "",
                 published_at=published_at,
                 source=item.get("source", "Unknown"),
                 url=item.get("link", ""),

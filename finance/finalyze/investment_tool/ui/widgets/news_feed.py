@@ -29,6 +29,10 @@ class SummaryPopup(QFrame):
 
     _instance: Optional["SummaryPopup"] = None
 
+    # Maximum dimensions for the popup
+    MAX_WIDTH = 500
+    MAX_HEIGHT = 400
+
     @classmethod
     def instance(cls) -> "SummaryPopup":
         """Get singleton instance."""
@@ -44,26 +48,58 @@ class SummaryPopup(QFrame):
                 background-color: #1F2937;
                 border: 1px solid #4B5563;
                 border-radius: 6px;
-                padding: 8px;
             }
         """)
+        self.setMaximumWidth(self.MAX_WIDTH)
+        self.setMaximumHeight(self.MAX_HEIGHT)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(6)
 
-        # Title
+        # Title (outside scroll area for visibility)
         self.title_label = QLabel()
         self.title_label.setWordWrap(True)
         self.title_label.setStyleSheet("color: #F9FAFB; font-weight: bold; font-size: 11px;")
+        self.title_label.setMaximumWidth(self.MAX_WIDTH - 20)
         layout.addWidget(self.title_label)
 
-        # Summary
+        # Scroll area for summary content
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: #1F2937;
+            }
+            QScrollArea > QWidget > QWidget {
+                background-color: #1F2937;
+            }
+            QScrollBar:vertical {
+                background-color: #374151;
+                width: 8px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #6B7280;
+                border-radius: 4px;
+                min-height: 20px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+
+        # Summary label inside scroll area
         self.summary_label = QLabel()
         self.summary_label.setWordWrap(True)
-        self.summary_label.setStyleSheet("color: #D1D5DB; font-size: 10px;")
-        self.summary_label.setMaximumWidth(400)
-        layout.addWidget(self.summary_label)
+        self.summary_label.setStyleSheet("color: #D1D5DB; font-size: 10px; background-color: #1F2937;")
+        self.summary_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.summary_label.setTextFormat(Qt.PlainText)
+        self.scroll_area.setWidget(self.summary_label)
+        layout.addWidget(self.scroll_area, stretch=1)
 
         # Source and time
         self.meta_label = QLabel()
@@ -74,6 +110,19 @@ class SummaryPopup(QFrame):
         self.hide_timer.setSingleShot(True)
         self.hide_timer.timeout.connect(self.hide)
 
+        # Track if mouse is over the popup
+        self.setMouseTracking(True)
+
+    def enterEvent(self, event) -> None:
+        """Cancel hide when mouse enters popup."""
+        self.hide_timer.stop()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        """Schedule hide when mouse leaves popup."""
+        self.schedule_hide(300)
+        super().leaveEvent(event)
+
     def show_for_article(self, article: NewsArticle, pos: QPoint) -> None:
         """Show popup with article info at position."""
         self.hide_timer.stop()
@@ -82,6 +131,21 @@ class SummaryPopup(QFrame):
         summary = article.summary if article.summary else "No summary available."
         self.summary_label.setText(summary)
         self.meta_label.setText(f"{article.source} - {article.published_at.strftime('%Y-%m-%d %H:%M')}")
+
+        # Calculate ideal size based on content
+        # Title and meta have fixed heights, summary is scrollable
+        title_height = self.title_label.sizeHint().height()
+        meta_height = self.meta_label.sizeHint().height()
+        margins = 16 + 12  # layout margins + spacing
+
+        # Calculate summary height needed (capped at max scroll height)
+        summary_ideal_height = self.summary_label.sizeHint().height()
+        max_scroll_height = self.MAX_HEIGHT - title_height - meta_height - margins - 20
+        scroll_height = min(summary_ideal_height + 10, max_scroll_height)
+
+        # Set scroll area to appropriate size
+        self.scroll_area.setMinimumHeight(min(scroll_height, 50))  # At least 50px
+        self.scroll_area.setMaximumHeight(max_scroll_height)
 
         self.adjustSize()
 
