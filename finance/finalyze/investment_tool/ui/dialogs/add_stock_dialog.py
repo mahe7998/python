@@ -553,7 +553,32 @@ class AddStockDialog(QDialog):
             except Exception:
                 pass  # Silently fail data fetch
 
+        # Sync to data server for live tracking and historical data prefetch
+        self._sync_stock_to_server(ticker, exchange)
+
         self.accept()
+
+    def _sync_stock_to_server(self, ticker: str, exchange: str) -> None:
+        """Sync the new stock to data server for tracking and historical data prefetch."""
+        import os
+        import requests
+        from loguru import logger
+
+        data_server_url = os.environ.get("DATA_SERVER_URL", "http://localhost:8000")
+
+        try:
+            # Add stock to tracking - this will prefetch 5Y historical data
+            response = requests.post(
+                f"{data_server_url}/tracking/stocks",
+                json={"ticker": ticker, "exchange": exchange},
+                timeout=10,
+            )
+            if response.status_code == 200:
+                logger.info(f"Synced {ticker}.{exchange} to data server for tracking")
+            else:
+                logger.warning(f"Failed to sync {ticker}.{exchange}: {response.status_code}")
+        except Exception as e:
+            logger.warning(f"Could not sync {ticker}.{exchange} to data server: {e}")
 
     def get_result(self) -> tuple:
         """Get the selected stock and options."""

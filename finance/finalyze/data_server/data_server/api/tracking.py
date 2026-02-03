@@ -1,21 +1,25 @@
 """Stock tracking management API."""
 
+import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from data_server.db.database import get_session
-from data_server.db.models import TrackedStock
+from data_server.db.database import get_session, async_session_factory
+from data_server.db.models import TrackedStock, DailyPrice
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Years of historical data to fetch for new stocks
+HISTORICAL_YEARS = 5
 
 
 class AddStockRequest(BaseModel):
@@ -72,14 +76,59 @@ async def list_tracked_stocks(
     ]
 
 
+async def prefetch_historical_data(symbol: str):
+    """Fetch 5 years of historical daily data for a new stock.
+
+    Runs in the background so the API doesn't block.
+    """
+    from data_server.services.eodhd_client import get_eodhd_client
+    from data_server.db import cache
+
+    try:
+        async with async_session_factory() as session:
+            # Check how much data we already have
+            result = await session.execute(
+                select(func.count(DailyPrice.date)).where(DailyPrice.ticker == symbol)
+            )
+            existing_count = result.scalar() or 0
+
+            # If we already have substantial data (> 1000 days), skip
+            if existing_count > 1000:
+                logger.info(f"{symbol}: Already has {existing_count} days of data, skipping prefetch")
+                return
+
+            # Fetch 5 years of data
+            from_date = (datetime.utcnow() - timedelta(days=HISTORICAL_YEARS * 365)).strftime("%Y-%m-%d")
+            to_date = datetime.utcnow().strftime("%Y-%m-%d")
+
+            logger.info(f"{symbol}: Prefetching {HISTORICAL_YEARS}Y historical data ({from_date} to {to_date})")
+
+            client = await get_eodhd_client()
+            data = await client.get_eod(symbol, from_date=from_date, to_date=to_date)
+
+            if data:
+                count = await cache.store_daily_prices(session, symbol, data)
+                await session.commit()
+                logger.info(f"{symbol}: Stored {count} days of historical data")
+            else:
+                logger.warning(f"{symbol}: No historical data returned from EODHD")
+
+    except Exception as e:
+        logger.error(f"{symbol}: Error prefetching historical data: {e}")
+
+
 @router.post("/stocks", response_model=TrackedStockResponse)
 async def add_tracked_stock(
     request: AddStockRequest,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ):
-    """Add a stock to tracking."""
+    """Add a stock to tracking and prefetch 5 years of historical data."""
+    # Strip exchange suffix if already included in ticker (e.g., "GOOGL.US" -> "GOOGL")
+    ticker = request.ticker.split(".")[0] if "." in request.ticker else request.ticker
+
     stmt = insert(TrackedStock).values(
-        ticker=request.ticker,
+        ticker=ticker,
         exchange=request.exchange,
         track_prices=request.track_prices,
         track_news=request.track_news,
@@ -98,11 +147,15 @@ async def add_tracked_stock(
 
     # Fetch the updated/inserted record
     result = await session.execute(
-        select(TrackedStock).where(TrackedStock.ticker == request.ticker)
+        select(TrackedStock).where(TrackedStock.ticker == ticker)
     )
     stock = result.scalar_one()
 
-    logger.info(f"Added/updated tracked stock: {request.ticker}")
+    logger.info(f"Added/updated tracked stock: {ticker}")
+
+    # Prefetch historical data in background
+    symbol = f"{ticker}.{request.exchange}"
+    background_tasks.add_task(prefetch_historical_data, symbol)
 
     return TrackedStockResponse(
         ticker=stock.ticker,
@@ -217,10 +270,12 @@ class BulkSyncRequest(BaseModel):
 @router.post("/stocks/sync")
 async def sync_tracked_stocks(
     request: BulkSyncRequest,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
 ):
-    """Bulk sync stocks to tracking - adds any missing stocks."""
+    """Bulk sync stocks to tracking - adds any missing stocks and prefetches historical data."""
     added_count = 0
+    new_symbols = []
 
     for stock in request.stocks:
         ticker = stock.get("ticker")
@@ -240,8 +295,13 @@ async def sync_tracked_stocks(
         result = await session.execute(stmt)
         if result.rowcount > 0:
             added_count += 1
+            new_symbols.append(f"{ticker}.{exchange}")
 
     await session.commit()
+
+    # Prefetch historical data for new stocks in background
+    for symbol in new_symbols:
+        background_tasks.add_task(prefetch_historical_data, symbol)
 
     # Get total count
     result = await session.execute(select(TrackedStock))
@@ -252,4 +312,5 @@ async def sync_tracked_stocks(
     return {
         "added": added_count,
         "total_tracked": total,
+        "prefetching": new_symbols,
     }

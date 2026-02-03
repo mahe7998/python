@@ -660,7 +660,9 @@ async def get_batch_daily_changes(
 
             if prices and len(prices) >= 1:
                 # Prices are ordered by date ASC, so first item is oldest (start), last is newest (end)
-                start_price = prices[0].get("close")
+                # Use adjusted_close for start price to account for stock splits
+                # Use close for end price (current price)
+                start_price = prices[0].get("adjusted_close") or prices[0].get("close")
                 end_price = prices[-1].get("close") if len(prices) > 1 else start_price
 
                 if start_price is not None and end_price is not None and start_price != 0:
