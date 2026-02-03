@@ -10,6 +10,13 @@ sentiment analysis, and reinforcement learning backtesting capabilities.
 import sys
 from pathlib import Path
 
+# Add parent directory to path so 'investment_tool' package imports work
+# The folder structure is: .../investment_tool/main.py
+# So parent is .../  and 'investment_tool' becomes an importable package
+_parent_dir = Path(__file__).parent.parent
+if str(_parent_dir) not in sys.path:
+    sys.path.insert(0, str(_parent_dir))
+
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 from loguru import logger
@@ -32,7 +39,7 @@ def main() -> int:
 
     logger.info("Starting Investment Tracking & Analysis Tool")
     logger.info(f"Config loaded from: ~/.investment_tool/settings.yaml")
-    logger.info(f"Database path: {config.data.database_path}")
+    logger.info(f"User data directory: {config.data.user_data_dir}")
 
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)

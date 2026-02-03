@@ -241,10 +241,26 @@ async def get_news_for_ticker(
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict]:
-    """Get cached news metadata for a ticker."""
+    """Get cached news for a ticker with content (EODHD-compatible format).
+
+    Optimized to only select needed columns (excludes full_content for speed).
+    """
+    # Select only needed columns to avoid loading large full_content field
     query = (
-        select(News, NewsTicker.relevance)
-        .join(NewsTicker)
+        select(
+            News.published_at,
+            News.source,
+            News.polarity,
+            News.positive,
+            News.negative,
+            News.neutral,
+            Content.title,
+            Content.summary,
+            Content.url,
+        )
+        .select_from(NewsTicker)
+        .join(News, NewsTicker.news_id == News.id)
+        .outerjoin(Content, News.content_id == Content.id)
         .where(NewsTicker.ticker == ticker)
         .order_by(News.published_at.desc())
         .limit(limit)
@@ -254,18 +270,21 @@ async def get_news_for_ticker(
     rows = result.all()
 
     news_list = []
-    for news, relevance in rows:
+    for row in rows:
+        # Return EODHD-compatible format for client compatibility
         news_list.append(
             {
-                "id": news.id,
-                "content_id": news.content_id,
-                "source": news.source,
-                "published_at": news.published_at.isoformat() if news.published_at else None,
-                "polarity": float(news.polarity) if news.polarity else None,
-                "positive": float(news.positive) if news.positive else None,
-                "negative": float(news.negative) if news.negative else None,
-                "neutral": float(news.neutral) if news.neutral else None,
-                "relevance": float(relevance) if relevance else 1.0,
+                "title": row.title or "",
+                "content": row.summary or "",
+                "link": row.url or "",
+                "date": row.published_at.isoformat() if row.published_at else None,
+                "source": row.source,
+                "sentiment": {
+                    "polarity": float(row.polarity) if row.polarity else 0,
+                    "pos": float(row.positive) if row.positive else 0,
+                    "neg": float(row.negative) if row.negative else 0,
+                    "neu": float(row.neutral) if row.neutral else 0,
+                },
             }
         )
 

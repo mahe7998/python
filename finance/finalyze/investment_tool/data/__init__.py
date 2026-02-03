@@ -9,8 +9,8 @@ from investment_tool.data.models import (
     Fundamentals,
     TimeFrame,
 )
-from investment_tool.data.cache import CacheManager
 from investment_tool.data.manager import DataManager, get_data_manager
+from investment_tool.data.storage import UserDataStore
 
 __all__ = [
     "PriceBar",
@@ -20,7 +20,7 @@ __all__ = [
     "SentimentData",
     "Fundamentals",
     "TimeFrame",
-    "CacheManager",
     "DataManager",
     "get_data_manager",
+    "UserDataStore",
 ]

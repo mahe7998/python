@@ -24,8 +24,6 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QAbstractTableModel
 
 from investment_tool.ui.dialogs.add_stock_dialog import AddStockDialog
-
-from investment_tool.data.cache import CacheManager
 from investment_tool.data.models import Watchlist, WatchlistItem
 from investment_tool.utils.helpers import format_percent, format_large_number, is_intraday_period, get_date_range, get_last_trading_day_hours
 
@@ -142,12 +140,10 @@ class WatchlistWidget(QWidget):
 
     def __init__(
         self,
-        cache: Optional[CacheManager] = None,
         data_manager=None,
         parent: Optional[QWidget] = None
     ):
         super().__init__(parent)
-        self.cache = cache
         self.data_manager = data_manager
         self._watchlists: Dict[int, Watchlist] = {}
         self._current_watchlist_id: Optional[int] = None
@@ -190,25 +186,21 @@ class WatchlistWidget(QWidget):
         self.tab_widget.customContextMenuRequested.connect(self._on_tab_context_menu)
         layout.addWidget(self.tab_widget)
 
-    def set_cache(self, cache: CacheManager) -> None:
-        """Set the cache manager."""
-        self.cache = cache
-        self._load_watchlists()
-
     def set_data_manager(self, data_manager) -> None:
-        """Set the data manager for search functionality."""
+        """Set the data manager."""
         self.data_manager = data_manager
+        self._load_watchlists()
 
     def set_period(self, period: str) -> None:
         """Set the current period for data fetching."""
         self._current_period = period
 
     def _load_watchlists(self) -> None:
-        """Load watchlists from database."""
-        if not self.cache:
+        """Load watchlists from data manager."""
+        if not self.data_manager:
             return
 
-        watchlists = self.cache.get_watchlists()
+        watchlists = self.data_manager.get_watchlists()
 
         # Clear existing tabs
         self.tab_widget.clear()
@@ -216,7 +208,7 @@ class WatchlistWidget(QWidget):
 
         if not watchlists:
             # Create default watchlist
-            default = self.cache.create_watchlist("My Watchlist")
+            default = self.data_manager.create_watchlist("My Watchlist")
             watchlists = [default]
 
         for wl in watchlists:
@@ -286,8 +278,8 @@ class WatchlistWidget(QWidget):
         from loguru import logger
         from datetime import timezone
 
-        if not self.cache:
-            logger.warning("No cache available for watchlist refresh")
+        if not self.data_manager:
+            logger.warning("No data manager available for watchlist refresh")
             return
 
         if table is None:
@@ -296,7 +288,7 @@ class WatchlistWidget(QWidget):
                 logger.warning(f"No table found for watchlist {watchlist_id}")
                 return
 
-        items = self.cache.get_watchlist_items(watchlist_id)
+        items = self.data_manager.get_watchlist_items(watchlist_id)
         logger.info(f"Watchlist {watchlist_id} has {len(items)} items, period={self._current_period}")
 
         # Build data - fetch real prices if data_manager available
@@ -444,30 +436,30 @@ class WatchlistWidget(QWidget):
             self, "New Watchlist", "Enter watchlist name:"
         )
 
-        if ok and name and self.cache:
-            watchlist = self.cache.create_watchlist(name.strip())
+        if ok and name and self.data_manager:
+            watchlist = self.data_manager.create_watchlist(name.strip())
             self._watchlists[watchlist.id] = watchlist
             self._create_watchlist_tab(watchlist)
             self.tab_widget.setCurrentIndex(self.tab_widget.count() - 1)
 
     def _on_add_stock(self) -> None:
         """Add a stock to the current watchlist."""
-        if not self._current_watchlist_id or not self.cache:
+        if not self._current_watchlist_id or not self.data_manager:
             return
 
         dialog = AddStockDialog(data_manager=self.data_manager, parent=self)
         if dialog.exec():
             ticker, exchange, _, _ = dialog.get_result()
             if ticker:
-                self.cache.add_to_watchlist(self._current_watchlist_id, ticker)
+                self.data_manager.add_to_watchlist(self._current_watchlist_id, ticker)
                 self._refresh_current()
 
     def add_stock(self, ticker: str, exchange: str = "US") -> None:
         """Add a stock to the current watchlist programmatically."""
-        if not self._current_watchlist_id or not self.cache:
+        if not self._current_watchlist_id or not self.data_manager:
             return
 
-        self.cache.add_to_watchlist(self._current_watchlist_id, ticker)
+        self.data_manager.add_to_watchlist(self._current_watchlist_id, ticker)
         self._refresh_current()
 
     def _on_close_tab(self, index: int) -> None:
@@ -491,8 +483,8 @@ class WatchlistWidget(QWidget):
         )
 
         if result == QMessageBox.Yes:
-            if watchlist_id and self.cache:
-                self.cache.delete_watchlist(watchlist_id)
+            if watchlist_id and self.data_manager:
+                self.data_manager.delete_watchlist(watchlist_id)
                 if watchlist_id in self._watchlists:
                     del self._watchlists[watchlist_id]
 
@@ -545,8 +537,8 @@ class WatchlistWidget(QWidget):
             text=current_name
         )
 
-        if ok and name and self.cache:
-            # Update in database (would need to add this method)
+        if ok and name and self.data_manager:
+            # Update in local state (would need to add this method to data manager)
             self._watchlists[watchlist_id].name = name.strip()
             self.tab_widget.setTabText(index, name.strip())
 
@@ -597,10 +589,10 @@ class WatchlistWidget(QWidget):
     def _remove_stock(self, table: QTableView, row: int, ticker: str) -> None:
         """Remove a stock from the watchlist."""
         watchlist_id = table.property("watchlist_id")
-        if not watchlist_id or not self.cache:
+        if not watchlist_id or not self.data_manager:
             return
 
-        self.cache.remove_from_watchlist(watchlist_id, ticker)
+        self.data_manager.remove_from_watchlist(watchlist_id, ticker)
 
         model = table.property("model")
         if model:

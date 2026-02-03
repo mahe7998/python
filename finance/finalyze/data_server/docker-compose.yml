@@ -60,6 +60,8 @@ services:
       dockerfile: Dockerfile
     container_name: data-server
     restart: unless-stopped
+    ports:
+      - "8000:8000"
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-dataserver}:${MYSQL_ROOT_PASSWORD}@postgres:5432/${POSTGRES_DB:-data_cache}
       EODHD_API_KEY: ${EODHD_API_KEY}

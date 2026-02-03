@@ -7,15 +7,14 @@ from typing import Optional, List, Dict, Any
 import pandas as pd
 
 from investment_tool.data.models import CompanyInfo, NewsArticle
-from investment_tool.data.cache import CacheManager
 
 
 class DataProviderBase(ABC):
     """Abstract base class for all data providers."""
 
-    def __init__(self, api_key: str, cache: CacheManager):
+    def __init__(self, api_key: str, cache: Optional[Any] = None):
         self.api_key = api_key
-        self.cache = cache
+        self.cache = cache  # Optional, data server handles caching
         self.name = self.__class__.__name__
 
     @abstractmethod

@@ -20,8 +20,8 @@ class APIKeysConfig(BaseModel):
 
 class DataConfig(BaseModel):
     """Data storage configuration."""
-    cache_dir: Path = Field(default=Path.home() / ".investment_tool" / "cache")
-    database_path: Path = Field(default=Path.home() / ".investment_tool" / "data.duckdb")
+    # Local user data directory (watchlists, settings - NOT market data cache)
+    user_data_dir: Path = Field(default=Path.home() / ".investment_tool" / "data")
     max_cache_age_days: int = Field(default=7)
     auto_refresh_interval_minutes: int = Field(default=15)
 
@@ -120,7 +120,8 @@ class AppConfig(BaseModel):
         """Save configuration to file."""
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_dict = self.model_dump()
-        for key in ["cache_dir", "database_path", "file"]:
+        # Convert Path objects to strings for YAML serialization
+        for key in ["user_data_dir", "file"]:
             for section in config_dict.values():
                 if isinstance(section, dict) and key in section:
                     section[key] = str(section[key])
@@ -130,8 +131,7 @@ class AppConfig(BaseModel):
 
     def ensure_directories(self) -> None:
         """Create necessary directories if they don't exist."""
-        self.data.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.data.database_path.parent.mkdir(parents=True, exist_ok=True)
+        self.data.user_data_dir.mkdir(parents=True, exist_ok=True)
         self.logging.file.parent.mkdir(parents=True, exist_ok=True)
 
 

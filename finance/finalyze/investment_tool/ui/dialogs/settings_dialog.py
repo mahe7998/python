@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QCheckBox,
     QGroupBox,
-    QFileDialog,
     QMessageBox,
 )
 
@@ -110,23 +109,18 @@ class SettingsDialog(QDialog):
         widget = QWidget()
         layout = QVBoxLayout(widget)
 
-        storage_group = QGroupBox("Storage")
+        storage_group = QGroupBox("Caching")
         storage_layout = QFormLayout(storage_group)
-
-        db_layout = QHBoxLayout()
-        self.database_path = QLineEdit()
-        self.database_path.setReadOnly(True)
-        db_layout.addWidget(self.database_path)
-
-        browse_btn = QPushButton("Browse...")
-        browse_btn.clicked.connect(self._browse_database)
-        db_layout.addWidget(browse_btn)
-        storage_layout.addRow("Database:", db_layout)
 
         self.cache_age = QSpinBox()
         self.cache_age.setRange(1, 30)
         self.cache_age.setSuffix(" days")
         storage_layout.addRow("Max Cache Age:", self.cache_age)
+
+        # Note about data server
+        note = QLabel("Market data is cached on the data server.\nLocal storage is only for user data (watchlists, settings).")
+        note.setStyleSheet("color: gray; font-size: 10px;")
+        storage_layout.addRow("", note)
 
         layout.addWidget(storage_group)
 
@@ -201,7 +195,6 @@ class SettingsDialog(QDialog):
         self.polygon_key.setText(self.config.api_keys.polygon or "")
         self.finnhub_key.setText(self.config.api_keys.finnhub or "")
 
-        self.database_path.setText(str(self.config.data.database_path))
         self.cache_age.setValue(self.config.data.max_cache_age_days)
         self.refresh_interval.setValue(self.config.data.auto_refresh_interval_minutes)
 
@@ -218,7 +211,6 @@ class SettingsDialog(QDialog):
         self.config.api_keys.polygon = self.polygon_key.text() or None
         self.config.api_keys.finnhub = self.finnhub_key.text() or None
 
-        self.config.data.database_path = Path(self.database_path.text())
         self.config.data.max_cache_age_days = self.cache_age.value()
         self.config.data.auto_refresh_interval_minutes = self.refresh_interval.value()
 
@@ -239,14 +231,3 @@ class SettingsDialog(QDialog):
                 "Error",
                 f"Failed to save settings: {e}"
             )
-
-    def _browse_database(self) -> None:
-        """Open file dialog to select database location."""
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Select Database Location",
-            str(self.config.data.database_path),
-            "DuckDB Files (*.duckdb);;All Files (*)",
-        )
-        if path:
-            self.database_path.setText(path)

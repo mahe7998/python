@@ -231,6 +231,10 @@ class CandlestickItem(pg.GraphicsObject):
             low = row["low"]
             close = row["close"]
 
+            # Skip NaN values (future times in intraday view)
+            if pd.isna(open_price) or pd.isna(close):
+                continue
+
             is_bullish = close >= open_price
             color = green if is_bullish else red
             brush = green_brush if is_bullish else red_brush
@@ -278,11 +282,17 @@ class CandlestickItem(pg.GraphicsObject):
         if self.data is None or self.data.empty:
             return pg.QtCore.QRectF(0, 0, 1, 1)
 
+        # Use nanmin/nanmax to handle NaN values in intraday data
+        low_min = self.data["low"].min(skipna=True)
+        high_max = self.data["high"].max(skipna=True)
+        if pd.isna(low_min) or pd.isna(high_max):
+            return pg.QtCore.QRectF(0, 0, 1, 1)
+
         return pg.QtCore.QRectF(
             -1,
-            self.data["low"].min(),
+            low_min,
             len(self.data) + 1,
-            self.data["high"].max() - self.data["low"].min()
+            high_max - low_min
         )
 
     def set_data(self, data: pd.DataFrame) -> None:
@@ -325,6 +335,10 @@ class OHLCItem(pg.GraphicsObject):
             low = row["low"]
             close = row["close"]
 
+            # Skip NaN values (future times in intraday view)
+            if pd.isna(open_price) or pd.isna(close):
+                continue
+
             is_bullish = close >= open_price
             color = green if is_bullish else red
             pen = pg.mkPen(color, width=2)
@@ -360,11 +374,17 @@ class OHLCItem(pg.GraphicsObject):
         if self.data is None or self.data.empty:
             return pg.QtCore.QRectF(0, 0, 1, 1)
 
+        # Use skipna to handle NaN values in intraday data
+        low_min = self.data["low"].min(skipna=True)
+        high_max = self.data["high"].max(skipna=True)
+        if pd.isna(low_min) or pd.isna(high_max):
+            return pg.QtCore.QRectF(0, 0, 1, 1)
+
         return pg.QtCore.QRectF(
             -1,
-            self.data["low"].min(),
+            low_min,
             len(self.data) + 1,
-            self.data["high"].max() - self.data["low"].min()
+            high_max - low_min
         )
 
     def set_data(self, data: pd.DataFrame) -> None:
@@ -389,15 +409,20 @@ class VolumeItem(pg.BarGraphItem):
             return np.array([]), np.array([]), []
 
         x = np.arange(len(data))
-        heights = data["volume"].values.astype(float)
+        # Replace NaN volumes with 0
+        heights = np.nan_to_num(data["volume"].values.astype(float), nan=0.0)
 
         # Color based on price direction
         brushes = []
         green = pg.mkBrush("#22C55E80")
         red = pg.mkBrush("#EF444480")
+        transparent = pg.mkBrush("#00000000")
 
         for _, row in data.iterrows():
-            if row["close"] >= row["open"]:
+            # Use transparent for NaN rows (future times)
+            if pd.isna(row["close"]) or pd.isna(row["open"]):
+                brushes.append(transparent)
+            elif row["close"] >= row["open"]:
                 brushes.append(green)
             else:
                 brushes.append(red)
@@ -630,35 +655,48 @@ class StockChart(QWidget):
         # Determine if this is intraday data (has DatetimeIndex with time component)
         is_intraday = isinstance(self._data.index, pd.DatetimeIndex) and len(self._data) > 100
 
+        # Check if data is already aggregated (e.g., 15-min bars from 1W period)
+        # If the interval between points is >= 5 min, don't resample
+        needs_resample = is_intraday
+        if is_intraday and len(self._data) >= 2:
+            time_diff = (self._data.index[1] - self._data.index[0]).total_seconds()
+            if time_diff >= 300:  # 5 minutes or more - already aggregated
+                needs_resample = False
+
         if chart_type == "Candlestick":
-            # For candlestick with intraday data, aggregate to 5-minute bars
-            if is_intraday:
+            # For candlestick with 1-min intraday data, aggregate to 5-minute bars
+            if needs_resample:
                 display_data = self._data.resample('5min').agg({
                     'open': 'first',
                     'high': 'max',
                     'low': 'min',
                     'close': 'last',
                     'volume': 'sum'
-                }).dropna()
-                # Remove outlier volume bars (e.g., closing auction totals)
-                display_data = self._filter_volume_outliers(display_data)
+                })
+                # Don't dropna() - keep full day index with NaN for future times
+                # Remove outlier volume bars (e.g., closing auction totals) only for valid data
+                valid_data = display_data.dropna()
+                if not valid_data.empty:
+                    display_data = self._filter_volume_outliers_preserve_index(display_data)
             else:
                 display_data = self._data
             self._display_data = display_data
             self.candle_item = CandlestickItem(display_data)
             self.price_widget.addItem(self.candle_item)
         elif chart_type == "OHLC":
-            # For OHLC with intraday data, aggregate to 5-minute bars
-            if is_intraday:
+            # For OHLC with 1-min intraday data, aggregate to 5-minute bars
+            if needs_resample:
                 display_data = self._data.resample('5min').agg({
                     'open': 'first',
                     'high': 'max',
                     'low': 'min',
                     'close': 'last',
                     'volume': 'sum'
-                }).dropna()
-                # Remove outlier volume bars (e.g., closing auction totals)
-                display_data = self._filter_volume_outliers(display_data)
+                })
+                # Don't dropna() - keep full day index with NaN for future times
+                valid_data = display_data.dropna()
+                if not valid_data.empty:
+                    display_data = self._filter_volume_outliers_preserve_index(display_data)
             else:
                 display_data = self._data
             self._display_data = display_data
@@ -668,23 +706,27 @@ class StockChart(QWidget):
             # For line chart, use raw 1-minute data for detail
             display_data = self._data
             if is_intraday:
-                display_data = self._filter_volume_outliers(display_data)
+                display_data = self._filter_volume_outliers_preserve_index(display_data)
             self._display_data = display_data
+            # Use connect='finite' to skip NaN values (future times)
             self.price_widget.plot(
                 np.arange(len(display_data)),
                 display_data["close"].values,
-                pen=pg.mkPen("#3B82F6", width=2)
+                pen=pg.mkPen("#3B82F6", width=2),
+                connect='finite'
             )
         elif chart_type == "Area":
             # For area chart, use raw 1-minute data for detail
             display_data = self._data
             if is_intraday:
-                display_data = self._filter_volume_outliers(display_data)
+                display_data = self._filter_volume_outliers_preserve_index(display_data)
             self._display_data = display_data
+            # Use connect='finite' to skip NaN values (future times)
             curve = self.price_widget.plot(
                 np.arange(len(display_data)),
                 display_data["close"].values,
-                pen=pg.mkPen("#3B82F6", width=2)
+                pen=pg.mkPen("#3B82F6", width=2),
+                connect='finite'
             )
             fill = pg.FillBetweenItem(
                 curve,
@@ -712,8 +754,9 @@ class StockChart(QWidget):
         # Set volume Y-axis range explicitly (0 to max volume with padding)
         display_data = getattr(self, '_display_data', self._data)
         if "volume" in display_data.columns:
-            max_vol = display_data["volume"].max()
-            self.volume_widget.setYRange(0, max_vol * 1.1, padding=0)
+            max_vol = display_data["volume"].max(skipna=True)
+            if pd.notna(max_vol) and max_vol > 0:
+                self.volume_widget.setYRange(0, max_vol * 1.1, padding=0)
             self.volume_widget.setXRange(0, len(display_data) - 1, padding=0.02)
 
     def _update_indicators(self) -> None:
@@ -799,6 +842,35 @@ class StockChart(QWidget):
         # If last bar volume is more than 5x the median, it's likely a total/auction bar
         if volumes[-1] > median_vol * 5:
             return data.iloc[:-1]
+
+        return data
+
+    def _filter_volume_outliers_preserve_index(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Filter volume outliers while preserving the full index (including NaN future times)."""
+        if data is None or data.empty:
+            return data
+
+        # Get valid (non-NaN) data for outlier detection
+        valid_mask = data["volume"].notna()
+        valid_volumes = data.loc[valid_mask, "volume"].values
+
+        if len(valid_volumes) < 3:
+            return data
+
+        median_vol = np.median(valid_volumes)
+
+        # Find the last valid data point
+        valid_indices = data.index[valid_mask]
+        if len(valid_indices) == 0:
+            return data
+
+        last_valid_idx = valid_indices[-1]
+        last_valid_volume = data.loc[last_valid_idx, "volume"]
+
+        # If last valid bar volume is more than 5x the median, zero it out
+        if last_valid_volume > median_vol * 5:
+            data = data.copy()
+            data.loc[last_valid_idx, "volume"] = 0
 
         return data
 

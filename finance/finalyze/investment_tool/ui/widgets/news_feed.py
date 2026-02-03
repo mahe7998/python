@@ -248,13 +248,18 @@ class NewsItemWidget(QFrame):
             return "~"
 
     def _format_time_ago(self, dt: datetime) -> str:
-        """Format datetime as relative time string."""
-        now = datetime.now()
+        """Format datetime as relative time string.
+
+        Note: EODHD timestamps are in UTC, so we compare with UTC now.
+        """
+        from datetime import timezone
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+
         if dt.tzinfo is not None:
             # Convert to naive datetime for comparison
             dt = dt.replace(tzinfo=None)
 
-        diff = now - dt
+        diff = now_utc - dt
 
         if diff.days > 7:
             return dt.strftime("%b %d")
@@ -302,6 +307,12 @@ class NewsFeedWidget(QWidget):
 
     article_clicked = Signal(str)  # url
     stock_clicked = Signal(str, str)  # ticker, exchange
+    articles_changed = Signal(list)  # emitted when displayed articles change (load more, filter)
+
+    # Display limit for performance - render at most this many items
+    DISPLAY_LIMIT = 100
+    LOAD_MORE_INCREMENT = 100
+    FETCH_BATCH_SIZE = 100  # How many to fetch from server at a time
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -310,6 +321,10 @@ class NewsFeedWidget(QWidget):
         self._filter_sentiment: str = "all"
         self._search_text: str = ""
         self._articles: List[NewsArticle] = []
+        self._filtered_articles: List[NewsArticle] = []  # Cached filtered results
+        self._displayed_count: int = 0  # How many are currently rendered
+        self._server_offset: int = 0  # How many articles fetched from server
+        self._server_has_more: bool = True  # Whether server has more articles
 
         self._setup_ui()
 
@@ -382,6 +397,24 @@ class NewsFeedWidget(QWidget):
         self.scroll_area.setWidget(self.news_container)
         layout.addWidget(self.scroll_area)
 
+        # Status bar with count and load more button
+        status_bar = QHBoxLayout()
+        status_bar.setSpacing(8)
+
+        self.count_label = QLabel("")
+        self.count_label.setStyleSheet("color: #9CA3AF; font-size: 10px;")
+        status_bar.addWidget(self.count_label)
+
+        status_bar.addStretch()
+
+        self.load_more_btn = QPushButton("Load More")
+        self.load_more_btn.setStyleSheet("font-size: 10px; padding: 2px 8px;")
+        self.load_more_btn.clicked.connect(self._on_load_more)
+        self.load_more_btn.hide()
+        status_bar.addWidget(self.load_more_btn)
+
+        layout.addLayout(status_bar)
+
         # No data label
         self.no_data_label = QLabel("No news articles available")
         self.no_data_label.setAlignment(Qt.AlignCenter)
@@ -421,30 +454,49 @@ class NewsFeedWidget(QWidget):
 
         self._apply_filters()
 
-    def refresh(self) -> None:
-        """Refresh news articles from data source."""
+    def refresh(self, articles=None) -> None:
+        """Refresh news articles from data source.
+
+        Args:
+            articles: Pre-fetched news articles (optional, avoids duplicate API call)
+        """
+        from loguru import logger
+
         if not self._data_manager:
             self._show_no_data()
             return
 
         try:
+            # Reset server tracking
+            self._server_offset = 0
+            self._server_has_more = True
+
             # Date range for last 30 days
             end_date = date.today()
             start_date = end_date - timedelta(days=30)
 
-            # Fetch articles
-            if self._filter_ticker:
+            # Use pre-fetched articles if provided
+            if articles is not None and self._filter_ticker:
+                self._articles = articles
+                self._server_offset = len(articles)
+                self._server_has_more = len(articles) >= self.FETCH_BATCH_SIZE
+                logger.info(f"News feed: using {len(self._articles)} pre-fetched articles for {self._filter_ticker}")
+            elif self._filter_ticker:
+                # Fetch only initial batch for fast loading
                 self._articles = self._data_manager.get_news(
                     self._filter_ticker,
-                    limit=1000,
+                    limit=self.FETCH_BATCH_SIZE,
                     use_cache=True,
                     from_date=start_date,
                     to_date=end_date,
                 )
+                self._server_offset = len(self._articles)
+                self._server_has_more = len(self._articles) >= self.FETCH_BATCH_SIZE
+                logger.info(f"News feed: fetched {len(self._articles)} articles for {self._filter_ticker} (initial batch)")
             else:
                 # Get news for all tracked stocks
                 self._articles = []
-                companies = self._data_manager.cache.get_all_companies()
+                companies = self._data_manager.get_all_companies()
 
                 for company in companies[:10]:  # Limit for performance
                     articles = self._data_manager.get_news(
@@ -461,6 +513,7 @@ class NewsFeedWidget(QWidget):
                     key=lambda a: a.published_at,
                     reverse=True
                 )
+                logger.info(f"News feed: fetched {len(self._articles)} articles for all stocks")
 
             # Update ticker combo with available tickers
             self._update_ticker_combo()
@@ -469,8 +522,9 @@ class NewsFeedWidget(QWidget):
             self._apply_filters()
 
         except Exception as e:
-            from loguru import logger
             logger.error(f"Failed to refresh news: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             self._show_no_data()
 
     def _update_ticker_combo(self) -> None:
@@ -502,9 +556,8 @@ class NewsFeedWidget(QWidget):
         """Apply current filters and update display."""
         filtered = self._articles
 
-        # Apply ticker filter
-        if self._filter_ticker:
-            filtered = [a for a in filtered if a.ticker == self._filter_ticker]
+        # Note: Ticker filter is not needed here because refresh() already
+        # fetches news for the specific ticker. The articles are pre-filtered.
 
         # Apply sentiment filter
         if self._filter_sentiment != "all":
@@ -517,11 +570,15 @@ class NewsFeedWidget(QWidget):
                 a for a in filtered
                 if search_lower in a.title.lower() or
                    search_lower in a.ticker.lower() or
-                   search_lower in a.source.lower()
+                   (a.source and search_lower in a.source.lower())
             ]
 
-        # Update display
-        self._display_articles(filtered)
+        # Store filtered results and reset display count
+        self._filtered_articles = filtered
+        self._displayed_count = 0
+
+        # Display initial batch
+        self._display_articles()
 
     def _matches_sentiment(self, article: NewsArticle) -> bool:
         """Check if article matches current sentiment filter."""
@@ -543,27 +600,128 @@ class NewsFeedWidget(QWidget):
 
         return True
 
-    def _display_articles(self, articles: List[NewsArticle]) -> None:
-        """Display articles in the scroll area."""
-        # Clear existing items
-        while self.news_layout.count() > 1:  # Keep the stretch
-            item = self.news_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+    def _display_articles(self, append: bool = False) -> None:
+        """Display articles in the scroll area.
+
+        Args:
+            append: If True, append to existing items. If False, clear and redisplay.
+        """
+        articles = self._filtered_articles
+
+        if not append:
+            # Clear existing items
+            while self.news_layout.count() > 1:  # Keep the stretch
+                item = self.news_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            self._displayed_count = 0
 
         if not articles:
             self._show_no_data()
+            self.count_label.setText("")
+            self.load_more_btn.hide()
             return
 
         self.no_data_label.hide()
         self.scroll_area.show()
 
-        # Add new items
-        for article in articles:
+        # Calculate how many to display
+        start_idx = self._displayed_count
+        end_idx = min(start_idx + self.DISPLAY_LIMIT, len(articles))
+
+        # Add items for this batch
+        for i in range(start_idx, end_idx):
+            article = articles[i]
             item = NewsItemWidget(article)
             item.clicked.connect(self._on_article_clicked)
             item.ticker_clicked.connect(self._on_ticker_clicked)
             self.news_layout.insertWidget(self.news_layout.count() - 1, item)
+
+        self._displayed_count = end_idx
+
+        # Update status
+        total = len(articles)
+        has_more_to_display = self._displayed_count < total
+        has_more_on_server = self._server_has_more
+
+        if has_more_to_display or has_more_on_server:
+            if has_more_on_server:
+                self.count_label.setText(f"Showing {self._displayed_count} of {total}+ articles")
+            else:
+                self.count_label.setText(f"Showing {self._displayed_count} of {total} articles")
+            self.load_more_btn.setText(f"Load {self.LOAD_MORE_INCREMENT} More")
+            self.load_more_btn.show()
+        else:
+            self.count_label.setText(f"Showing all {total} articles")
+            self.load_more_btn.hide()
+
+    def _on_load_more(self) -> None:
+        """Load more articles - fetch from server if needed."""
+        from loguru import logger
+
+        # Check if we need to fetch more from server
+        if self._displayed_count >= len(self._filtered_articles) and self._server_has_more:
+            self._fetch_more_from_server()
+
+        self._display_articles(append=True)
+        # Emit signal with all displayed articles so sentiment can be updated
+        displayed_articles = self._filtered_articles[:self._displayed_count]
+        self.articles_changed.emit(displayed_articles)
+
+    def _fetch_more_from_server(self) -> None:
+        """Fetch more articles from server."""
+        from loguru import logger
+
+        if not self._data_manager or not self._filter_ticker or not self._server_has_more:
+            return
+
+        try:
+            end_date = date.today()
+            start_date = end_date - timedelta(days=30)
+
+            logger.info(f"Fetching more news from server: offset={self._server_offset}")
+            new_articles = self._data_manager.get_news(
+                self._filter_ticker,
+                limit=self.FETCH_BATCH_SIZE,
+                offset=self._server_offset,
+                use_cache=True,
+                from_date=start_date,
+                to_date=end_date,
+            )
+
+            if new_articles:
+                self._articles.extend(new_articles)
+                self._server_offset += len(new_articles)
+                self._server_has_more = len(new_articles) >= self.FETCH_BATCH_SIZE
+                logger.info(f"Fetched {len(new_articles)} more articles, total now {len(self._articles)}")
+
+                # Re-apply filters to include new articles
+                self._reapply_filters()
+            else:
+                self._server_has_more = False
+                logger.info("No more articles available from server")
+
+        except Exception as e:
+            logger.error(f"Failed to fetch more articles: {e}")
+            self._server_has_more = False
+
+    def _reapply_filters(self) -> None:
+        """Re-apply filters without resetting display count."""
+        filtered = self._articles
+
+        if self._filter_sentiment != "all":
+            filtered = [a for a in filtered if self._matches_sentiment(a)]
+
+        if self._search_text:
+            search_lower = self._search_text.lower()
+            filtered = [
+                a for a in filtered
+                if search_lower in a.title.lower() or
+                   search_lower in a.ticker.lower() or
+                   (a.source and search_lower in a.source.lower())
+            ]
+
+        self._filtered_articles = filtered
 
     def _show_no_data(self) -> None:
         """Show no data message."""
@@ -573,6 +731,8 @@ class NewsFeedWidget(QWidget):
                 item.widget().deleteLater()
 
         self.no_data_label.show()
+        self.count_label.setText("")
+        self.load_more_btn.hide()
 
     def _on_ticker_filter_changed(self, index: int) -> None:
         """Handle ticker filter change."""
@@ -606,6 +766,10 @@ class NewsFeedWidget(QWidget):
     def clear(self) -> None:
         """Clear the news feed."""
         self._articles = []
+        self._filtered_articles = []
+        self._displayed_count = 0
+        self._server_offset = 0
+        self._server_has_more = True
         self._filter_ticker = None
         self.ticker_combo.setCurrentIndex(0)
         self._show_no_data()

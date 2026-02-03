@@ -8,7 +8,6 @@ dependencies = [
     "pyqtgraph>=0.13.0",
     "pandas>=2.0.0",
     "numpy>=1.24.0",
-    "duckdb>=0.9.0",
     "pydantic>=2.0.0",
     "pyyaml>=6.0",
     "squarify>=0.4.3",
@@ -17,12 +16,3 @@ dependencies = [
     "loguru>=0.7.0",
 ]
 
-[project.scripts]
-investment-tool = "investment_tool.main:main"
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["investment_tool"]

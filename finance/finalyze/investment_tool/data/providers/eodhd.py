@@ -1,6 +1,11 @@
-"""EODHD data provider implementation."""
+"""EODHD data provider implementation.
+
+This provider connects to the data server (caching proxy) instead of
+directly to EODHD. The data server handles all caching and rate limiting.
+"""
 
 import hashlib
+import os
 import time
 from datetime import date, datetime
 from typing import Optional, List, Dict, Any
@@ -10,7 +15,6 @@ import pandas as pd
 from loguru import logger
 
 from investment_tool.data.models import CompanyInfo, NewsArticle, SentimentData
-from investment_tool.data.cache import CacheManager
 from investment_tool.data.providers.base import (
     DataProviderBase,
     ProviderError,
@@ -21,15 +25,33 @@ from investment_tool.data.providers.base import (
 
 
 class EODHDProvider(DataProviderBase):
-    """EODHD API data provider."""
+    """EODHD API data provider via data server proxy.
 
-    BASE_URL = "https://eodhd.com/api"
-    RATE_LIMIT_DELAY = 0.25
+    Connects to DATA_SERVER_URL which provides caching and rate limiting.
+    """
 
-    def __init__(self, api_key: str, cache: CacheManager):
+    # Use data server URL from environment, with fallback to direct EODHD
+    # DATA_SERVER_URL should be the base URL (e.g., http://localhost:8000)
+    # We append /api to get the API endpoint
+    _data_server_url = os.getenv("DATA_SERVER_URL", "").rstrip("/")
+    if _data_server_url:
+        # Data server URL provided - append /api
+        BASE_URL = f"{_data_server_url}/api"
+    else:
+        # Fallback to direct EODHD API
+        BASE_URL = "https://eodhd.com/api"
+    RATE_LIMIT_DELAY = 0.1  # Reduced since data server handles rate limiting
+
+    def __init__(self, api_key: str, cache: Optional[Any] = None):
         super().__init__(api_key, cache)
         self._last_request_time = 0.0
         self.api_call_count = 0
+
+        # Log which server we're using
+        if "eodhd.com" in self.BASE_URL:
+            logger.warning("DATA_SERVER_URL not set, using direct EODHD API")
+        else:
+            logger.info(f"Using data server at: {self.BASE_URL}")
 
     def _rate_limit(self) -> None:
         """Enforce rate limiting between requests."""
@@ -80,10 +102,15 @@ class EODHDProvider(DataProviderBase):
                 return None
 
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+            logger.debug(f"Response from {url}: status={response.status_code}, records={len(result) if isinstance(result, list) else 'N/A'}")
+            return result
 
         except requests.exceptions.RequestException as e:
             logger.error(f"EODHD request failed: {e}")
+            raise ProviderError(self.name, str(e))
+        except Exception as e:
+            logger.error(f"EODHD unexpected error: {e}")
             raise ProviderError(self.name, str(e))
 
     def format_symbol(self, ticker: str, exchange: str) -> str:
@@ -149,8 +176,14 @@ class EODHDProvider(DataProviderBase):
         interval: str,
         start: datetime,
         end: datetime,
+        force_eodhd: bool = False,
     ) -> pd.DataFrame:
-        """Fetch intraday OHLCV data from EODHD."""
+        """Fetch intraday OHLCV data from EODHD.
+
+        Args:
+            force_eodhd: If True, bypass price worker cache and fetch from EODHD API.
+                        Useful when market is closed to get proper OHLC bars.
+        """
         symbol = self.format_symbol(ticker, exchange)
 
         interval_map = {
@@ -162,16 +195,23 @@ class EODHDProvider(DataProviderBase):
 
         eodhd_interval = interval_map.get(interval, "5m")
 
+        params = {
+            "interval": eodhd_interval,
+            "from": int(start.timestamp()),
+            "to": int(end.timestamp()),
+        }
+        if force_eodhd:
+            params["force_eodhd"] = "true"
+
         data = self._request(
             f"intraday/{symbol}",
-            params={
-                "interval": eodhd_interval,
-                "from": int(start.timestamp()),
-                "to": int(end.timestamp()),
-            }
+            params=params
         )
 
+        logger.debug(f"Intraday response for {symbol}: type={type(data)}, len={len(data) if data else 0}")
+
         if not data:
+            logger.warning(f"No intraday data returned for {symbol}, data={data}")
             raise DataNotFoundError(self.name, ticker, "intraday_prices")
 
         df = pd.DataFrame(data)
@@ -179,7 +219,15 @@ class EODHDProvider(DataProviderBase):
         if df.empty:
             return df
 
-        df["timestamp"] = pd.to_datetime(df["datetime"])
+        # Handle both formats: EODHD returns 'datetime', cache returns 'timestamp'
+        if "datetime" in df.columns:
+            df["timestamp"] = pd.to_datetime(df["datetime"])
+        elif "timestamp" in df.columns:
+            df["timestamp"] = pd.to_datetime(df["timestamp"])
+        else:
+            logger.error(f"Intraday data missing timestamp field, columns: {df.columns.tolist()}")
+            return pd.DataFrame()
+
         columns = ["timestamp", "open", "high", "low", "close", "volume"]
 
         for col in columns:
@@ -229,6 +277,7 @@ class EODHDProvider(DataProviderBase):
         self,
         ticker: str,
         limit: int = 50,
+        offset: int = 0,
         from_date: Optional[date] = None,
         to_date: Optional[date] = None,
     ) -> List[NewsArticle]:
@@ -236,6 +285,7 @@ class EODHDProvider(DataProviderBase):
         params = {
             "s": ticker,
             "limit": limit,
+            "offset": offset,
         }
         if from_date:
             params["from"] = from_date.isoformat()
@@ -288,6 +338,98 @@ class EODHDProvider(DataProviderBase):
             ))
 
         return articles
+
+    def get_batch_daily_changes(
+        self,
+        symbols: List[str],
+        start_date: date,
+        end_date: date,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Fetch daily price changes for multiple symbols in a single call.
+
+        This is optimized for the treemap which needs start/end prices for many stocks.
+        Only works when using the data server (not direct EODHD API).
+
+        Args:
+            symbols: List of symbols like ["AAPL.US", "GOOGL.US"]
+            start_date: Start date for price comparison
+            end_date: End date for price comparison
+
+        Returns:
+            Dict mapping symbol to {"start_price": float, "end_price": float, "change": float}
+        """
+        # This endpoint only works with the data server
+        if "eodhd.com" in self.BASE_URL:
+            logger.warning("Batch daily changes not available with direct EODHD API")
+            return {}
+
+        url = f"{self.BASE_URL}/batch/daily-changes"
+
+        try:
+            self.api_call_count += 1
+            response = requests.post(
+                url,
+                json={
+                    "symbols": symbols,
+                    "start_date": start_date.isoformat(),
+                    "end_date": end_date.isoformat(),
+                },
+                timeout=60,  # Longer timeout for batch requests
+            )
+            response.raise_for_status()
+            return response.json()
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Batch daily changes request failed: {e}")
+            return {}
+        except Exception as e:
+            logger.error(f"Batch daily changes unexpected error: {e}")
+            return {}
+
+    def get_all_live_prices(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Get all live prices from the data server.
+
+        Returns:
+            Dict mapping "TICKER.EXCHANGE" to price data
+        """
+        # This endpoint only works with the data server
+        if "eodhd.com" in self.BASE_URL:
+            logger.debug("Live prices not available with direct EODHD API")
+            return {}
+
+        url = f"{self.BASE_URL}/live-prices"
+
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            # Convert list to dict keyed by symbol
+            result = {}
+            for item in data:
+                ticker = item.get("ticker", "")
+                exchange = item.get("exchange", "US")
+                symbol = f"{ticker}.{exchange}"
+                result[symbol] = {
+                    "price": item.get("price"),
+                    "change": item.get("change"),
+                    "change_percent": item.get("change_percent"),
+                    "previous_close": item.get("previous_close"),
+                    "volume": item.get("volume"),
+                    "open": item.get("open"),
+                    "high": item.get("high"),
+                    "low": item.get("low"),
+                }
+            return result
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Live prices request failed: {e}")
+            return {}
+        except Exception as e:
+            logger.error(f"Live prices unexpected error: {e}")
+            return {}
 
     def get_bulk_prices(
         self,

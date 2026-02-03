@@ -196,16 +196,26 @@ class SentimentGaugeWidget(QWidget):
         """Set the data manager."""
         self._data_manager = data_manager
 
-    def set_ticker(self, ticker: str, exchange: str) -> None:
-        """Set the current ticker and update the display."""
+    def set_ticker(self, ticker: str, exchange: str, articles=None) -> None:
+        """Set the current ticker and update the display.
+
+        Args:
+            ticker: Stock ticker symbol
+            exchange: Exchange code
+            articles: Pre-fetched news articles (optional, avoids duplicate API call)
+        """
         self._ticker = ticker
         self._exchange = exchange
         self.group_box.setTitle(f"Sentiment - {ticker}")
 
-        self._update_display()
+        self._update_display(articles=articles)
 
-    def _update_display(self) -> None:
-        """Update the gauge and chart with current data."""
+    def _update_display(self, articles=None) -> None:
+        """Update the gauge and chart with current data.
+
+        Args:
+            articles: Pre-fetched news articles (optional)
+        """
         if not self._data_manager or not self._ticker:
             self._show_no_data()
             return
@@ -216,21 +226,22 @@ class SentimentGaugeWidget(QWidget):
             end_date = date.today()
             start_date = end_date - timedelta(days=days)
 
-            # Get news articles (uses smart incremental caching)
-            articles = self._data_manager.get_news(
-                self._ticker,
-                limit=1000,
-                from_date=start_date,
-                to_date=end_date,
-            )
+            # Use pre-fetched articles if provided, otherwise fetch
+            if articles is None:
+                articles = self._data_manager.get_news(
+                    self._ticker,
+                    limit=1000,
+                    from_date=start_date,
+                    to_date=end_date,
+                )
 
             if not articles:
                 self._show_no_data()
                 return
 
-            # Get daily sentiment (aggregated from articles)
+            # Get daily sentiment - pass articles to avoid duplicate fetch
             daily_sentiments = self._data_manager.get_daily_sentiment(
-                self._ticker, days=days
+                self._ticker, days=days, articles=articles
             )
 
             if not daily_sentiments:

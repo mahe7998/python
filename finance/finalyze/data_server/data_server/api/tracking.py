@@ -207,3 +207,49 @@ async def update_news_timestamp(session: AsyncSession, ticker: str):
         set_={"last_news_update": datetime.utcnow()},
     )
     await session.execute(stmt)
+
+
+class BulkSyncRequest(BaseModel):
+    """Request to bulk sync stocks to tracking."""
+    stocks: list[dict]  # List of {"ticker": "AAPL", "exchange": "US"}
+
+
+@router.post("/stocks/sync")
+async def sync_tracked_stocks(
+    request: BulkSyncRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Bulk sync stocks to tracking - adds any missing stocks."""
+    added_count = 0
+
+    for stock in request.stocks:
+        ticker = stock.get("ticker")
+        exchange = stock.get("exchange", "US")
+
+        if not ticker:
+            continue
+
+        stmt = insert(TrackedStock).values(
+            ticker=ticker,
+            exchange=exchange,
+            track_prices=True,
+            track_news=True,
+            added_at=datetime.utcnow(),
+        )
+        stmt = stmt.on_conflict_do_nothing(index_elements=["ticker"])
+        result = await session.execute(stmt)
+        if result.rowcount > 0:
+            added_count += 1
+
+    await session.commit()
+
+    # Get total count
+    result = await session.execute(select(TrackedStock))
+    total = len(result.scalars().all())
+
+    logger.info(f"Synced {added_count} new stocks, total tracked: {total}")
+
+    return {
+        "added": added_count,
+        "total_tracked": total,
+    }

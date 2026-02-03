@@ -194,6 +194,25 @@ class TrackedStock(Base):
     last_news_update: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
+class LivePrice(Base):
+    """Real-time price data for tracked stocks."""
+
+    __tablename__ = "live_prices"
+
+    ticker: Mapped[str] = mapped_column(String(20), primary_key=True)
+    exchange: Mapped[Optional[str]] = mapped_column(String(20))
+    price: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6))
+    open: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6))
+    high: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6))
+    low: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6))
+    previous_close: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6))
+    change: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6))
+    change_percent: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 4))
+    volume: Mapped[Optional[int]] = mapped_column(BigInteger)
+    market_timestamp: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class CacheMetadata(Base):
     """Cache metadata for staleness checking."""
 

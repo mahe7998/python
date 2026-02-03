@@ -472,6 +472,7 @@ class TreemapCanvas(QWidget):
         ticker_font = QFont("Segoe UI", ticker_size, QFont.Bold)
         painter.setFont(ticker_font)
         ticker_metrics = QFontMetrics(ticker_font)
+        ticker_height = ticker_metrics.height()
 
         ticker_text = item.ticker
         if ticker_metrics.horizontalAdvance(ticker_text) > inner_rect.width():
@@ -486,23 +487,34 @@ class TreemapCanvas(QWidget):
         )
 
         # Draw change percentage and additional info if space allows
-        if item.height > 50:
-            change_font = QFont("Segoe UI", change_size)
+        change_font = QFont("Segoe UI", change_size)
+        change_metrics = QFontMetrics(change_font)
+        line_height = change_metrics.height()
+
+        # Calculate available space below ticker
+        available_height = inner_rect.height() - ticker_height - 4  # 4px gap
+
+        if available_height > line_height:
             painter.setFont(change_font)
 
-            # Build info text: change %, P/E, market cap
-            change_text = format_percent(item.change_percent, decimals=1)
+            # Build info text: price, change %, P/E, market cap
+            change_text = format_percent(item.change_percent, decimals=2)
 
-            # Add P/E and market cap on separate lines if enough space
-            if item.height > 70:
-                info_lines = [change_text]
-                if item.pe_ratio is not None:
-                    info_lines.append(f"P/E: {item.pe_ratio:.1f}")
-                if item.market_cap is not None:
-                    info_lines.append(format_large_number(item.market_cap))
-                info_text = "\n".join(info_lines)
-            else:
-                info_text = change_text
+            # Determine how many lines we can fit
+            max_lines = int(available_height / line_height)
+
+            info_lines = []
+            if max_lines >= 4 and item.price is not None:
+                info_lines.append(f"${item.price:.2f}")
+            info_lines.append(change_text)
+            if max_lines >= 3 and item.pe_ratio is not None:
+                info_lines.append(f"P/E: {item.pe_ratio:.1f}")
+            if max_lines >= 4 and item.market_cap is not None:
+                info_lines.append(format_large_number(item.market_cap))
+
+            # Trim to max lines
+            info_lines = info_lines[:max_lines]
+            info_text = "\n".join(info_lines)
 
             painter.drawText(
                 inner_rect,
@@ -552,16 +564,17 @@ class TreemapCanvas(QWidget):
     def _build_tooltip(self, item: TreemapItem) -> str:
         """Build tooltip HTML for an item."""
         change_color = "#22C55E" if item.change_percent >= 0 else "#EF4444"
+        price_str = f"${item.price:.2f}" if item.price else "N/A"
         return f"""
         <div style="padding: 8px;">
             <b style="font-size: 14px;">{item.ticker}</b>
             <span style="color: #9CA3AF;"> - {item.name}</span><br/>
+            <span style="font-size: 13px;">Price: {price_str}</span><br/>
             <span style="color: {change_color}; font-size: 13px;">
-                {format_percent(item.change_percent)}
+                {format_percent(item.change_percent, decimals=2)}
             </span><br/>
             <span style="color: #9CA3AF;">
-                Market Cap: {format_large_number(item.value)}<br/>
-                {f"Price: ${item.price:.2f}" if item.price else ""}
+                Market Cap: {format_large_number(item.value)}
             </span>
         </div>
         """

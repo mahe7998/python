@@ -341,8 +341,10 @@ class AddStockDialog(QDialog):
         options_layout.addWidget(cat_label)
 
         self.category_combo = QComboBox()
+        # Add "(None)" option first to allow uncategorized stocks
         self.category_combo.addItem("(None)", None)
-        for category in self.category_manager.get_all_categories():
+        categories = self.category_manager.get_all_categories()
+        for category in categories:
             self.category_combo.addItem(category.name, category.id)
         self.category_combo.setMinimumWidth(180)
         options_layout.addWidget(self.category_combo)
@@ -489,23 +491,62 @@ class AddStockDialog(QDialog):
 
     def _on_add(self) -> None:
         """Handle add button click."""
+        from loguru import logger
+
         if not self._selected_company:
+            logger.warning("No company selected")
             return
 
         ticker = self._selected_company.ticker
         exchange = self._selected_company.exchange
+        logger.info(f"Adding stock: {ticker}.{exchange}")
 
-        # Add to category if selected
+        # Add to category - use selected or first available category
         category_id = self.category_combo.currentData()
-        if category_id:
-            self.category_manager.add_stock_to_category(category_id, ticker, exchange)
-            # Auto-save
-            from pathlib import Path
-            save_path = Path.home() / ".investment_tool" / "categories.json"
-            self.category_manager.save_to_file(save_path)
+        logger.info(f"Selected category_id: {category_id}")
 
-        # Emit signal
-        self.stock_added.emit(ticker, exchange)
+        if not category_id:
+            # No category selected - find or create "Uncategorized" category
+            uncategorized = self.category_manager.get_category_by_name("Uncategorized")
+            if uncategorized:
+                category_id = uncategorized.id
+                logger.info(f"Using existing Uncategorized category (id={category_id})")
+            else:
+                # Create "Uncategorized" category
+                uncategorized = self.category_manager.add_category(
+                    name="Uncategorized",
+                    color="#6B7280",  # Gray color
+                    description="Stocks not assigned to a specific category"
+                )
+                category_id = uncategorized.id
+                logger.info(f"Created Uncategorized category (id={category_id})")
+
+        if category_id:
+            added = self.category_manager.add_stock_to_category(category_id, ticker, exchange)
+            if added:
+                logger.info(f"Added {ticker}.{exchange} to category {category_id}")
+                # Auto-save
+                from pathlib import Path
+                save_path = Path.home() / ".investment_tool" / "categories.json"
+                self.category_manager.save_to_file(save_path)
+                logger.info(f"Saved categories to {save_path}")
+                # Emit signal to refresh treemap
+                self.stock_added.emit(ticker, exchange)
+                logger.info(f"Emitted stock_added signal for {ticker}.{exchange}")
+            else:
+                # Stock already exists in this category
+                category = self.category_manager.get_category(category_id)
+                cat_name = category.name if category else str(category_id)
+                logger.info(f"{ticker}.{exchange} already exists in category '{cat_name}'")
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.information(
+                    self,
+                    "Stock Already Added",
+                    f"{ticker}.{exchange} is already in category '{cat_name}'."
+                )
+                return  # Don't close dialog - let user pick different category
+        else:
+            logger.warning("No category available to add stock")
 
         # Optionally fetch data
         if self.fetch_data.isChecked() and self.data_manager:
