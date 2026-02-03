@@ -1,10 +1,13 @@
 """Watchlist widget for managing stock watchlists."""
 
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
-from PySide6.QtCore import Qt, Signal, QModelIndex, QSortFilterProxyModel
+from PySide6.QtCore import Qt, Signal, QModelIndex, QSortFilterProxyModel, QItemSelectionModel
 from PySide6.QtGui import QColor, QBrush, QAction, QFont
+
+# Custom role for sorting with raw numeric values
+SortRole = Qt.UserRole + 1
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -108,6 +111,27 @@ class WatchlistTableModel(QAbstractTableModel):
             # Return full row data
             return row_data
 
+        elif role == SortRole:
+            # Return raw numeric values for sorting
+            if col == 0:  # Ticker
+                return row_data.get("ticker", "")
+            elif col == 1:  # Prev Close
+                return row_data.get("prev_close") or 0
+            elif col == 2:  # Open
+                return row_data.get("open") or 0
+            elif col == 3:  # Price
+                return row_data.get("price") or 0
+            elif col == 4:  # Change
+                return row_data.get("change") or 0
+            elif col == 5:  # Change %
+                return row_data.get("change_percent") or 0
+            elif col == 6:  # P/E
+                return row_data.get("pe_ratio") or 0
+            elif col == 7:  # Volume
+                return row_data.get("volume") or 0
+            elif col == 8:  # Market Cap
+                return row_data.get("market_cap") or 0
+
         return None
 
     def set_data(self, data: List[Dict[str, Any]]) -> None:
@@ -137,6 +161,33 @@ class SparklineDelegate(QStyledItemDelegate):
         # For now, just use default painting
         # Sparklines will be added in a future iteration
         super().paint(painter, option, index)
+
+
+class WatchlistSortProxyModel(QSortFilterProxyModel):
+    """Custom sort proxy model that uses raw numeric values for sorting."""
+
+    def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
+        """Compare two items using raw values from SortRole."""
+        left_data = self.sourceModel().data(left, SortRole)
+        right_data = self.sourceModel().data(right, SortRole)
+
+        # Handle None values - sort them to the end
+        if left_data is None and right_data is None:
+            return False
+        if left_data is None:
+            return False  # None goes to end
+        if right_data is None:
+            return True  # Non-None comes before None
+
+        # Compare values
+        try:
+            # Try numeric comparison first
+            if isinstance(left_data, (int, float)) and isinstance(right_data, (int, float)):
+                return left_data < right_data
+            # Fall back to string comparison
+            return str(left_data) < str(right_data)
+        except TypeError:
+            return str(left_data) < str(right_data)
 
 
 class WatchlistWidget(QWidget):
@@ -260,9 +311,9 @@ class WatchlistWidget(QWidget):
         header.setStretchLastSection(True)
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
 
-        # Set model
+        # Set model with custom sort proxy for numeric sorting
         model = WatchlistTableModel()
-        proxy = QSortFilterProxyModel()
+        proxy = WatchlistSortProxyModel()
         proxy.setSourceModel(model)
         table.setModel(proxy)
 
@@ -357,20 +408,27 @@ class WatchlistWidget(QWidget):
                         if intraday is not None and len(intraday) >= 1:
                             close_col = "close" if "close" in intraday.columns else "Close"
 
-                            # Data is sorted descending (newest first), so iloc[0] is the latest
+                            # Data is sorted ascending (oldest first), so iloc[-1] is the latest
                             valid_close_bars = intraday[intraday[close_col].notna()]
                             if len(valid_close_bars) > 0:
-                                latest = valid_close_bars.iloc[0]  # First row is newest (market close)
+                                latest = valid_close_bars.iloc[-1]  # Last row is newest (market close)
                                 row["price"] = latest[close_col]
 
                             row["volume"] = intraday["volume"].sum() if "volume" in intraday.columns else None
 
                             # Get the trading day from intraday data (use timestamp column)
-                            # Data is sorted descending, so iloc[0] is newest
+                            # Data is sorted ascending, so iloc[-1] is newest
                             if "timestamp" in intraday.columns:
-                                trading_day = intraday["timestamp"].iloc[0].date() if hasattr(intraday["timestamp"].iloc[0], 'date') else market_open.date()
+                                ts_val = intraday["timestamp"].iloc[-1]
+                                if hasattr(ts_val, 'date'):
+                                    trading_day = ts_val.date()
+                                elif isinstance(ts_val, str):
+                                    # Parse ISO format string
+                                    trading_day = datetime.fromisoformat(ts_val.replace('Z', '+00:00')).date()
+                                else:
+                                    trading_day = market_open.date()
                             elif hasattr(intraday.index, 'date'):
-                                trading_day = intraday.index[0].date() if hasattr(intraday.index[0], 'date') else intraday.index[0]
+                                trading_day = intraday.index[-1].date() if hasattr(intraday.index[-1], 'date') else intraday.index[-1]
                             else:
                                 trading_day = market_open.date()
 
@@ -380,7 +438,13 @@ class WatchlistWidget(QWidget):
                                 # Find today's open and previous day's close
                                 for i in range(len(daily_prices)):
                                     idx = daily_prices.index[i]
-                                    day_date = idx.date() if hasattr(idx, 'date') else idx
+                                    # Handle both date objects and string dates
+                                    if hasattr(idx, 'date'):
+                                        day_date = idx.date()
+                                    elif isinstance(idx, str):
+                                        day_date = datetime.fromisoformat(idx).date()
+                                    else:
+                                        day_date = idx
                                     if day_date == trading_day:
                                         # Today's data - get the open
                                         row["open"] = daily_prices.iloc[i].get("open") or daily_prices.iloc[i].get("Open")
