@@ -1,7 +1,7 @@
 """Watchlist widget for managing stock watchlists."""
 
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 
 from PySide6.QtCore import Qt, Signal, QModelIndex, QSortFilterProxyModel, QItemSelectionModel
 from PySide6.QtGui import QColor, QBrush, QAction, QFont
@@ -179,15 +179,15 @@ class WatchlistSortProxyModel(QSortFilterProxyModel):
         if right_data is None:
             return True  # Non-None comes before None
 
-        # Compare values
+        # Compare values - use bool() to convert numpy.bool to Python bool
         try:
             # Try numeric comparison first
-            if isinstance(left_data, (int, float)) and isinstance(right_data, (int, float)):
-                return left_data < right_data
+            if isinstance(left_data, (int, float)) or isinstance(right_data, (int, float)):
+                return bool(float(left_data) < float(right_data))
             # Fall back to string comparison
-            return str(left_data) < str(right_data)
-        except TypeError:
-            return str(left_data) < str(right_data)
+            return bool(str(left_data) < str(right_data))
+        except (TypeError, ValueError):
+            return bool(str(left_data) < str(right_data))
 
 
 class WatchlistWidget(QWidget):
@@ -392,8 +392,9 @@ class WatchlistWidget(QWidget):
 
                         # Use cached data - data server handles caching efficiently
                         # No need for force_refresh when market is closed
+                        # Use 1m interval - EODHD 5m data has gaps/NULLs for some stocks
                         intraday = self.data_manager.get_intraday_prices(
-                            item.ticker, "US", "5m", market_open, end_dt,
+                            item.ticker, "US", "1m", market_open, end_dt,
                             use_cache=True, force_refresh=False
                         )
                         logger.info(f"Got intraday prices for {item.ticker}: {len(intraday) if intraday is not None else 'None'}")
@@ -423,10 +424,12 @@ class WatchlistWidget(QWidget):
                                 if hasattr(ts_val, 'date'):
                                     trading_day = ts_val.date()
                                 elif isinstance(ts_val, str):
-                                    # Parse ISO format string
-                                    trading_day = datetime.fromisoformat(ts_val.replace('Z', '+00:00')).date()
+                                    # Parse ISO format string (remove timezone suffix if present)
+                                    ts_clean = ts_val.replace('Z', '').split('+')[0]
+                                    trading_day = datetime.fromisoformat(ts_clean).date()
                                 else:
                                     trading_day = market_open.date()
+                                logger.info(f"{item.ticker}: ts_val={ts_val}, trading_day={trading_day}")
                             elif hasattr(intraday.index, 'date'):
                                 trading_day = intraday.index[-1].date() if hasattr(intraday.index[-1], 'date') else intraday.index[-1]
                             else:
@@ -436,26 +439,34 @@ class WatchlistWidget(QWidget):
                             # Daily data may be sorted newest-first
                             if daily_prices is not None and len(daily_prices) >= 1:
                                 # Find today's open and previous day's close
+                                # Data is sorted ascending (oldest first), so iterate to find trading_day
+                                prev_day_close = None
                                 for i in range(len(daily_prices)):
                                     idx = daily_prices.index[i]
                                     # Handle both date objects and string dates
-                                    if hasattr(idx, 'date'):
+                                    if hasattr(idx, 'date') and not isinstance(idx, date):
                                         day_date = idx.date()
                                     elif isinstance(idx, str):
-                                        day_date = datetime.fromisoformat(idx).date()
+                                        day_date = datetime.strptime(idx, "%Y-%m-%d").date()
                                     else:
                                         day_date = idx
+
+                                    logger.debug(f"{item.ticker}: loop i={i}, day_date={day_date}, trading_day={trading_day}, match={day_date == trading_day}")
                                     if day_date == trading_day:
-                                        # Today's data - get the open
-                                        row["open"] = daily_prices.iloc[i].get("open") or daily_prices.iloc[i].get("Open")
-                                    elif day_date < trading_day:
-                                        # Previous trading day - get the close
-                                        prev_close = daily_prices.iloc[i].get("close") or daily_prices.iloc[i].get("Close")
-                                        row["prev_close"] = prev_close
-                                        if prev_close is not None and row["price"] is not None:
-                                            row["change"] = row["price"] - prev_close
-                                            row["change_percent"] = row["change"] / prev_close
+                                        # Found trading day - get the open
+                                        open_val = daily_prices.iloc[i].get("open") or daily_prices.iloc[i].get("Open")
+                                        logger.info(f"{item.ticker}: FOUND trading_day at i={i}, open={open_val}, prev_day_close={prev_day_close}")
+                                        row["open"] = open_val
+                                        # Use prev_day_close from previous iteration
+                                        if prev_day_close is not None:
+                                            row["prev_close"] = prev_day_close
+                                            if row["price"] is not None:
+                                                row["change"] = row["price"] - prev_day_close
+                                                row["change_percent"] = row["change"] / prev_day_close
                                         break
+                                    else:
+                                        # Remember this day's close as potential prev_close
+                                        prev_day_close = daily_prices.iloc[i].get("close") or daily_prices.iloc[i].get("Close")
 
                             # Fallback to live prices if daily data is missing open/prev_close
                             if row["open"] is None or row["prev_close"] is None:

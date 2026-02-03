@@ -1058,8 +1058,9 @@ class MainWindow(QMainWindow):
                     day_start = datetime(check_date.year, check_date.month, check_date.day, 14, 30, tzinfo=timezone.utc)
                     day_end = datetime(check_date.year, check_date.month, check_date.day, 21, 0, tzinfo=timezone.utc)
 
+                    # Use 1m interval - EODHD 5m data has gaps/NULLs for some stocks
                     day_prices = self.data_manager.get_intraday_prices(
-                        ticker, exchange, "5m", day_start, day_end, use_cache=True,
+                        ticker, exchange, "1m", day_start, day_end, use_cache=True,
                         force_refresh=True  # Only use EODHD data, not price worker cache
                     )
                     if day_prices is not None and not day_prices.empty:

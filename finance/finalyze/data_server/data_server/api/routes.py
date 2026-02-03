@@ -186,9 +186,13 @@ async def get_intraday_prices(
     unless force_eodhd=true, which fetches proper OHLC bars from EODHD API.
 
     For historical data: fetches from EODHD and caches.
+
+    When market is closed: checks if cached data is from 'live' source.
+    If so, tries to fetch from EODHD for proper OHLC data.
+    EODHD takes several hours after close to have data, so falls back to cached if unavailable.
     """
     start_time = time.time()
-    ticker = symbol.split(".")[0]  # Extract ticker from symbol (e.g., AAPL from AAPL.US)
+    # Use full symbol (e.g., LULU.US) for consistency with daily prices
     cache_key = f"intraday:{symbol}:{interval}:{from_}:{to}"
     endpoint = f"GET /intraday/{symbol}?interval={interval}"
     from_ts = datetime.fromtimestamp(from_) if from_ else None
@@ -207,31 +211,26 @@ async def get_intraday_prices(
     # Initialize cache_time for logging
     cache_time = 0
 
+    # Check if market is closed
+    market_open = is_us_market_open()
+
     # For historical data, use longer cache TTL (24h) since it won't change
     # For today's data, use shorter TTL (60s) to get fresh updates
     cache_ttl = settings.cache_daily_prices if not is_today else settings.cache_intraday_prices
 
-    # force_eodhd means "use EODHD OHLC data, not price worker snapshots"
-    # But we can still use cached EODHD data if it's valid
-    if force_eodhd:
-        # Check if we have valid cached EODHD data for this request
-        cache_start = time.time()
-        is_valid = await cache.is_cache_valid(session, cache_key, cache_ttl)
-        if is_valid:
-            cached_data = await cache.get_intraday_prices(session, ticker, from_ts, to_ts)
-            cache_time = (time.time() - cache_start) * 1000
-            if cached_data:
-                total_time = (time.time() - start_time) * 1000
-                log_timing(endpoint, True, cache_time, 0, total_time)
-                logger.info(f"[CACHE HIT] force_eodhd but cache valid for {cache_key}")
-                return cached_data
-        logger.info(f"force_eodhd=true, cache stale/missing for {symbol}")
-    else:
-        # Check cached data first (from price worker)
-        cache_start = time.time()
-        cached_data = await cache.get_intraday_prices(session, ticker, from_ts, to_ts)
-        cache_time = (time.time() - cache_start) * 1000
+    # Check cached data first
+    cache_start = time.time()
+    cached_data = await cache.get_intraday_prices(session, symbol, from_ts, to_ts)
+    cached_source = await cache.get_intraday_source(session, symbol, from_ts, to_ts)
+    cache_time = (time.time() - cache_start) * 1000
 
+    # Determine if we should try EODHD:
+    # 1. force_eodhd=true explicitly requested
+    # 2. Market is closed AND data is from 'live' source (not yet replaced with EODHD)
+    should_try_eodhd = force_eodhd or (not market_open and cached_source == "live" and not is_today)
+
+    if not should_try_eodhd:
+        # Return cached data if available
         if cached_data:
             total_time = (time.time() - start_time) * 1000
             log_timing(endpoint, True, cache_time, 0, total_time)
@@ -239,39 +238,50 @@ async def get_intraday_prices(
 
         # If requesting today and no cached data, return empty (data will build up from price worker)
         if is_today:
-            logger.info(f"No intraday data yet for {ticker} today - data will accumulate from price worker")
+            logger.info(f"No intraday data yet for {symbol} today - data will accumulate from price worker")
             return []
 
-    # For historical data or force_eodhd with stale cache, fetch from EODHD
+    # If we already have EODHD data, return it
+    if cached_source == "eodhd" and cached_data:
+        total_time = (time.time() - start_time) * 1000
+        log_timing(endpoint, True, cache_time, 0, total_time)
+        logger.info(f"[CACHE HIT] EODHD data for {symbol}")
+        return cached_data
+
+    logger.info(f"Will try EODHD for {symbol} (market_open={market_open}, cached_source={cached_source})")
+
+    # Try to fetch from EODHD
     fetch_lock = await get_fetch_lock(cache_key)
     async with fetch_lock:
-        # Double-check cache after acquiring lock
-        is_valid = await cache.is_cache_valid(session, cache_key, cache_ttl)
-        if is_valid:
-            cached_data = await cache.get_intraday_prices(session, ticker, from_ts, to_ts)
-            if cached_data:
-                total_time = (time.time() - start_time) * 1000
-                logger.info(f"[CACHE HIT after lock] {endpoint}")
-                return cached_data
-
         # Fetch from EODHD
-        logger.info(f"Cache miss for {cache_key}, fetching from EODHD")
+        logger.info(f"Fetching {symbol} from EODHD")
         eodhd_start = time.time()
         client = await get_eodhd_client()
         try:
             data = await client.get_intraday(symbol, interval, from_, to)
         except Exception as e:
-            logger.error(f"EODHD error: {e}")
+            logger.error(f"EODHD error for {symbol}: {e}")
+            # Fall back to cached data if EODHD fails
+            if cached_data:
+                logger.info(f"Falling back to cached live data for {symbol}")
+                return cached_data
             raise HTTPException(status_code=502, detail=f"Error fetching from EODHD API: {e}")
         eodhd_time = (time.time() - eodhd_start) * 1000
 
-        # Store in cache
-        count = await cache.store_intraday_prices(session, ticker, data)
+        # If EODHD returned no data, fall back to cached
+        if not data:
+            logger.info(f"EODHD returned no data for {symbol}, falling back to cached")
+            if cached_data:
+                return cached_data
+            return []
+
+        # Store EODHD data with source='eodhd'
+        count = await cache.store_intraday_prices(session, symbol, data, source="eodhd")
         await cache.update_cache_metadata(
             session,
             cache_key,
             "intraday_prices",
-            ticker,
+            symbol,
             cache_ttl,
             count,
         )
@@ -297,12 +307,12 @@ async def get_real_time_quote(
     from sqlalchemy import select
     from data_server.db.models import LivePrice
 
-    ticker = symbol.split(".")[0]
+    # Use full symbol for consistency
     market_open = is_us_market_open()
 
     # Check if we have a cached live price in the database
     result = await session.execute(
-        select(LivePrice).where(LivePrice.ticker == ticker)
+        select(LivePrice).where(LivePrice.ticker == symbol)
     )
     live_price = result.scalar_one_or_none()
 
@@ -325,18 +335,18 @@ async def get_real_time_quote(
     # If market is closed, return cached data (no EODHD call needed)
     if not market_open:
         if live_price:
-            logger.info(f"[MARKET CLOSED] Returning cached price for {ticker}")
+            logger.info(f"[MARKET CLOSED] Returning cached price for {symbol}")
             return format_live_price(live_price)
         else:
             # No cached data and market closed - return empty response
-            logger.info(f"[MARKET CLOSED] No cached price for {ticker}")
+            logger.info(f"[MARKET CLOSED] No cached price for {symbol}")
             return {"code": symbol, "close": None, "change": None, "change_p": None}
 
     # Market is open - check if cached price is fresh enough (less than 30 seconds old)
     if live_price and live_price.updated_at:
         age = (datetime.utcnow() - live_price.updated_at).total_seconds()
         if age < 30:
-            logger.debug(f"Returning cached live price for {ticker} (age: {age:.1f}s)")
+            logger.debug(f"Returning cached live price for {symbol} (age: {age:.1f}s)")
             return format_live_price(live_price)
 
     # Market is open and cached price is stale - fetch from EODHD

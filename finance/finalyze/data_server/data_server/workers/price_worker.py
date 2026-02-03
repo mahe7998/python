@@ -66,7 +66,8 @@ async def update_prices():
                 quote = await client.get_real_time(symbol)
 
                 if quote:
-                    ticker = symbol.split(".")[0]
+                    # Use full symbol (e.g., LULU.US) for consistency
+                    ticker = symbol  # Keep full symbol for storage
                     exchange = symbol.split(".")[1] if "." in symbol else "US"
 
                     # Helper to convert 'NA' or invalid values to None
@@ -135,6 +136,7 @@ async def update_prices():
                     # Also store in IntradayPrice for historical intraday data
                     # Store current price as OHLC so chart resample creates proper bars
                     # (day's open/high/low would make all candles identical)
+                    # Note: source='live' indicates this is from price worker, not EODHD
                     intraday_ts = market_ts or datetime.utcnow()
                     intraday_stmt = insert(IntradayPrice).values(
                         ticker=ticker,
@@ -144,6 +146,7 @@ async def update_prices():
                         low=price_val,
                         close=price_val,
                         volume=to_int(quote.get("volume")),
+                        source="live",
                         fetched_at=datetime.utcnow(),
                     ).on_conflict_do_update(
                         index_elements=["ticker", "timestamp"],
@@ -153,6 +156,7 @@ async def update_prices():
                             "low": price_val,
                             "close": price_val,
                             "volume": to_int(quote.get("volume")),
+                            # Don't overwrite source if it's already 'eodhd'
                             "fetched_at": datetime.utcnow(),
                         }
                     )

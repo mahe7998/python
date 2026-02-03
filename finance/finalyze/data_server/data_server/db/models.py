@@ -49,6 +49,7 @@ class IntradayPrice(Base):
     low: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6))
     close: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6))
     volume: Mapped[Optional[int]] = mapped_column(BigInteger)
+    source: Mapped[Optional[str]] = mapped_column(String(20), default="live")  # 'live' or 'eodhd'
     fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

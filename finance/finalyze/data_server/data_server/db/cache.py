@@ -202,6 +202,26 @@ async def get_intraday_prices(
     ]
 
 
+async def get_intraday_source(
+    session: AsyncSession,
+    ticker: str,
+    from_timestamp: Optional[datetime] = None,
+    to_timestamp: Optional[datetime] = None,
+) -> Optional[str]:
+    """Get the source of intraday data for a ticker (live or eodhd)."""
+    query = select(IntradayPrice.source).where(IntradayPrice.ticker == ticker)
+
+    if from_timestamp:
+        query = query.where(IntradayPrice.timestamp >= from_timestamp)
+    if to_timestamp:
+        query = query.where(IntradayPrice.timestamp <= to_timestamp)
+
+    query = query.limit(1)
+    result = await session.execute(query)
+    source = result.scalar_one_or_none()
+    return source
+
+
 def parse_timestamp(ts) -> datetime:
     """Parse timestamp (Unix int or ISO string) to datetime object."""
     if isinstance(ts, datetime):
@@ -214,9 +234,16 @@ def parse_timestamp(ts) -> datetime:
 
 
 async def store_intraday_prices(
-    session: AsyncSession, ticker: str, prices: list[dict]
+    session: AsyncSession, ticker: str, prices: list[dict], source: str = "live"
 ) -> int:
-    """Store intraday prices in cache."""
+    """Store intraday prices in cache.
+
+    Args:
+        session: Database session
+        ticker: Stock ticker (e.g., LULU.US)
+        prices: List of price dicts with timestamp, open, high, low, close, volume
+        source: Data source - 'live' (price worker) or 'eodhd' (EODHD API)
+    """
     if not prices:
         return 0
 
@@ -233,6 +260,7 @@ async def store_intraday_prices(
             low=price.get("low"),
             close=price.get("close"),
             volume=price.get("volume"),
+            source=source,
             fetched_at=datetime.utcnow(),
         )
         stmt = stmt.on_conflict_do_update(
@@ -243,6 +271,7 @@ async def store_intraday_prices(
                 "low": price.get("low"),
                 "close": price.get("close"),
                 "volume": price.get("volume"),
+                "source": source,
                 "fetched_at": datetime.utcnow(),
             },
         )
