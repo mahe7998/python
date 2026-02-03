@@ -19,7 +19,7 @@ cd /Users/jmahe/projects/python/finance/finalyze/data_server
 docker compose up -d
 ```
 Verify it's running: `docker compose logs -f data-server`
-Wait for: `INFO: Uvicorn running on http://0.0.0.0:8765`
+Wait for: `INFO: Uvicorn running on http://0.0.0.0:8000`
 
 ### Step 2: Start the Investment Tool App (Terminal)
 ```bash
