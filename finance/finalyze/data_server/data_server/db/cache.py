@@ -32,16 +32,33 @@ def generate_content_id(url: str) -> str:
 async def is_cache_valid(
     session: AsyncSession, cache_key: str, max_age_seconds: int
 ) -> bool:
-    """Check if cache entry is still valid."""
+    """Check if cache entry is still valid.
+
+    Returns True if:
+    - expires_at hasn't passed yet, OR
+    - last_fetched is within max_age_seconds (allows dynamic TTL override)
+    """
     result = await session.execute(
         select(CacheMetadata).where(CacheMetadata.cache_key == cache_key)
     )
     metadata = result.scalar_one_or_none()
 
-    if not metadata or not metadata.expires_at:
+    if not metadata:
         return False
 
-    return datetime.utcnow() < metadata.expires_at
+    now = datetime.utcnow()
+
+    # Check if within the requested max_age (allows longer TTL for historical data)
+    if metadata.last_fetched:
+        age = (now - metadata.last_fetched).total_seconds()
+        if age < max_age_seconds:
+            return True
+
+    # Fall back to stored expires_at
+    if metadata.expires_at and now < metadata.expires_at:
+        return True
+
+    return False
 
 
 async def update_cache_metadata(

@@ -154,10 +154,25 @@ async def get_intraday_prices(
     # Initialize cache_time for logging
     cache_time = 0
 
-    # If force_eodhd is set, always fetch from EODHD to get fresh data
-    # This is used for startup checks and chart loading where we need latest OHLC bars
+    # For historical data, use longer cache TTL (24h) since it won't change
+    # For today's data, use shorter TTL (60s) to get fresh updates
+    cache_ttl = settings.cache_daily_prices if not is_today else settings.cache_intraday_prices
+
+    # force_eodhd means "use EODHD OHLC data, not price worker snapshots"
+    # But we can still use cached EODHD data if it's valid
     if force_eodhd:
-        logger.info(f"force_eodhd=true, fetching from EODHD API for {symbol}")
+        # Check if we have valid cached EODHD data for this request
+        cache_start = time.time()
+        is_valid = await cache.is_cache_valid(session, cache_key, cache_ttl)
+        if is_valid:
+            cached_data = await cache.get_intraday_prices(session, ticker, from_ts, to_ts)
+            cache_time = (time.time() - cache_start) * 1000
+            if cached_data:
+                total_time = (time.time() - start_time) * 1000
+                log_timing(endpoint, True, cache_time, 0, total_time)
+                logger.info(f"[CACHE HIT] force_eodhd but cache valid for {cache_key}")
+                return cached_data
+        logger.info(f"force_eodhd=true, cache stale/missing for {symbol}")
     else:
         # Check cached data first (from price worker)
         cache_start = time.time()
@@ -174,11 +189,12 @@ async def get_intraday_prices(
             logger.info(f"No intraday data yet for {ticker} today - data will accumulate from price worker")
             return []
 
-    # For historical data or force_eodhd, fetch from EODHD
+    # For historical data or force_eodhd with stale cache, fetch from EODHD
     fetch_lock = await get_fetch_lock(cache_key)
     async with fetch_lock:
-        # Double-check cache (skip if force_eodhd to ensure fresh EODHD data)
-        if not force_eodhd:
+        # Double-check cache after acquiring lock
+        is_valid = await cache.is_cache_valid(session, cache_key, cache_ttl)
+        if is_valid:
             cached_data = await cache.get_intraday_prices(session, ticker, from_ts, to_ts)
             if cached_data:
                 total_time = (time.time() - start_time) * 1000
@@ -203,7 +219,7 @@ async def get_intraday_prices(
             cache_key,
             "intraday_prices",
             ticker,
-            settings.cache_intraday_prices,
+            cache_ttl,
             count,
         )
         await session.commit()
