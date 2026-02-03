@@ -105,7 +105,7 @@ async def get_daily_prices(
     if to_date:
         query = query.where(DailyPrice.date <= to_date.date())
 
-    query = query.order_by(DailyPrice.date.desc())
+    query = query.order_by(DailyPrice.date.asc())
     result = await session.execute(query)
     prices = result.scalars().all()
 

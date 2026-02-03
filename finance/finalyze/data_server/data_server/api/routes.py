@@ -99,9 +99,9 @@ async def get_eod_prices(
     if cached_data and len(cached_data) > 0:
         # We have data! Check if it covers the requested range adequately
         # For daily prices, having at least 1 record in the range is usually sufficient
-        # The data is ordered by date DESC, so first item is newest, last is oldest
-        newest_date = cached_data[0].get("date")
-        oldest_date = cached_data[-1].get("date")
+        # The data is ordered by date ASC, so first item is oldest, last is newest
+        oldest_date = cached_data[0].get("date")
+        newest_date = cached_data[-1].get("date")
 
         # Check if we need to fetch more recent data (today's data might be missing)
         today = datetime.now().date()
@@ -130,7 +130,7 @@ async def get_eod_prices(
         # Double-check cache after acquiring lock (another request may have populated it)
         cached_data = await cache.get_daily_prices(session, symbol, from_date, to_date)
         if cached_data and len(cached_data) > 0:
-            newest_date = cached_data[0].get("date")
+            newest_date = cached_data[-1].get("date")
             if newest_date:
                 today = datetime.now().date()
                 to_date_obj = to_date.date() if to_date else today
@@ -649,9 +649,9 @@ async def get_batch_daily_changes(
             prices = await cache.get_daily_prices(session, symbol, from_date, to_date)
 
             if prices and len(prices) >= 1:
-                # Prices are ordered by date DESC, so last item is oldest (start), first is newest (end)
-                end_price = prices[0].get("close")
-                start_price = prices[-1].get("close") if len(prices) > 1 else end_price
+                # Prices are ordered by date ASC, so first item is oldest (start), last is newest (end)
+                start_price = prices[0].get("close")
+                end_price = prices[-1].get("close") if len(prices) > 1 else start_price
 
                 if start_price is not None and end_price is not None and start_price != 0:
                     change = (end_price - start_price) / start_price
