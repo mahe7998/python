@@ -32,12 +32,22 @@ class DataManager:
 
     @property
     def api_call_count(self) -> int:
-        """Get total API calls across all providers."""
+        """Get total API calls across all providers (local count only)."""
         total = 0
         for provider in self.providers.values():
             if hasattr(provider, 'api_call_count'):
                 total += provider.api_call_count
         return total
+
+    def get_server_status(self) -> Optional[dict]:
+        """Get data server status including EODHD API call statistics.
+
+        Returns server status from data server, or None if unavailable.
+        """
+        eodhd = self.providers.get("eodhd")
+        if eodhd and hasattr(eodhd, 'get_server_status'):
+            return eodhd.get_server_status()
+        return None
 
     def _setup_providers(self) -> None:
         """Initialize configured data providers."""

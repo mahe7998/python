@@ -475,7 +475,13 @@ class MainWindow(QMainWindow):
             self.news_feed.set_data_manager(self.data_manager)
 
             if self.data_manager.is_connected():
-                self.connection_label.setText(f"EODHD: Connected | API Calls: {self.data_manager.api_call_count}")
+                # Get server status for EODHD API call count
+                server_status = self.data_manager.get_server_status()
+                if server_status:
+                    api_calls = server_status.get("eodhd_api_calls", 0)
+                    self.connection_label.setText(f"Data Server: Connected | EODHD Calls: {api_calls}")
+                else:
+                    self.connection_label.setText("Data Server: Connected")
                 self.connection_label.setStyleSheet("color: #22C55E;")
 
                 # Sync all stocks to data server for live price tracking
@@ -1244,7 +1250,12 @@ class MainWindow(QMainWindow):
             self.cache_label.setText("Data Server")
 
             if self.data_manager.is_connected():
-                self.connection_label.setText(f"EODHD: Connected | API Calls: {self.data_manager.api_call_count}")
+                server_status = self.data_manager.get_server_status()
+                if server_status:
+                    api_calls = server_status.get("eodhd_api_calls", 0)
+                    self.connection_label.setText(f"Data Server: Connected | EODHD Calls: {api_calls}")
+                else:
+                    self.connection_label.setText("Data Server: Connected")
 
     def _auto_refresh(self) -> None:
         """Perform automatic data refresh."""

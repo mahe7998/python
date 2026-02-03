@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -306,6 +306,21 @@ async def get_news_for_ticker(
         )
 
     return news_list
+
+
+async def get_newest_news_date_for_ticker(
+    session: AsyncSession, ticker: str
+) -> Optional[datetime]:
+    """Get the newest (most recent) news date for a ticker in the database."""
+    query = (
+        select(func.max(News.published_at))
+        .select_from(NewsTicker)
+        .join(News, NewsTicker.news_id == News.id)
+        .where(NewsTicker.ticker == ticker)
+    )
+    result = await session.execute(query)
+    newest_date = result.scalar_one_or_none()
+    return newest_date
 
 
 async def store_news_article(

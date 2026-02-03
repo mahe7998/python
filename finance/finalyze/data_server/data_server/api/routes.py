@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from data_server.config import get_settings
 from data_server.db.database import get_session
 from data_server.db import cache
-from data_server.services.eodhd_client import get_eodhd_client
+from data_server.services.eodhd_client import get_eodhd_client, get_eodhd_stats
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -386,96 +386,27 @@ async def get_news(
     fmt: str = Query("json"),
     session: AsyncSession = Depends(get_session),
 ):
-    """Get news articles (returns metadata only for fast transfer)."""
+    """Get news articles from cache only.
+
+    News is populated by the background news worker every 15 minutes.
+    This endpoint only returns cached data - it never fetches from EODHD directly.
+    """
     start_time = time.time()
     ticker = s.split(".")[0] if s else None
-    cache_key = f"news:{s}:{from_}:{to}:{limit}:{offset}"
     endpoint = f"GET /news?s={s}&limit={limit}"
 
-    # Check cache validity
-    cache_start = time.time()
-    is_valid = ticker and await cache.is_cache_valid(session, cache_key, settings.cache_news)
-    cache_check_time = (time.time() - cache_start) * 1000
+    if not ticker:
+        # General news not supported in cache-only mode
+        return []
 
-    if is_valid:
-        fetch_start = time.time()
-        cached_data = await cache.get_news_for_ticker(session, ticker, limit, offset)
-        fetch_time = (time.time() - fetch_start) * 1000
-        if cached_data:
-            total_time = (time.time() - start_time) * 1000
-            logger.info(f"[CACHE HIT] {endpoint} | cache check: {cache_check_time:.1f}ms | fetch: {fetch_time:.1f}ms | total: {total_time:.1f}ms | {len(cached_data)} articles")
-            return cached_data
+    # Return cached news only
+    fetch_start = time.time()
+    cached_data = await cache.get_news_for_ticker(session, ticker, limit, offset)
+    fetch_time = (time.time() - fetch_start) * 1000
+    total_time = (time.time() - start_time) * 1000
 
-    # Fetch from EODHD
-    logger.info(f"[CACHE MISS] {endpoint} - fetching from EODHD")
-    eodhd_start = time.time()
-    client = await get_eodhd_client()
-    try:
-        data = await client.get_news(s, from_, to, limit, offset)
-    except Exception as e:
-        logger.error(f"EODHD error: {e}")
-        raise HTTPException(status_code=502, detail="Error fetching from EODHD API")
-    eodhd_time = (time.time() - eodhd_start) * 1000
-    logger.info(f"EODHD fetch: {eodhd_time:.1f}ms, {len(data)} articles")
-
-    # Store in cache
-    store_start = time.time()
-    for article in data:
-        tickers = [t.split(".")[0] for t in article.get("symbols", [])]
-        sentiment = article.get("sentiment") or {}
-
-        # Extract source - EODHD uses different field names in different contexts
-        source = article.get("source") or article.get("site") or None
-        if not source and article.get("link"):
-            # Extract domain from URL as fallback
-            from urllib.parse import urlparse
-            try:
-                parsed = urlparse(article.get("link", ""))
-                source = parsed.netloc.replace("www.", "")
-            except Exception:
-                pass
-
-        news_data = {
-            "id": None,  # Will be generated
-            "source": source,
-            "published_at": article.get("date"),
-            "polarity": sentiment.get("polarity"),
-            "positive": sentiment.get("pos"),
-            "negative": sentiment.get("neg"),
-            "neutral": sentiment.get("neu"),
-        }
-        content_data = {
-            "url": article.get("link"),
-            "title": article.get("title"),
-            "summary": article.get("content"),
-            "full_content": article.get("content"),  # EODHD provides full content
-        }
-        await cache.store_news_article(session, news_data, content_data, tickers)
-
-    store_time = (time.time() - store_start) * 1000
-    logger.info(f"Store {len(data)} articles: {store_time:.1f}ms")
-
-    await cache.update_cache_metadata(
-        session,
-        cache_key,
-        "news",
-        ticker,
-        settings.cache_news,
-        len(data),
-    )
-    await session.commit()
-
-    # Return EODHD-compatible format for client compatibility
-    if ticker:
-        return_start = time.time()
-        result = await cache.get_news_for_ticker(session, ticker, limit, offset)
-        return_time = (time.time() - return_start) * 1000
-        total_time = (time.time() - start_time) * 1000
-        logger.info(f"[CACHE MISS] {endpoint} complete | EODHD: {eodhd_time:.1f}ms | store: {store_time:.1f}ms | return: {return_time:.1f}ms | total: {total_time:.1f}ms")
-        return result
-
-    # For general news, return EODHD-compatible format
-    return data
+    logger.info(f"[CACHE] {endpoint} | fetch: {fetch_time:.1f}ms | total: {total_time:.1f}ms | {len(cached_data)} articles")
+    return cached_data
 
 
 @router.get("/search/{query}")
@@ -722,3 +653,20 @@ async def get_batch_daily_changes(
     logger.info(f"Batch daily changes completed: {len(results)}/{len(symbols)} symbols in {total_time:.1f}ms")
 
     return results
+
+
+@router.get("/server-status")
+async def get_server_status():
+    """Get data server status including EODHD API call statistics."""
+    from data_server.workers.scheduler import get_scheduler_status
+
+    eodhd_stats = get_eodhd_stats()
+    scheduler_status = get_scheduler_status()
+
+    return {
+        "status": "connected",
+        "eodhd_api_calls": eodhd_stats["api_calls"],
+        "server_start_time": eodhd_stats["server_start_time"],
+        "uptime_seconds": eodhd_stats["uptime_seconds"],
+        "scheduler": scheduler_status,
+    }

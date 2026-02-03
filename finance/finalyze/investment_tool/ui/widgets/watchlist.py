@@ -432,7 +432,7 @@ class WatchlistWidget(QWidget):
                                     row["change"] = row["price"] - row["prev_close"]
                                     row["change_percent"] = row["change"] / row["prev_close"]
                     else:
-                        # For other periods, use daily data
+                        # For other periods (1W, 1M, etc.), use daily data
                         start, end = get_date_range(self._current_period, min_trading_days=0)
                         prices = self.data_manager.get_daily_prices(
                             item.ticker, "US", start, end
@@ -440,17 +440,24 @@ class WatchlistWidget(QWidget):
                         logger.info(f"Got daily prices for {item.ticker}: {len(prices) if prices is not None else 'None'}")
 
                         if prices is not None and len(prices) >= 1:
-                            latest = prices.iloc[-1]
                             first = prices.iloc[0]
                             row["open"] = first.get("open") or first.get("Open")  # Period start open
-                            row["price"] = latest.get("close") or latest.get("Close")
-                            row["volume"] = latest.get("volume") or latest.get("Volume")
+                            row["volume"] = prices["volume"].sum() if "volume" in prices.columns else (prices["Volume"].sum() if "Volume" in prices.columns else None)
 
-                            # Change is from start of period to end
-                            start_price = first.get("close") or first.get("Close")
-                            if start_price and row["price"]:
-                                row["change"] = row["price"] - start_price
-                                row["change_percent"] = row["change"] / start_price
+                            # Get today's live price for current value
+                            live = self.data_manager.get_live_price(item.ticker, "US")
+                            if live and live.get("price"):
+                                row["price"] = live.get("price")
+                            else:
+                                # Fallback to latest close if live price unavailable
+                                latest = prices.iloc[-1]
+                                row["price"] = latest.get("close") or latest.get("Close")
+
+                            # Change is from period's open to current price
+                            period_open = row["open"]
+                            if period_open and row["price"]:
+                                row["change"] = row["price"] - period_open
+                                row["change_percent"] = row["change"] / period_open
 
                     # Get P/E ratio and market cap from company info
                     company = self.data_manager.get_company_info(item.ticker, "US")

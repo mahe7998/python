@@ -576,3 +576,22 @@ class EODHDProvider(DataProviderBase):
             }
             for sym in data
         ]
+
+    def get_server_status(self) -> Optional[Dict[str, Any]]:
+        """Get data server status including EODHD API call statistics.
+
+        Returns:
+            Server status dict with keys:
+            - status: "connected" or error
+            - eodhd_api_calls: number of EODHD API calls since server start
+            - server_start_time: ISO timestamp of server start
+            - uptime_seconds: server uptime in seconds
+        """
+        try:
+            url = f"{self.BASE_URL}/server-status"
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.debug(f"Failed to get server status: {e}")
+            return None

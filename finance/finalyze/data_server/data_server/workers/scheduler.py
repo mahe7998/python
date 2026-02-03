@@ -34,7 +34,7 @@ async def start_scheduler():
         max_instances=1,
     )
 
-    # News worker - runs every 15 minutes
+    # News worker - runs every 15 minutes, starting immediately on startup
     scheduler.add_job(
         update_news,
         trigger=IntervalTrigger(seconds=settings.worker_news_interval),
@@ -42,6 +42,7 @@ async def start_scheduler():
         name="News Update Worker",
         replace_existing=True,
         max_instances=1,
+        next_run_time=datetime.utcnow(),  # Run immediately on startup
     )
 
     # Daily worker - runs at 4:30 PM ET (21:30 UTC)

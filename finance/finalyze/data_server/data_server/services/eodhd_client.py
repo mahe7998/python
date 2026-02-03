@@ -15,6 +15,20 @@ settings = get_settings()
 # Mounted volume: ./logs:/tmp/logs in docker-compose.yml
 EODHD_LOG_FILE = "/tmp/logs/eodhd_requests.log"
 
+# Global counter for EODHD API calls (since server startup)
+_eodhd_call_count = 0
+_server_start_time = datetime.utcnow()
+
+
+def get_eodhd_stats() -> dict:
+    """Get EODHD API statistics."""
+    return {
+        "api_calls": _eodhd_call_count,
+        "server_start_time": _server_start_time.isoformat(),
+        "uptime_seconds": (datetime.utcnow() - _server_start_time).total_seconds(),
+    }
+
+
 def _log_eodhd_request(endpoint: str, params: dict, response_size: int = 0, error: str = None):
     """Log EODHD request to file for monitoring."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -61,6 +75,8 @@ class EODHDClient:
         logger.debug(f"EODHD request: {endpoint} with params {params}")
 
         try:
+            global _eodhd_call_count
+            _eodhd_call_count += 1
             response = await self.client.get(url, params=params)
             response.raise_for_status()
             data = response.json()
