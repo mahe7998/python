@@ -1450,27 +1450,22 @@ Status bar shows: `Data Server: Connected | EODHD Calls: X`
 
 ### Running the Application
 
-#### Step 1: Start the Data Server (Docker)
+#### Step 1: Start the Data Server (Docker) - MUST BE RUNNING FIRST
 ```bash
 cd /Users/jmahe/projects/python/finance/finalyze/data_server
 docker compose up -d
 ```
-Verify it's running: `docker compose logs -f data-server`
-Wait for: `INFO: Uvicorn running on http://0.0.0.0:8000`
-
-#### Step 2: Start the Investment Tool App (Terminal)
+Verify it's running:
 ```bash
-cd /Users/jmahe/projects/python/finance/finalyze
-source ~/.zshrc  # IMPORTANT: Always source this first
-source investment_tool/.venv/bin/activate
-python -m investment_tool.main
+docker compose ps                      # Should show data-server as "running"
+docker compose logs -f data-server     # Should show "Uvicorn running on http://0.0.0.0:8000"
 ```
 
-#### Quick Restart (App Only)
-If data server Docker container is already running:
+#### Step 2: Start the Investment Tool App
+**IMPORTANT**: Must run from `finalyze/` directory, NOT from `investment_tool/`
 ```bash
-cd /Users/jmahe/projects/python/finance/finalyze/investment_tool
-source .venv/bin/activate
+cd /Users/jmahe/projects/python/finance/finalyze
+source investment_tool/.venv/bin/activate
 python -m investment_tool.main
 ```
 
