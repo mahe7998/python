@@ -115,8 +115,13 @@ class DataManager:
             cached = self.user_store.get_company(ticker)
             if cached is not None:
                 cache_age = datetime.now() - (cached.last_updated or datetime.min)
-                if cache_age < timedelta(days=self.config.data.max_cache_age_days):
+                # Check if cache is valid (has essential data like market_cap)
+                is_complete = cached.market_cap is not None
+                if cache_age < timedelta(days=self.config.data.max_cache_age_days) and is_complete:
                     return cached
+                # If cache is incomplete, re-fetch
+                if not is_complete:
+                    logger.debug(f"Cached company info for {ticker} is incomplete, re-fetching")
 
         company = self._fetch_from_providers(
             "get_company_info",

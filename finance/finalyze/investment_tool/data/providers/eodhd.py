@@ -237,7 +237,7 @@ class EODHDProvider(DataProviderBase):
         return df[columns]
 
     def get_company_info(self, ticker: str, exchange: str) -> CompanyInfo:
-        """Fetch company metadata from EODHD."""
+        """Fetch company metadata from EODHD or data server."""
         symbol = self.format_symbol(ticker, exchange)
 
         data = self._request(f"fundamentals/{symbol}")
@@ -245,22 +245,39 @@ class EODHDProvider(DataProviderBase):
         if not data:
             raise DataNotFoundError(self.name, ticker, "company_info")
 
-        general = data.get("General", {})
-        highlights = data.get("Highlights", {})
-
-        return CompanyInfo(
-            ticker=ticker,
-            name=general.get("Name", ticker),
-            exchange=exchange,
-            sector=general.get("Sector"),
-            industry=general.get("Industry"),
-            market_cap=highlights.get("MarketCapitalization"),
-            country=general.get("CountryISO"),
-            currency=general.get("CurrencyCode"),
-            pe_ratio=highlights.get("PERatio"),
-            eps=highlights.get("EarningsShare"),
-            last_updated=datetime.now(),
-        )
+        # Handle both EODHD original format (nested) and data server format (flat)
+        if "General" in data:
+            # Original EODHD format
+            general = data.get("General", {})
+            highlights = data.get("Highlights", {})
+            return CompanyInfo(
+                ticker=ticker,
+                name=general.get("Name", ticker),
+                exchange=exchange,
+                sector=general.get("Sector"),
+                industry=general.get("Industry"),
+                market_cap=highlights.get("MarketCapitalization"),
+                country=general.get("CountryISO"),
+                currency=general.get("CurrencyCode"),
+                pe_ratio=highlights.get("PERatio"),
+                eps=highlights.get("EarningsShare"),
+                last_updated=datetime.now(),
+            )
+        else:
+            # Data server simplified format
+            return CompanyInfo(
+                ticker=ticker,
+                name=data.get("name", ticker),
+                exchange=exchange,
+                sector=data.get("sector"),
+                industry=data.get("industry"),
+                market_cap=data.get("market_cap"),
+                country=data.get("country"),
+                currency=data.get("currency"),
+                pe_ratio=data.get("pe_ratio"),
+                eps=data.get("eps"),
+                last_updated=datetime.now(),
+            )
 
     def get_fundamentals(self, ticker: str, exchange: str) -> Dict[str, Any]:
         """Fetch fundamental data from EODHD."""

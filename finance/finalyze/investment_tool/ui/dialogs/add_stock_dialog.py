@@ -118,11 +118,13 @@ class AddStockDialog(QDialog):
     def __init__(
         self,
         data_manager: Optional[DataManager] = None,
-        parent: Optional[QWidget] = None
+        parent: Optional[QWidget] = None,
+        require_category: bool = True,
     ):
         super().__init__(parent)
         self.data_manager = data_manager
         self.category_manager = get_category_manager()
+        self._require_category = require_category
         self._search_timer = QTimer()
         self._search_timer.setSingleShot(True)
         self._search_timer.timeout.connect(self._perform_search)
@@ -341,11 +343,13 @@ class AddStockDialog(QDialog):
         options_layout.addWidget(cat_label)
 
         self.category_combo = QComboBox()
-        # Add "(None)" option first to allow uncategorized stocks
-        self.category_combo.addItem("(None)", None)
+        # Add placeholder to prompt user to select a category
+        self.category_combo.addItem("-- Select Category --", None)
         categories = self.category_manager.get_all_categories()
         for category in categories:
-            self.category_combo.addItem(category.name, category.id)
+            # Filter out "Uncategorized" - stocks must be assigned to a proper category
+            if category.name != "Uncategorized":
+                self.category_combo.addItem(category.name, category.id)
         self.category_combo.setMinimumWidth(180)
         options_layout.addWidget(self.category_combo)
 
@@ -505,21 +509,15 @@ class AddStockDialog(QDialog):
         category_id = self.category_combo.currentData()
         logger.info(f"Selected category_id: {category_id}")
 
-        if not category_id:
-            # No category selected - find or create "Uncategorized" category
-            uncategorized = self.category_manager.get_category_by_name("Uncategorized")
-            if uncategorized:
-                category_id = uncategorized.id
-                logger.info(f"Using existing Uncategorized category (id={category_id})")
-            else:
-                # Create "Uncategorized" category
-                uncategorized = self.category_manager.add_category(
-                    name="Uncategorized",
-                    color="#6B7280",  # Gray color
-                    description="Stocks not assigned to a specific category"
-                )
-                category_id = uncategorized.id
-                logger.info(f"Created Uncategorized category (id={category_id})")
+        if not category_id and self._require_category:
+            # No category selected - require user to choose one
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Category Required",
+                "Please select a category for this stock."
+            )
+            return
 
         if category_id:
             added = self.category_manager.add_stock_to_category(category_id, ticker, exchange)

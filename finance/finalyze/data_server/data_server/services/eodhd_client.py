@@ -11,6 +11,25 @@ from data_server.config import get_settings
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# File logger for EODHD requests - can be watched with tail -f
+# Mounted volume: ./logs:/tmp/logs in docker-compose.yml
+EODHD_LOG_FILE = "/tmp/logs/eodhd_requests.log"
+
+def _log_eodhd_request(endpoint: str, params: dict, response_size: int = 0, error: str = None):
+    """Log EODHD request to file for monitoring."""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # Mask API key in params
+    safe_params = {k: v for k, v in params.items() if k != "api_token"}
+    if error:
+        line = f"[{timestamp}] ERROR {endpoint} params={safe_params} error={error}\n"
+    else:
+        line = f"[{timestamp}] OK {endpoint} params={safe_params} response_size={response_size}\n"
+    try:
+        with open(EODHD_LOG_FILE, "a") as f:
+            f.write(line)
+    except Exception:
+        pass  # Don't fail if logging fails
+
 
 class EODHDClient:
     """Client for EODHD API."""
@@ -44,12 +63,18 @@ class EODHDClient:
         try:
             response = await self.client.get(url, params=params)
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+            # Log successful request
+            response_size = len(data) if isinstance(data, list) else 1
+            _log_eodhd_request(endpoint, params, response_size=response_size)
+            return data
         except httpx.HTTPStatusError as e:
             logger.error(f"EODHD HTTP error: {e.response.status_code} - {e.response.text}")
+            _log_eodhd_request(endpoint, params, error=f"HTTP {e.response.status_code}")
             raise
         except Exception as e:
             logger.error(f"EODHD request error: {e}")
+            _log_eodhd_request(endpoint, params, error=str(e))
             raise
 
     # Daily Prices

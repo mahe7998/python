@@ -372,25 +372,35 @@ def is_market_open(exchange: str = "US") -> bool:
     """
     Check if market is currently open (simplified).
 
+    Uses UTC to work correctly regardless of user's local timezone.
+    US market hours: 9:30 AM - 4:00 PM ET = 14:30 - 21:00 UTC (EST)
+
     Args:
         exchange: Exchange code
 
     Returns:
         True if market is likely open
     """
-    now = datetime.now()
+    now_utc = datetime.now(timezone.utc)
 
-    if now.weekday() >= 5:
+    # Check weekday in ET (UTC-5 for EST)
+    # Subtract 5 hours to get approximate ET day
+    et_offset = timedelta(hours=5)
+    now_et = now_utc - et_offset
+
+    if now_et.weekday() >= 5:  # Saturday or Sunday in ET
         return False
 
     if exchange == "US":
-        market_open = now.replace(hour=9, minute=30, second=0)
-        market_close = now.replace(hour=16, minute=0, second=0)
+        # US market: 9:30 AM - 4:00 PM ET = 14:30 - 21:00 UTC
+        market_open_utc = now_utc.replace(hour=14, minute=30, second=0, microsecond=0)
+        market_close_utc = now_utc.replace(hour=21, minute=0, second=0, microsecond=0)
     else:
-        market_open = now.replace(hour=9, minute=0, second=0)
-        market_close = now.replace(hour=17, minute=30, second=0)
+        # Default: assume similar hours
+        market_open_utc = now_utc.replace(hour=14, minute=0, second=0, microsecond=0)
+        market_close_utc = now_utc.replace(hour=22, minute=30, second=0, microsecond=0)
 
-    return market_open <= now <= market_close
+    return market_open_utc <= now_utc <= market_close_utc
 
 
 def truncate_text(text: str, max_length: int, suffix: str = "...") -> str:

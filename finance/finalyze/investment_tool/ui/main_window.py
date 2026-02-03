@@ -313,6 +313,7 @@ class MainWindow(QMainWindow):
         self.watchlist_widget = WatchlistWidget()
         self.watchlist_widget.stock_selected.connect(self._on_stock_selected)
         self.watchlist_widget.stock_double_clicked.connect(self._on_stock_double_clicked)
+        self.watchlist_widget.stock_added.connect(self._on_stock_added)
         self.bottom_tabs.addTab(self.watchlist_widget, "Watchlist")
 
         # News feed tab
@@ -434,7 +435,9 @@ class MainWindow(QMainWindow):
             logger.warning(f"Error checking EODHD availability: {e}")
 
     def _refresh_live_prices(self) -> None:
-        """Refresh live prices if 1D period is selected."""
+        """Refresh live prices if 1D period is selected and market is open."""
+        from investment_tool.utils.helpers import is_market_open
+
         if not self.data_manager:
             return
 
@@ -443,9 +446,10 @@ class MainWindow(QMainWindow):
         if period != "1D":
             return
 
-        # Note: We don't check is_market_open() because it uses local time
-        # which doesn't work for users outside US timezone. The data server
-        # handles whether there's fresh data available.
+        # Skip refresh when market is closed to avoid unnecessary API calls
+        if not is_market_open("US"):
+            logger.info("Market closed, skipping live price refresh")
+            return
 
         logger.info("Auto-refreshing live prices (every 15s)")
         # Reload treemap with live prices

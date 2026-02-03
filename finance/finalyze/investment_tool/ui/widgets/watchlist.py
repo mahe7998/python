@@ -26,12 +26,13 @@ from PySide6.QtCore import QAbstractTableModel
 from investment_tool.ui.dialogs.add_stock_dialog import AddStockDialog
 from investment_tool.data.models import Watchlist, WatchlistItem
 from investment_tool.utils.helpers import format_percent, format_large_number, is_intraday_period, get_date_range, get_last_trading_day_hours
+from investment_tool.config.categories import get_category_manager
 
 
 class WatchlistTableModel(QAbstractTableModel):
     """Table model for watchlist data."""
 
-    COLUMNS = ["Ticker", "Open", "Price", "Change", "Change %", "P/E", "Volume"]
+    COLUMNS = ["Ticker", "Prev Close", "Open", "Price", "Change", "Change %", "P/E", "Volume", "Mkt Cap"]
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -60,32 +61,38 @@ class WatchlistTableModel(QAbstractTableModel):
         if role == Qt.DisplayRole:
             if col == 0:  # Ticker
                 return row_data.get("ticker", "")
-            elif col == 1:  # Open
+            elif col == 1:  # Prev Close
+                prev_close = row_data.get("prev_close")
+                return f"${prev_close:.2f}" if prev_close else "--"
+            elif col == 2:  # Open
                 open_price = row_data.get("open")
                 return f"${open_price:.2f}" if open_price else "--"
-            elif col == 2:  # Price (current/close)
+            elif col == 3:  # Price (current/close)
                 price = row_data.get("price")
                 return f"${price:.2f}" if price else "--"
-            elif col == 3:  # Change
+            elif col == 4:  # Change
                 change = row_data.get("change")
                 if change is not None:
                     sign = "+" if change >= 0 else ""
                     return f"{sign}{change:.2f}"
                 return "--"
-            elif col == 4:  # Change %
+            elif col == 5:  # Change %
                 change_pct = row_data.get("change_percent")
                 if change_pct is not None:
                     return format_percent(change_pct)
                 return "--"
-            elif col == 5:  # P/E
+            elif col == 6:  # P/E
                 pe = row_data.get("pe_ratio")
                 return f"{pe:.2f}" if pe else "--"
-            elif col == 6:  # Volume
+            elif col == 7:  # Volume
                 volume = row_data.get("volume")
                 return format_large_number(volume) if volume else "--"
+            elif col == 8:  # Market Cap
+                market_cap = row_data.get("market_cap")
+                return format_large_number(market_cap) if market_cap else "--"
 
         elif role == Qt.ForegroundRole:
-            if col in [3, 4]:  # Change columns
+            if col in [4, 5]:  # Change columns
                 change = row_data.get("change_percent")
                 if change is not None:
                     if change > 0:
@@ -137,6 +144,7 @@ class WatchlistWidget(QWidget):
 
     stock_selected = Signal(str, str)  # ticker, exchange
     stock_double_clicked = Signal(str, str)
+    stock_added = Signal(str, str)  # ticker, exchange - emitted when stock added to watchlist
 
     def __init__(
         self,
@@ -297,12 +305,14 @@ class WatchlistWidget(QWidget):
             row = {
                 "ticker": item.ticker,
                 "exchange": "US",
+                "prev_close": None,
                 "open": None,
                 "price": None,
                 "change": None,
                 "change_percent": None,
                 "pe_ratio": None,
                 "volume": None,
+                "market_cap": None,
                 "notes": item.notes,
             }
 
@@ -317,13 +327,18 @@ class WatchlistWidget(QWidget):
                         market_open, market_close = get_last_trading_day_hours("US")
                         now_utc = datetime.now(timezone.utc)
 
-                        if market_open.date() == now_utc.date() and market_open <= now_utc <= market_close:
+                        # Check if market is currently open
+                        market_is_open = market_open.date() == now_utc.date() and market_open <= now_utc <= market_close
+                        if market_is_open:
                             end_dt = now_utc
                         else:
                             end_dt = market_close
 
+                        # Use cached data - data server handles caching efficiently
+                        # No need for force_refresh when market is closed
                         intraday = self.data_manager.get_intraday_prices(
-                            item.ticker, "US", "5m", market_open, end_dt, use_cache=True
+                            item.ticker, "US", "5m", market_open, end_dt,
+                            use_cache=True, force_refresh=False
                         )
                         logger.info(f"Got intraday prices for {item.ticker}: {len(intraday) if intraday is not None else 'None'}")
 
@@ -335,33 +350,57 @@ class WatchlistWidget(QWidget):
                         )
 
                         if intraday is not None and len(intraday) >= 1:
-                            # Get today's open from first intraday bar
-                            first_bar = intraday.iloc[0]
-                            row["open"] = first_bar.get("open") or first_bar.get("Open")
+                            close_col = "close" if "close" in intraday.columns else "Close"
 
-                            # Get current price from last intraday bar
-                            latest = intraday.iloc[-1]
-                            row["price"] = latest.get("close") or latest.get("Close")
+                            # Data is sorted descending (newest first), so iloc[0] is the latest
+                            valid_close_bars = intraday[intraday[close_col].notna()]
+                            if len(valid_close_bars) > 0:
+                                latest = valid_close_bars.iloc[0]  # First row is newest (market close)
+                                row["price"] = latest[close_col]
+
                             row["volume"] = intraday["volume"].sum() if "volume" in intraday.columns else None
 
-                            # Get the trading day from intraday data
-                            if hasattr(intraday.index, 'date'):
+                            # Get the trading day from intraday data (use timestamp column)
+                            # Data is sorted descending, so iloc[0] is newest
+                            if "timestamp" in intraday.columns:
+                                trading_day = intraday["timestamp"].iloc[0].date() if hasattr(intraday["timestamp"].iloc[0], 'date') else market_open.date()
+                            elif hasattr(intraday.index, 'date'):
                                 trading_day = intraday.index[0].date() if hasattr(intraday.index[0], 'date') else intraday.index[0]
                             else:
                                 trading_day = market_open.date()
 
-                            # Find previous day's close from daily data
+                            # Get open and previous close from daily data (more reliable than intraday)
+                            # Daily data may be sorted newest-first
                             if daily_prices is not None and len(daily_prices) >= 1:
-                                # Filter to days before the trading day
-                                for i in range(len(daily_prices) - 1, -1, -1):
+                                # Find today's open and previous day's close
+                                for i in range(len(daily_prices)):
                                     idx = daily_prices.index[i]
                                     day_date = idx.date() if hasattr(idx, 'date') else idx
-                                    if day_date < trading_day:
+                                    if day_date == trading_day:
+                                        # Today's data - get the open
+                                        row["open"] = daily_prices.iloc[i].get("open") or daily_prices.iloc[i].get("Open")
+                                    elif day_date < trading_day:
+                                        # Previous trading day - get the close
                                         prev_close = daily_prices.iloc[i].get("close") or daily_prices.iloc[i].get("Close")
-                                        row["change"] = row["price"] - prev_close
-                                        row["change_percent"] = row["change"] / prev_close
-                                        logger.info(f"{item.ticker}: prev_close={prev_close:.2f} ({day_date}), price={row['price']:.2f}, change={row['change_percent']*100:.2f}%")
+                                        row["prev_close"] = prev_close
+                                        if prev_close is not None and row["price"] is not None:
+                                            row["change"] = row["price"] - prev_close
+                                            row["change_percent"] = row["change"] / prev_close
                                         break
+
+                            # Fallback to live prices if daily data is missing open/prev_close
+                            if row["open"] is None or row["prev_close"] is None:
+                                live = self.data_manager.get_live_price(item.ticker, "US")
+                                logger.debug(f"Live price fallback for {item.ticker}: {live}")
+                                if live:
+                                    if row["open"] is None:
+                                        row["open"] = live.get("open")
+                                    if row["prev_close"] is None:
+                                        # get_live_price returns "previous_close" (snake_case)
+                                        row["prev_close"] = live.get("previous_close")
+                                        if row["prev_close"] and row["price"]:
+                                            row["change"] = row["price"] - row["prev_close"]
+                                            row["change_percent"] = row["change"] / row["prev_close"]
                         elif daily_prices is not None and len(daily_prices) >= 2:
                             # Fallback to daily data
                             latest = daily_prices.iloc[-1]
@@ -370,9 +409,28 @@ class WatchlistWidget(QWidget):
                             row["price"] = latest.get("close") or latest.get("Close")
                             row["volume"] = latest.get("volume") or latest.get("Volume")
                             prev_close = prev.get("close") or prev.get("Close")
+                            row["prev_close"] = prev_close
                             if prev_close and row["price"]:
                                 row["change"] = row["price"] - prev_close
                                 row["change_percent"] = row["change"] / prev_close
+
+                        # Final fallback to live prices if still missing data
+                        if row["price"] is None or row["open"] is None or row["prev_close"] is None:
+                            live = self.data_manager.get_live_price(item.ticker, "US")
+                            logger.debug(f"Final live price fallback for {item.ticker}: {live}")
+                            if live:
+                                if row["price"] is None:
+                                    row["price"] = live.get("price")
+                                if row["open"] is None:
+                                    row["open"] = live.get("open")
+                                if row["prev_close"] is None:
+                                    row["prev_close"] = live.get("previous_close")
+                                if row["volume"] is None:
+                                    row["volume"] = live.get("volume")
+                                # Recalculate change if we now have the data
+                                if row["prev_close"] and row["price"] and row["change"] is None:
+                                    row["change"] = row["price"] - row["prev_close"]
+                                    row["change_percent"] = row["change"] / row["prev_close"]
                     else:
                         # For other periods, use daily data
                         start, end = get_date_range(self._current_period, min_trading_days=0)
@@ -394,10 +452,13 @@ class WatchlistWidget(QWidget):
                                 row["change"] = row["price"] - start_price
                                 row["change_percent"] = row["change"] / start_price
 
-                    # Get P/E ratio from company info
+                    # Get P/E ratio and market cap from company info
                     company = self.data_manager.get_company_info(item.ticker, "US")
-                    if company and company.pe_ratio:
-                        row["pe_ratio"] = company.pe_ratio
+                    if company:
+                        if company.pe_ratio:
+                            row["pe_ratio"] = company.pe_ratio
+                        if company.market_cap:
+                            row["market_cap"] = company.market_cap
                 except Exception as e:
                     logger.error(f"Error fetching prices for {item.ticker}: {e}")
                     import traceback
@@ -447,12 +508,15 @@ class WatchlistWidget(QWidget):
         if not self._current_watchlist_id or not self.data_manager:
             return
 
-        dialog = AddStockDialog(data_manager=self.data_manager, parent=self)
+        dialog = AddStockDialog(data_manager=self.data_manager, parent=self, require_category=False)
         if dialog.exec():
             ticker, exchange, _, _ = dialog.get_result()
             if ticker:
                 self.data_manager.add_to_watchlist(self._current_watchlist_id, ticker)
+                # Also add to Uncategorized category so it appears in All Stocks
+                self._add_to_uncategorized(ticker, exchange or "US")
                 self._refresh_current()
+                self.stock_added.emit(ticker, exchange or "US")
 
     def add_stock(self, ticker: str, exchange: str = "US") -> None:
         """Add a stock to the current watchlist programmatically."""
@@ -460,7 +524,36 @@ class WatchlistWidget(QWidget):
             return
 
         self.data_manager.add_to_watchlist(self._current_watchlist_id, ticker)
+        # Also add to Uncategorized category so it appears in All Stocks
+        self._add_to_uncategorized(ticker, exchange)
         self._refresh_current()
+        self.stock_added.emit(ticker, exchange)
+
+    def _add_to_uncategorized(self, ticker: str, exchange: str) -> None:
+        """Add stock to Uncategorized category if not already in any category."""
+        category_manager = get_category_manager()
+
+        # Check if stock is already in any category
+        existing_categories = category_manager.get_categories_for_stock(ticker, exchange)
+        if existing_categories:
+            return  # Already categorized
+
+        # Find or create Uncategorized category
+        uncategorized = category_manager.get_category_by_name("Uncategorized")
+        if uncategorized is None:
+            # Create Uncategorized category with gray color
+            uncategorized = category_manager.add_category(
+                name="Uncategorized",
+                color="#808080",
+                description="Stocks not assigned to any category"
+            )
+
+        # Add stock to Uncategorized
+        category_manager.add_stock_to_category(uncategorized.id, ticker, exchange)
+
+        # Save categories
+        from investment_tool.config.categories import USER_CATEGORIES_FILE
+        category_manager.save_to_file(USER_CATEGORIES_FILE)
 
     def _on_close_tab(self, index: int) -> None:
         """Handle tab close request."""

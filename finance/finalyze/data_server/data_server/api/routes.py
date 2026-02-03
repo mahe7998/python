@@ -65,37 +65,55 @@ async def get_eod_prices(
         from_date = datetime.fromisoformat(from_) if from_ else None
         to_date = datetime.fromisoformat(to) if to else None
         cached_data = await cache.get_daily_prices(session, symbol, from_date, to_date)
-        if cached_data:
+        # Return cached data even if empty list (empty means no data exists for this symbol)
+        if cached_data is not None:
             total_time = (time.time() - start_time) * 1000
             log_timing(endpoint, True, cache_time, 0, total_time)
             return cached_data
 
-    # Fetch from EODHD
-    eodhd_start = time.time()
-    client = await get_eodhd_client()
-    try:
-        data = await client.get_eod(symbol, from_, to, period)
-    except Exception as e:
-        logger.error(f"EODHD error: {e}")
-        raise HTTPException(status_code=502, detail=f"Error fetching from EODHD API: {e}")
-    eodhd_time = (time.time() - eodhd_start) * 1000
+    # Use lock to prevent concurrent fetches for the same data
+    fetch_lock = await get_fetch_lock(cache_key)
+    async with fetch_lock:
+        # Expire session cache to see changes from other transactions
+        session.expire_all()
 
-    # Store in cache
-    count = await cache.store_daily_prices(session, symbol, data)
-    await cache.update_cache_metadata(
-        session,
-        cache_key,
-        "daily_prices",
-        symbol.split(".")[0],
-        settings.cache_daily_prices,
-        count,
-    )
-    await session.commit()
+        # Double-check cache after acquiring lock (another request may have populated it)
+        is_valid = await cache.is_cache_valid(session, cache_key, settings.cache_daily_prices)
+        if is_valid:
+            from_date = datetime.fromisoformat(from_) if from_ else None
+            to_date = datetime.fromisoformat(to) if to else None
+            cached_data = await cache.get_daily_prices(session, symbol, from_date, to_date)
+            if cached_data is not None:  # Note: check for None, not truthiness (empty list is valid)
+                total_time = (time.time() - start_time) * 1000
+                logger.info(f"[CACHE HIT after lock] {endpoint}")
+                return cached_data
 
-    total_time = (time.time() - start_time) * 1000
-    log_timing(endpoint, False, cache_time, eodhd_time, total_time)
+        # Fetch from EODHD
+        eodhd_start = time.time()
+        client = await get_eodhd_client()
+        try:
+            data = await client.get_eod(symbol, from_, to, period)
+        except Exception as e:
+            logger.error(f"EODHD error: {e}")
+            raise HTTPException(status_code=502, detail=f"Error fetching from EODHD API: {e}")
+        eodhd_time = (time.time() - eodhd_start) * 1000
 
-    return data
+        # Store in cache (even if empty, to avoid repeated fetches for missing data)
+        count = await cache.store_daily_prices(session, symbol, data)
+        await cache.update_cache_metadata(
+            session,
+            cache_key,
+            "daily_prices",
+            symbol.split(".")[0],
+            settings.cache_daily_prices,
+            count,
+        )
+        await session.commit()
+
+        total_time = (time.time() - start_time) * 1000
+        log_timing(endpoint, False, cache_time, eodhd_time, total_time)
+
+        return data
 
 
 @router.get("/intraday/{symbol}")
@@ -136,8 +154,8 @@ async def get_intraday_prices(
     # Initialize cache_time for logging
     cache_time = 0
 
-    # If force_eodhd is set, skip cached data and fetch directly from EODHD
-    # This is useful when market is closed to get proper OHLC bars instead of price worker snapshots
+    # If force_eodhd is set, always fetch from EODHD to get fresh data
+    # This is used for startup checks and chart loading where we need latest OHLC bars
     if force_eodhd:
         logger.info(f"force_eodhd=true, fetching from EODHD API for {symbol}")
     else:

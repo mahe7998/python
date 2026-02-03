@@ -196,9 +196,10 @@ class MarketTreemap(QWidget):
         self.filter_combo.addItem("Mid Cap ($20B-$200B)")
         self.filter_combo.addItem("Small Cap ($2B-$20B)")
         self.filter_combo.addItem("Tiny Stocks (<$2B)")
-        # Add sector/category filters
+        # Add sector/category filters (exclude "Uncategorized" - those stocks show in All Stocks)
         for cat in categories:
-            self.filter_combo.addItem(cat)
+            if cat != "Uncategorized":
+                self.filter_combo.addItem(cat)
 
         # Restore selection if possible
         idx = self.filter_combo.findText(current)
