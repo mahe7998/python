@@ -237,7 +237,7 @@ def get_date_range(period: str, min_trading_days: int = 50) -> Tuple[date, date]
         min_calendar_days = 0
 
     period_map = {
-        "1D": timedelta(days=max(7, min_calendar_days)),  # At least 7 days for daily comparison
+        "1D": timedelta(days=3),  # 3 calendar days for 1D change (prev close to current close)
         "1W": timedelta(days=max(7, min_calendar_days)),
         "1M": timedelta(days=max(30, min_calendar_days)),
         "3M": timedelta(days=max(90, min_calendar_days)),

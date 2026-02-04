@@ -695,7 +695,8 @@ async def get_batch_daily_changes(
                 if data and len(data) > 0:
                     await cache.store_daily_prices(session, symbol, data)
                     # Data is ordered by date ASC from EODHD
-                    start_price = data[0].get("close")
+                    # Use adjusted_close for start price to account for stock splits
+                    start_price = data[0].get("adjusted_close") or data[0].get("close")
                     end_price = data[-1].get("close")
 
                     if start_price is not None and end_price is not None and start_price != 0:

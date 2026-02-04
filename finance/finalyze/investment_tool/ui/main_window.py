@@ -600,28 +600,9 @@ class MainWindow(QMainWindow):
         if stock_refs_by_symbol:
             symbols = list(stock_refs_by_symbol.keys())
 
-            if selected_period == "1D":
-                # Use live prices from data server for 1D
-                live_prices = self.data_manager.get_all_live_prices()
-                if live_prices:
-                    for symbol in symbols:
-                        if symbol in live_prices:
-                            lp = live_prices[symbol]
-                            # change_percent from EODHD is in % format (e.g., 0.1977 = 0.1977%)
-                            # Treemap expects decimal (e.g., 0.001977 for 0.1977%)
-                            change_pct = lp.get("change_percent")
-                            if change_pct is not None:
-                                batch_changes[symbol] = {
-                                    "end_price": lp.get("price"),
-                                    "change": change_pct / 100,  # Convert from % to decimal
-                                }
-                    logger.info(f"Live prices returned {len(batch_changes)}/{len(symbols)} for period=1D")
-                    # Show today's date in status bar
-                    today_str = date.today().strftime("%b %d, %Y")
-                    self.status_bar.showMessage(f"Showing live prices for {today_str}", 5000)
-
-            # Fallback to batch API if no live prices or not 1D
-            if not batch_changes:
+            # Always use batch API for consistent calculation across all periods
+            # Live prices may have stale previous_close values
+            if True:
                 batch_changes = self.data_manager.get_batch_daily_changes(
                     symbols,
                     start.date() if hasattr(start, 'date') else start,

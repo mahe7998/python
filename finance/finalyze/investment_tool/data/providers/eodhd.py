@@ -428,7 +428,12 @@ class EODHDProvider(DataProviderBase):
             for item in data:
                 ticker = item.get("ticker", "")
                 exchange = item.get("exchange", "US")
-                symbol = f"{ticker}.{exchange}"
+                # Ticker may already include exchange suffix (e.g., "NVDA.US")
+                # Only append exchange if ticker doesn't already have it
+                if "." in ticker:
+                    symbol = ticker
+                else:
+                    symbol = f"{ticker}.{exchange}"
                 result[symbol] = {
                     "price": item.get("price"),
                     "change": item.get("change"),
