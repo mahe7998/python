@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from data_server.config import get_settings
@@ -225,9 +226,11 @@ async def get_intraday_prices(
     cache_time = (time.time() - cache_start) * 1000
 
     # Determine if we should try EODHD:
-    # 1. force_eodhd=true explicitly requested
+    # 1. force_eodhd=true explicitly requested (but NOT for today's data during market hours - EODHD won't have it)
     # 2. Market is closed AND data is from 'live' source (not yet replaced with EODHD)
-    should_try_eodhd = force_eodhd or (not market_open and cached_source == "live" and not is_today)
+    # Note: EODHD doesn't provide intraday data during market hours, only after market close
+    force_eodhd_effective = force_eodhd and not (is_today and market_open)
+    should_try_eodhd = force_eodhd_effective or (not market_open and cached_source == "live" and not is_today)
 
     if not should_try_eodhd:
         # Return cached data if available
@@ -391,6 +394,27 @@ async def get_all_live_prices(
     ]
 
 
+async def _enrich_with_live_market_cap(session: AsyncSession, symbol: str, company: dict) -> dict:
+    """Calculate market cap dynamically using shares_outstanding × current_price."""
+    shares = company.get("shares_outstanding")
+    if not shares:
+        return company  # Can't calculate without shares
+
+    # Get live price
+    from data_server.db.models import LivePrice
+    result = await session.execute(
+        select(LivePrice).where(LivePrice.ticker == symbol)
+    )
+    live_price = result.scalar_one_or_none()
+
+    if live_price and live_price.price:
+        # Calculate dynamic market cap
+        company = dict(company)  # Make a copy
+        company["market_cap"] = int(shares * float(live_price.price))
+
+    return company
+
+
 @router.get("/fundamentals/{symbol}")
 async def get_fundamentals(
     symbol: str,
@@ -411,6 +435,8 @@ async def get_fundamentals(
     if is_valid:
         company = await cache.get_company(session, symbol.split(".")[0])
         if company:
+            # Calculate market cap dynamically using live price
+            company = await _enrich_with_live_market_cap(session, symbol, company)
             total_time = (time.time() - start_time) * 1000
             log_timing(endpoint, True, cache_time, 0, total_time)
             return company
@@ -429,6 +455,7 @@ async def get_fundamentals(
     if data:
         general = data.get("General", {})
         highlights = data.get("Highlights", {})
+        shares_stats = data.get("SharesStats", {})
         company_data = {
             "ticker": symbol.split(".")[0],
             "name": general.get("Name"),
@@ -436,6 +463,7 @@ async def get_fundamentals(
             "sector": general.get("Sector"),
             "industry": general.get("Industry"),
             "market_cap": highlights.get("MarketCapitalization"),
+            "shares_outstanding": shares_stats.get("SharesOutstanding"),
             "pe_ratio": highlights.get("PERatio"),
             "eps": highlights.get("EarningsShare"),
         }
@@ -450,10 +478,14 @@ async def get_fundamentals(
         )
         await session.commit()
 
+        # Enrich with dynamic market cap before returning
+        company_data = await _enrich_with_live_market_cap(session, symbol, company_data)
+
     total_time = (time.time() - start_time) * 1000
     log_timing(endpoint, False, cache_time, eodhd_time, total_time)
 
-    return data
+    # Return enriched company data (not raw EODHD response)
+    return company_data if data else data
 
 
 @router.get("/news")

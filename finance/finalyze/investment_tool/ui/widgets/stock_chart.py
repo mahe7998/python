@@ -673,8 +673,12 @@ class StockChart(QWidget):
                     'high': 'max',
                     'low': 'min',
                     'close': 'last',
-                    'volume': 'sum'
+                    'volume': 'last'  # EODHD intraday volume is cumulative
                 })
+                # Convert cumulative volume to per-period volume
+                if 'volume' in display_data.columns:
+                    display_data['volume'] = display_data['volume'].diff().fillna(display_data['volume'].iloc[0] if len(display_data) > 0 else 0)
+                    display_data['volume'] = display_data['volume'].clip(lower=0)  # No negative volumes
                 # Don't dropna() - keep full day index with NaN for future times
                 # Remove outlier volume bars (e.g., closing auction totals) only for valid data
                 valid_data = display_data.dropna()
@@ -693,8 +697,12 @@ class StockChart(QWidget):
                     'high': 'max',
                     'low': 'min',
                     'close': 'last',
-                    'volume': 'sum'
+                    'volume': 'last'  # EODHD intraday volume is cumulative
                 })
+                # Convert cumulative volume to per-period volume
+                if 'volume' in display_data.columns:
+                    display_data['volume'] = display_data['volume'].diff().fillna(display_data['volume'].iloc[0] if len(display_data) > 0 else 0)
+                    display_data['volume'] = display_data['volume'].clip(lower=0)  # No negative volumes
                 # Don't dropna() - keep full day index with NaN for future times
                 valid_data = display_data.dropna()
                 if not valid_data.empty:

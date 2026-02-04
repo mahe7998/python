@@ -595,14 +595,30 @@ class MainWindow(QMainWindow):
                     seen_tickers.add(ticker_key)
                 stock_refs_by_symbol[ticker_key] = (stock_ref, category)
 
-        # Use live prices for 1D, batch API for other periods
+        # Use live prices for 1D when market is open, batch API otherwise
         batch_changes = {}
         if stock_refs_by_symbol:
             symbols = list(stock_refs_by_symbol.keys())
 
-            # Always use batch API for consistent calculation across all periods
-            # Live prices may have stale previous_close values
-            if True:
+            # For 1D when market is open, use live prices for real-time data
+            if selected_period == "1D" and is_market_open("US"):
+                live_prices = self.data_manager.get_all_live_prices()
+                if live_prices:
+                    for symbol in symbols:
+                        if symbol in live_prices:
+                            lp = live_prices[symbol]
+                            price = lp.get("price")
+                            prev_close = lp.get("previous_close")
+                            if price and prev_close and prev_close != 0:
+                                change = (price - prev_close) / prev_close
+                                batch_changes[symbol] = {
+                                    "end_price": price,
+                                    "change": change,
+                                }
+                    logger.info(f"Live prices returned {len(batch_changes)}/{len(symbols)} for period=1D (market open)")
+
+            # Fallback to batch API if no live prices or market closed or not 1D
+            if not batch_changes:
                 batch_changes = self.data_manager.get_batch_daily_changes(
                     symbols,
                     start.date() if hasattr(start, 'date') else start,
@@ -929,7 +945,18 @@ class MainWindow(QMainWindow):
                     if raw_prices is not None and not raw_prices.empty:
                         if "timestamp" in raw_prices.columns:
                             raw_prices = raw_prices.set_index("timestamp")
-                        prices = raw_prices
+
+                        # Reindex to full trading day and forward-fill gaps
+                        # This ensures bars connect (open of bar N = close of bar N-1)
+                        prices = raw_prices.reindex(full_day_index)
+
+                        # Forward-fill close price first
+                        prices["close"] = prices["close"].ffill()
+                        # For filled bars, set open=high=low=close (no movement)
+                        prices["open"] = prices["open"].fillna(prices["close"])
+                        prices["high"] = prices["high"].fillna(prices["close"])
+                        prices["low"] = prices["low"].fillna(prices["close"])
+
                         if "volume" in prices.columns:
                             prices["volume"] = prices["volume"].fillna(0)
                         if display_date != current_date_et:
@@ -941,13 +968,15 @@ class MainWindow(QMainWindow):
                         logger.warning(f"No EODHD intraday data found for {ticker} in last 5 trading days")
                         prices = None
                 else:
-                    # Market open - use real-time snapshots from data server
+                    # Market open - fetch EODHD data for proper OHLC candlesticks
+                    # Price worker stores O=H=L=C=price, so wicks wouldn't show
                     try:
                         raw_prices = self.data_manager.get_intraday_prices(
                             ticker, exchange, "1m",
                             market_open_utc.replace(tzinfo=timezone.utc),
                             market_close_utc.replace(tzinfo=timezone.utc),
-                            use_cache=True
+                            use_cache=True,
+                            force_refresh=True,  # Get EODHD data for proper OHLC
                         )
                     except Exception as e:
                         logger.warning(f"Failed to get intraday prices: {e}")
@@ -979,10 +1008,17 @@ class MainWindow(QMainWindow):
                         # Reindex to full trading day
                         prices = raw_prices.reindex(full_day_index)
 
-                        # Forward-fill values only up to current time
+                        # Forward-fill gaps up to current time
+                        # For filled bars: open=high=low=close=previous_close (no movement)
                         current_minute = pd.Timestamp(now_utc).floor("min")
                         mask_past = prices.index <= current_minute
-                        prices.loc[mask_past] = prices.loc[mask_past].ffill()
+
+                        # Forward-fill close price first
+                        prices.loc[mask_past, "close"] = prices.loc[mask_past, "close"].ffill()
+                        # For filled bars, set open=high=low=close (no movement)
+                        prices.loc[mask_past, "open"] = prices.loc[mask_past, "open"].fillna(prices.loc[mask_past, "close"])
+                        prices.loc[mask_past, "high"] = prices.loc[mask_past, "high"].fillna(prices.loc[mask_past, "close"])
+                        prices.loc[mask_past, "low"] = prices.loc[mask_past, "low"].fillna(prices.loc[mask_past, "close"])
 
                         # Fill volume NaN with 0 for filled periods
                         if "volume" in prices.columns:
@@ -1053,13 +1089,18 @@ class MainWindow(QMainWindow):
                         prices = prices.set_index("timestamp")
                     prices = prices.sort_index()
                     # Resample to 15-minute OHLC for smooth graph
+                    # EODHD intraday volume is cumulative, so use 'last' then diff()
                     prices = prices.resample("15min").agg({
                         "open": "first",
                         "high": "max",
                         "low": "min",
                         "close": "last",
-                        "volume": "sum"
+                        "volume": "last"
                     }).dropna()
+                    # Convert cumulative volume to per-period volume
+                    if "volume" in prices.columns and len(prices) > 0:
+                        prices["volume"] = prices["volume"].diff().fillna(prices["volume"].iloc[0])
+                        prices["volume"] = prices["volume"].clip(lower=0)
                     if "volume" in prices.columns:
                         prices["volume"] = prices["volume"].fillna(0)
                     logger.info(f"Got {len(prices)} 15-min records for {ticker} (1W)")
@@ -1231,7 +1272,7 @@ class MainWindow(QMainWindow):
                 self.metrics_group.setTitle(f"Key Metrics - {company_name}")
 
                 self.market_cap_label.setText(
-                    format_large_number(company.market_cap) if company.market_cap else "--"
+                    format_large_number(company.market_cap, decimals=2) if company.market_cap else "--"
                 )
                 # Display P/E ratio
                 if company.pe_ratio is not None:

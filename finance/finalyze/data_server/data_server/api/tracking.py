@@ -7,7 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel
-from sqlalchemy import select, delete, func
+from sqlalchemy import select, delete, func, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -124,12 +124,17 @@ async def add_tracked_stock(
     session: AsyncSession = Depends(get_session),
 ):
     """Add a stock to tracking and prefetch 5 years of historical data."""
-    # Strip exchange suffix if already included in ticker (e.g., "GOOGL.US" -> "GOOGL")
-    ticker = request.ticker.split(".")[0] if "." in request.ticker else request.ticker
+    # Extract exchange from ticker if present (e.g., "9988.HK" -> ticker="9988", exchange="HK")
+    ticker = request.ticker
+    exchange = request.exchange
+    if "." in ticker:
+        parts = ticker.split(".")
+        ticker = parts[0]
+        exchange = parts[1]  # Use exchange from ticker, overrides request exchange
 
     stmt = insert(TrackedStock).values(
         ticker=ticker,
-        exchange=request.exchange,
+        exchange=exchange,
         track_prices=request.track_prices,
         track_news=request.track_news,
         added_at=datetime.utcnow(),
@@ -137,7 +142,7 @@ async def add_tracked_stock(
     stmt = stmt.on_conflict_do_update(
         index_elements=["ticker"],
         set_={
-            "exchange": request.exchange,
+            "exchange": exchange,
             "track_prices": request.track_prices,
             "track_news": request.track_news,
         },
@@ -154,7 +159,7 @@ async def add_tracked_stock(
     logger.info(f"Added/updated tracked stock: {ticker}")
 
     # Prefetch historical data in background
-    symbol = f"{ticker}.{request.exchange}"
+    symbol = f"{ticker}.{exchange}"
     background_tasks.add_task(prefetch_historical_data, symbol)
 
     return TrackedStockResponse(
@@ -218,7 +223,9 @@ async def get_tracked_tickers(session: AsyncSession) -> list[str]:
             TrackedStock.track_prices == True
         )
     )
-    return [f"{row.ticker}.{row.exchange}" for row in result.all()]
+    # Build symbol as ticker.exchange, defaulting to US if exchange is NULL
+    # Strip any existing exchange suffix from ticker (defensive)
+    return [f"{row.ticker.split('.')[0]}.{row.exchange or 'US'}" for row in result.all()]
 
 
 async def get_tracked_tickers_for_news(session: AsyncSession) -> list[str]:
@@ -228,37 +235,38 @@ async def get_tracked_tickers_for_news(session: AsyncSession) -> list[str]:
             TrackedStock.track_news == True
         )
     )
-    return [f"{row.ticker}.{row.exchange}" for row in result.all()]
+    # Build symbol as ticker.exchange, defaulting to US if exchange is NULL
+    # Strip any existing exchange suffix from ticker (defensive)
+    return [f"{row.ticker.split('.')[0]}.{row.exchange or 'US'}" for row in result.all()]
 
 
 async def update_price_timestamp(session: AsyncSession, ticker: str):
-    """Update last price update timestamp for a ticker."""
-    await session.execute(
-        select(TrackedStock)
-        .where(TrackedStock.ticker == ticker)
-        .with_for_update()
-    )
-    stmt = insert(TrackedStock).values(
-        ticker=ticker,
-        last_price_update=datetime.utcnow(),
-    )
-    stmt = stmt.on_conflict_do_update(
-        index_elements=["ticker"],
-        set_={"last_price_update": datetime.utcnow()},
-    )
+    """Update last price update timestamp for a ticker.
+
+    Only updates existing tracked stocks - does not create new entries.
+    Ticker param may include exchange suffix (e.g., AAPL.US) - we strip it.
+    """
+    # Strip exchange suffix to match stored ticker format
+    clean_ticker = ticker.split(".")[0] if "." in ticker else ticker
+
+    stmt = update(TrackedStock).where(
+        TrackedStock.ticker == clean_ticker
+    ).values(last_price_update=datetime.utcnow())
     await session.execute(stmt)
 
 
 async def update_news_timestamp(session: AsyncSession, ticker: str):
-    """Update last news update timestamp for a ticker."""
-    stmt = insert(TrackedStock).values(
-        ticker=ticker,
-        last_news_update=datetime.utcnow(),
-    )
-    stmt = stmt.on_conflict_do_update(
-        index_elements=["ticker"],
-        set_={"last_news_update": datetime.utcnow()},
-    )
+    """Update last news update timestamp for a ticker.
+
+    Only updates existing tracked stocks - does not create new entries.
+    Ticker param may include exchange suffix (e.g., AAPL.US) - we strip it.
+    """
+    # Strip exchange suffix to match stored ticker format
+    clean_ticker = ticker.split(".")[0] if "." in ticker else ticker
+
+    stmt = update(TrackedStock).where(
+        TrackedStock.ticker == clean_ticker
+    ).values(last_news_update=datetime.utcnow())
     await session.execute(stmt)
 
 
@@ -283,6 +291,12 @@ async def sync_tracked_stocks(
 
         if not ticker:
             continue
+
+        # Extract exchange from ticker if present (e.g., "9988.HK" -> ticker="9988", exchange="HK")
+        if "." in ticker:
+            parts = ticker.split(".")
+            ticker = parts[0]
+            exchange = parts[1]  # Use exchange from ticker, overrides request exchange
 
         stmt = insert(TrackedStock).values(
             ticker=ticker,

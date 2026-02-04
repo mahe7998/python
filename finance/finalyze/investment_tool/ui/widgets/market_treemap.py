@@ -526,7 +526,7 @@ class TreemapCanvas(QWidget):
             if max_lines >= 3 and item.pe_ratio is not None:
                 info_lines.append(f"P/E: {item.pe_ratio:.1f}")
             if max_lines >= 4 and item.market_cap is not None:
-                info_lines.append(format_large_number(item.market_cap))
+                info_lines.append(format_large_number(item.market_cap, decimals=2))
 
             # Trim to max lines
             info_lines = info_lines[:max_lines]
@@ -590,7 +590,7 @@ class TreemapCanvas(QWidget):
                 {format_percent(item.change_percent, decimals=2)}
             </span><br/>
             <span style="color: #9CA3AF;">
-                Market Cap: {format_large_number(item.value)}
+                Market Cap: {format_large_number(item.value, decimals=2)}
             </span>
         </div>
         """

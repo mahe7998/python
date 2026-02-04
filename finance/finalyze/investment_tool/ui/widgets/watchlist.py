@@ -92,7 +92,7 @@ class WatchlistTableModel(QAbstractTableModel):
                 return format_large_number(volume) if volume else "--"
             elif col == 8:  # Market Cap
                 market_cap = row_data.get("market_cap")
-                return format_large_number(market_cap) if market_cap else "--"
+                return format_large_number(market_cap, decimals=2) if market_cap else "--"
 
         elif role == Qt.ForegroundRole:
             if col in [4, 5]:  # Change columns
@@ -415,7 +415,8 @@ class WatchlistWidget(QWidget):
                                 latest = valid_close_bars.iloc[-1]  # Last row is newest (market close)
                                 row["price"] = latest[close_col]
 
-                            row["volume"] = intraday["volume"].sum() if "volume" in intraday.columns else None
+                            # EODHD intraday volume is cumulative (running total), use last value
+                            row["volume"] = intraday["volume"].iloc[-1] if "volume" in intraday.columns else None
 
                             # Get the trading day from intraday data (use timestamp column)
                             # Data is sorted ascending, so iloc[-1] is newest

@@ -131,11 +131,36 @@ class EODHDClient:
 
     # Real-time Quote
     async def get_real_time(self, symbol: str) -> dict:
-        """Get real-time quote."""
-        # EODHD uses a different endpoint for real-time
-        params = {"s": symbol}
+        """Get real-time quote for a single symbol."""
         data = await self._request("real-time/" + symbol, {})
         return data if isinstance(data, dict) else {}
+
+    async def get_real_time_batch(self, symbols: list[str]) -> list[dict]:
+        """Get real-time quotes for multiple symbols in one request.
+
+        EODHD batch endpoint: /real-time/{first_symbol}?s=sym1,sym2,sym3
+        Returns a list of quotes, one per symbol.
+        """
+        if not symbols:
+            return []
+
+        if len(symbols) == 1:
+            # Single symbol - use regular endpoint
+            quote = await self.get_real_time(symbols[0])
+            return [quote] if quote else []
+
+        # Batch request - use first symbol in path, all symbols in 's' param
+        first_symbol = symbols[0]
+        params = {"s": ",".join(symbols)}
+        data = await self._request(f"real-time/{first_symbol}", params)
+
+        # EODHD returns a list for batch requests
+        if isinstance(data, list):
+            return data
+        elif isinstance(data, dict):
+            # Single result returned as dict
+            return [data]
+        return []
 
     # Fundamentals
     async def get_fundamentals(self, symbol: str) -> dict:

@@ -34,6 +34,9 @@ async def start_scheduler():
         max_instances=1,
     )
 
+    # NOTE: Delayed intraday worker removed - EODHD doesn't provide intraday data
+    # during market hours. We now use OHLC aggregation from live prices instead.
+
     # News worker - runs every 15 minutes, starting immediately on startup
     scheduler.add_job(
         update_news,
@@ -53,6 +56,17 @@ async def start_scheduler():
         trigger=CronTrigger(hour=hour + 5, minute=minute),  # Convert ET to UTC
         id="daily_worker",
         name="Daily Cleanup Worker",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    # Fundamentals worker - runs once daily at 5:00 AM ET (10:00 UTC) before market open
+    # Updates shares_outstanding for accurate market cap calculation
+    scheduler.add_job(
+        update_fundamentals,
+        trigger=CronTrigger(hour=10, minute=0),  # 5:00 AM ET = 10:00 UTC
+        id="fundamentals_worker",
+        name="Daily Fundamentals Worker",
         replace_existing=True,
         max_instances=1,
     )
@@ -89,6 +103,63 @@ async def daily_cleanup():
         await session.commit()
 
         logger.info(f"Deleted {result.rowcount} old intraday records")
+
+
+async def update_fundamentals():
+    """Update fundamentals (shares outstanding, etc.) for all tracked stocks.
+
+    Runs once daily to keep shares_outstanding current for accurate market cap calculation.
+    """
+    from data_server.db.database import async_session_factory
+    from data_server.db import cache
+    from data_server.api.tracking import get_tracked_tickers
+    from data_server.services.eodhd_client import get_eodhd_client
+
+    logger.info("Starting daily fundamentals update...")
+
+    async with async_session_factory() as session:
+        tickers = await get_tracked_tickers(session)
+
+    if not tickers:
+        logger.debug("No tracked stocks for fundamentals update")
+        return
+
+    client = await get_eodhd_client()
+    updated_count = 0
+
+    for symbol in tickers:
+        try:
+            data = await client.get_fundamentals(symbol)
+            if not data:
+                continue
+
+            general = data.get("General", {})
+            highlights = data.get("Highlights", {})
+            shares_stats = data.get("SharesStats", {})
+
+            company_data = {
+                "ticker": symbol.split(".")[0],
+                "name": general.get("Name"),
+                "exchange": general.get("Exchange"),
+                "sector": general.get("Sector"),
+                "industry": general.get("Industry"),
+                "market_cap": highlights.get("MarketCapitalization"),
+                "shares_outstanding": shares_stats.get("SharesOutstanding"),
+                "pe_ratio": highlights.get("PERatio"),
+                "eps": highlights.get("EarningsShare"),
+            }
+
+            async with async_session_factory() as session:
+                await cache.store_company(session, company_data)
+                await session.commit()
+
+            updated_count += 1
+            logger.debug(f"Updated fundamentals for {symbol}")
+
+        except Exception as e:
+            logger.error(f"Error updating fundamentals for {symbol}: {e}")
+
+    logger.info(f"Daily fundamentals update complete: {updated_count}/{len(tickers)} stocks")
 
 
 def get_scheduler_status() -> dict:

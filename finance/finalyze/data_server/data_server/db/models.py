@@ -176,6 +176,7 @@ class Company(Base):
     sector: Mapped[Optional[str]] = mapped_column(String(100))
     industry: Mapped[Optional[str]] = mapped_column(String(100))
     market_cap: Mapped[Optional[int]] = mapped_column(BigInteger)
+    shares_outstanding: Mapped[Optional[int]] = mapped_column(BigInteger)
     pe_ratio: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4))
     eps: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4))
     fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
