@@ -1118,33 +1118,56 @@ class MainWindow(QMainWindow):
             period_prices = self.data_manager.get_daily_prices(ticker, exchange, start, end)
 
             if is_intraday_period(period):
-                # For 1D: use daily prices to calculate change (live prices may be stale)
-                # Get current price and day data from last trading day
-                if period_prices is not None and len(period_prices) >= 1:
-                    last_day = period_prices.iloc[-1]
-                    current = last_day["close"]
-                    total_volume = last_day["volume"] if "volume" in period_prices.columns else 0
-                    day_open = last_day["open"] if "open" in period_prices.columns else None
-                    day_high = last_day["high"] if "high" in period_prices.columns else None
-                    day_low = last_day["low"] if "low" in period_prices.columns else None
-                else:
-                    current = None
-                    total_volume = 0
-                    day_open = None
-                    day_high = None
-                    day_low = None
+                # For 1D: only use live prices if market is actually open
+                # When market is closed, live prices are stale and will give wrong results
+                market_open = is_market_open(exchange)
 
-                # Get previous day's close for change calculation
+                symbol = f"{ticker}.{exchange}"
+                live_prices = self.data_manager.get_all_live_prices() if market_open else None
+                live_data = live_prices.get(symbol) if live_prices else None
+
+                # Get previous day's close from daily prices for change calculation
                 prev_close = None
                 if period_prices is not None and len(period_prices) >= 2:
                     prev_close = period_prices["close"].iloc[-2]
 
-                if current is not None and prev_close is not None:
-                    change = current - prev_close
-                    change_pct = change / prev_close if prev_close != 0 else 0
+                if market_open and live_data and live_data.get("price"):
+                    # Market is open - use live data for current price and day stats
+                    current = live_data.get("price")
+                    total_volume = live_data.get("volume", 0)
+                    day_open = live_data.get("open")
+                    day_high = live_data.get("high")
+                    day_low = live_data.get("low")
+                    # Calculate change from prev day close to live price
+                    if prev_close is not None:
+                        change = current - prev_close
+                        change_pct = change / prev_close if prev_close != 0 else 0
+                    else:
+                        change = 0
+                        change_pct = 0
+                    logger.debug(f"Using live price for {ticker}: ${current:.2f} ({change_pct*100:.2f}%)")
                 else:
-                    change = 0
-                    change_pct = 0
+                    # Market is closed - use daily prices entirely
+                    if period_prices is not None and len(period_prices) >= 1:
+                        last_day = period_prices.iloc[-1]
+                        current = last_day["close"]
+                        total_volume = last_day["volume"] if "volume" in period_prices.columns else 0
+                        day_open = last_day["open"] if "open" in period_prices.columns else None
+                        day_high = last_day["high"] if "high" in period_prices.columns else None
+                        day_low = last_day["low"] if "low" in period_prices.columns else None
+                    else:
+                        current = None
+                        total_volume = 0
+                        day_open = None
+                        day_high = None
+                        day_low = None
+
+                    if current is not None and prev_close is not None:
+                        change = current - prev_close
+                        change_pct = change / prev_close if prev_close != 0 else 0
+                    else:
+                        change = 0
+                        change_pct = 0
             else:
                 # For other periods: compare start to end
                 if period_prices is not None and len(period_prices) >= 1:

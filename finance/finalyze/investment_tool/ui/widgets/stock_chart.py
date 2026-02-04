@@ -44,6 +44,8 @@ class MeasureViewBox(pg.ViewBox):
         self._measure_rect = None
         self._measure_label = None
         self._chart = None  # Reference to StockChart for data access
+        # Disable default context menu so right-click can clear measure
+        self.setMenuEnabled(False)
 
     def setChart(self, chart: "StockChart") -> None:
         """Set reference to the parent chart."""
