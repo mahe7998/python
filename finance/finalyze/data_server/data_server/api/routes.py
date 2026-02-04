@@ -658,12 +658,13 @@ async def get_batch_daily_changes(
             # Get all prices in the date range from cache
             prices = await cache.get_daily_prices(session, symbol, from_date, to_date)
 
-            if prices and len(prices) >= 1:
+            if prices and len(prices) >= 2:
+                # Need at least 2 days for change calculation
                 # Prices are ordered by date ASC, so first item is oldest (start), last is newest (end)
                 # Use adjusted_close for start price to account for stock splits
                 # Use close for end price (current price)
                 start_price = prices[0].get("adjusted_close") or prices[0].get("close")
-                end_price = prices[-1].get("close") if len(prices) > 1 else start_price
+                end_price = prices[-1].get("close")
 
                 if start_price is not None and end_price is not None and start_price != 0:
                     change = (end_price - start_price) / start_price
@@ -672,13 +673,11 @@ async def get_batch_daily_changes(
                         "end_price": float(end_price),
                         "change": float(change)
                     }
-                elif end_price is not None:
-                    results[symbol] = {
-                        "start_price": None,
-                        "end_price": float(end_price),
-                        "change": 0
-                    }
+                else:
+                    # Have data but missing prices, try to fetch fresh
+                    symbols_to_fetch.append(symbol)
             else:
+                # Less than 2 days in cache, need to fetch from EODHD
                 symbols_to_fetch.append(symbol)
         except Exception as e:
             logger.debug(f"Cache lookup failed for {symbol}: {e}")

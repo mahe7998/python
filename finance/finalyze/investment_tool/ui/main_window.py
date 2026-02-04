@@ -1118,49 +1118,33 @@ class MainWindow(QMainWindow):
             period_prices = self.data_manager.get_daily_prices(ticker, exchange, start, end)
 
             if is_intraday_period(period):
-                # For 1D: use live prices from data server
-                symbol = f"{ticker}.{exchange}"
-                live_prices = self.data_manager.get_all_live_prices()
-                live_data = live_prices.get(symbol) if live_prices else None
-
-                if live_data and live_data.get("price"):
-                    # Use live data
-                    current = live_data.get("price")
-                    prev_close = live_data.get("previous_close")
-                    change = live_data.get("change", 0)
-                    change_pct = (live_data.get("change_percent") or 0) / 100  # Convert from % to decimal
-                    total_volume = live_data.get("volume", 0)
-                    day_open = live_data.get("open")
-                    day_high = live_data.get("high")
-                    day_low = live_data.get("low")
-                    logger.debug(f"Using live data for {ticker}: ${current:.2f} ({change_pct*100:.2f}%)")
+                # For 1D: use daily prices to calculate change (live prices may be stale)
+                # Get current price and day data from last trading day
+                if period_prices is not None and len(period_prices) >= 1:
+                    last_day = period_prices.iloc[-1]
+                    current = last_day["close"]
+                    total_volume = last_day["volume"] if "volume" in period_prices.columns else 0
+                    day_open = last_day["open"] if "open" in period_prices.columns else None
+                    day_high = last_day["high"] if "high" in period_prices.columns else None
+                    day_low = last_day["low"] if "low" in period_prices.columns else None
                 else:
-                    # Fallback to daily prices - use previous trading day's data
-                    prev_close = None
-                    if period_prices is not None and len(period_prices) >= 2:
-                        prev_close = period_prices["close"].iloc[-2]
+                    current = None
+                    total_volume = 0
+                    day_open = None
+                    day_high = None
+                    day_low = None
 
-                    if period_prices is not None and len(period_prices) >= 1:
-                        # Use last available day's data
-                        last_day = period_prices.iloc[-1]
-                        current = last_day["close"]
-                        total_volume = last_day["volume"] if "volume" in period_prices.columns else 0
-                        day_open = last_day["open"] if "open" in period_prices.columns else None
-                        day_high = last_day["high"] if "high" in period_prices.columns else None
-                        day_low = last_day["low"] if "low" in period_prices.columns else None
-                    else:
-                        current = None
-                        total_volume = 0
-                        day_open = None
-                        day_high = None
-                        day_low = None
+                # Get previous day's close for change calculation
+                prev_close = None
+                if period_prices is not None and len(period_prices) >= 2:
+                    prev_close = period_prices["close"].iloc[-2]
 
-                    if current is not None and prev_close is not None:
-                        change = current - prev_close
-                        change_pct = change / prev_close if prev_close != 0 else 0
-                    else:
-                        change = 0
-                        change_pct = 0
+                if current is not None and prev_close is not None:
+                    change = current - prev_close
+                    change_pct = change / prev_close if prev_close != 0 else 0
+                else:
+                    change = 0
+                    change_pct = 0
             else:
                 # For other periods: compare start to end
                 if period_prices is not None and len(period_prices) >= 1:
