@@ -6,7 +6,6 @@ A desktop application for tracking and analyzing stock investments, built with P
 ## Tech Stack
 - **UI Framework**: PySide6 (Qt6)
 - **Charting**: pyqtgraph
-- **Local Database**: DuckDB (client-side cache)
 - **Data Server**: FastAPI + PostgreSQL (caching proxy, runs in Docker)
 - **Data Provider**: EODHD API (via data server)
 - **Package Manager**: uv
@@ -53,17 +52,16 @@ python test_cache.py http://localhost:8000
 │  (PySide6 App)      │─────▶│  (FastAPI + Docker) │─────▶│    API      │
 │                     │      │         │           │      └─────────────┘
 │  - UI widgets       │      │         ▼           │
-│  - DuckDB cache     │      │    PostgreSQL       │
+│                     │      │    PostgreSQL       │
 └─────────────────────┘      └─────────────────────┘
 ```
 
 ### Data Flow
 1. App requests data from `DataManager`
-2. DataManager checks local DuckDB cache
-3. If not cached, requests from data server (port 8000)
-4. Data server checks PostgreSQL cache
-5. If not cached, fetches from EODHD API
-6. Response cached at both levels
+2. DataManager requests from data server (port 8000)
+3. Data server checks PostgreSQL cache
+4. If not cached, fetches from EODHD API
+5. Response cached in PostgreSQL
 
 ## Project Structure
 
@@ -74,7 +72,6 @@ finalyze/
 │   ├── config/settings.py     # App configuration
 │   ├── data/
 │   │   ├── manager.py         # DataManager - main data interface
-│   │   ├── cache.py           # DuckDB cache
 │   │   └── providers/eodhd.py # EODHD provider (calls data server)
 │   ├── ui/
 │   │   ├── main_window.py     # Main window
@@ -91,7 +88,9 @@ finalyze/
     ├── test_cache.py          # API endpoint tests
     └── data_server/
         ├── main.py            # FastAPI entry
-        ├── api/routes.py      # REST endpoints
+        ├── api/
+        │   ├── routes.py        # REST endpoints
+        │   └── tracking.py      # Stock tracking + 5Y prefetch
         ├── db/cache.py        # PostgreSQL cache operations
         ├── workers/
         │   ├── news_worker.py   # Background news fetcher
@@ -119,10 +118,27 @@ All views sync to treemap's period: 1D, 1W, 1M, 3M, 6M, YTD, 1Y, 2Y, 5Y
 ### Data Server Features
 - **News caching**: Background worker fetches every 15 min, app reads cache only
 - **Intraday caching**: Dynamic TTL (24h historical, 60s today)
+- **Historical prefetch**: Auto-fetches 5Y daily data when stock added to tracking
+- **Tracking API**: `POST /tracking/stocks` adds stock and triggers prefetch
 - **Server status**: `/server-status` returns EODHD API call count
 - **Status bar**: Shows "Data Server: Connected | EODHD Calls: X"
 
 ## Important Implementation Notes
+
+### Stock Split Handling
+```python
+# Use adjusted_close for historical start price to account for splits
+# Example: NVDA had 10-for-1 split, close=$1200 -> $120, adjusted_close stays correct
+start_price = prices[0].get("adjusted_close") or prices[0].get("close")
+end_price = prices[-1].get("close")  # Current price (not adjusted)
+change_pct = (end_price - start_price) / start_price
+```
+
+### Intraday Data Interval
+```python
+# ALWAYS use 1m interval - EODHD 5m data has NULL gaps for many stocks
+intraday = data_manager.get_intraday_prices(ticker, exchange, "1m", ...)
+```
 
 ### Percentage Formatting
 ```python
@@ -131,10 +147,10 @@ format_percent(0.05)  # Returns "+5.00%"
 # Do NOT multiply by 100 before calling
 ```
 
-### Cache Validity Check
+### Cache Validity (Data Server)
 ```python
-# is_cache_valid() checks BOTH expires_at AND last_fetched vs max_age_seconds
-# This allows dynamic TTL override for historical vs current data
+# Data server cache uses expires_at AND last_fetched vs max_age_seconds
+# Dynamic TTL: 24h for historical data, 60s for today's intraday
 ```
 
 ### Watchlist Data Modes
@@ -147,15 +163,23 @@ else:
     change = live_price - period_open_price
 ```
 
+### Adding New Stocks
+When adding stocks via the UI dialog:
+1. `_sync_stock_to_server()` calls `POST /tracking/stocks` on data server
+2. Data server adds stock to tracked_stocks table
+3. Background task auto-prefetches 5 years of historical daily data
+4. Ticker suffix is stripped automatically (e.g., "GOOGL.US" → "GOOGL")
+
 ## File Locations
 - App config: `~/.investment_tool/settings.yaml`
-- Local DB: `~/.investment_tool/data.duckdb`
 - App logs: `~/.investment_tool/logs/app.log`
 - Data server logs: `docker compose logs data-server`
+- PostgreSQL data: Docker volume `data_server_postgres_data`
 
 ## Known Issues
 - PXD ticker returns "Data not found" (delisted stock)
 - Intraday data may be None on weekends/after hours (falls back to daily)
+- EODHD 5m interval data has NULL gaps for many stocks - use 1m interval instead
 
 ## Remaining Work (Not Started)
 - Comparison Chart widget
