@@ -21,6 +21,11 @@ EODHD_DELAY_MINUTES = 15
 # Structure: {ticker: {"minute": datetime, "open": float, "high": float, "low": float, "close": float, "volume": int}}
 _minute_bars: dict[str, dict] = {}
 
+# Track previous cumulative volume to calculate per-minute volume deltas
+# EODHD returns cumulative daily volume, we need to store the delta for each minute
+# Structure: {ticker: last_cumulative_volume}
+_prev_cumulative_volume: dict[str, int] = {}
+
 
 def is_market_open() -> bool:
     """Check if US stock market is currently open (9:30 AM - 4:00 PM ET).
@@ -66,7 +71,7 @@ def to_int(val):
         return None
 
 
-async def _update_minute_bar(session, ticker: str, price: float, volume: int | None):
+async def _update_minute_bar(session, ticker: str, price: float, cumulative_volume: int | None):
     """Aggregate 15-second price snapshots into 1-minute OHLC bars.
 
     Called every 15 seconds per ticker. Builds OHLC bars by:
@@ -74,23 +79,32 @@ async def _update_minute_bar(session, ticker: str, price: float, volume: int | N
     - High: max price seen in the minute
     - Low: min price seen in the minute
     - Close: last price (updated each call)
+    - Volume: delta from previous cumulative (not cumulative itself)
 
     When a new minute starts, the previous minute's bar is stored to IntradayPrice.
     """
-    global _minute_bars
+    global _minute_bars, _prev_cumulative_volume
 
     now = datetime.utcnow()
     current_minute = now.replace(second=0, microsecond=0)
 
+    # Calculate volume delta from cumulative
+    volume_delta = 0
+    if cumulative_volume is not None:
+        prev_vol = _prev_cumulative_volume.get(ticker, 0)
+        if prev_vol > 0 and cumulative_volume >= prev_vol:
+            volume_delta = cumulative_volume - prev_vol
+        # Update previous cumulative for next calculation
+        _prev_cumulative_volume[ticker] = cumulative_volume
+
     existing_bar = _minute_bars.get(ticker)
 
     if existing_bar and existing_bar["minute"] == current_minute:
-        # Same minute - update running OHLC
+        # Same minute - update running OHLC and accumulate volume delta
         existing_bar["high"] = max(existing_bar["high"], price)
         existing_bar["low"] = min(existing_bar["low"], price)
         existing_bar["close"] = price
-        if volume is not None:
-            existing_bar["volume"] = volume  # Use latest cumulative volume
+        existing_bar["volume"] = (existing_bar["volume"] or 0) + volume_delta
     else:
         # New minute - store previous bar if exists, then start new bar
         if existing_bar:
@@ -123,13 +137,15 @@ async def _update_minute_bar(session, ticker: str, price: float, volume: int | N
                         f"L={existing_bar['low']:.2f} C={existing_bar['close']:.2f}")
 
         # Start new bar for current minute
+        # Open = first price reading of the minute
+        # High/low will be updated via max/min as more readings come in
         _minute_bars[ticker] = {
             "minute": current_minute,
             "open": price,
             "high": price,
             "low": price,
             "close": price,
-            "volume": volume,
+            "volume": volume_delta,
         }
 
 

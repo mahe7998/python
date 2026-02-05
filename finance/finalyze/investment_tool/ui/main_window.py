@@ -968,15 +968,14 @@ class MainWindow(QMainWindow):
                         logger.warning(f"No EODHD intraday data found for {ticker} in last 5 trading days")
                         prices = None
                 else:
-                    # Market open - fetch EODHD data for proper OHLC candlesticks
-                    # Price worker stores O=H=L=C=price, so wicks wouldn't show
+                    # Market open - use live data from price worker (has proper OHLC from 15s aggregation)
                     try:
                         raw_prices = self.data_manager.get_intraday_prices(
                             ticker, exchange, "1m",
                             market_open_utc.replace(tzinfo=timezone.utc),
                             market_close_utc.replace(tzinfo=timezone.utc),
                             use_cache=True,
-                            force_refresh=True,  # Get EODHD data for proper OHLC
+                            force_refresh=False,  # Use live data with proper OHLC
                         )
                     except Exception as e:
                         logger.warning(f"Failed to get intraday prices: {e}")
@@ -991,38 +990,13 @@ class MainWindow(QMainWindow):
                         if "timestamp" in raw_prices.columns:
                             raw_prices = raw_prices.set_index("timestamp")
 
-                        # Add live price as current data point
-                        if live_price_data and live_price_data.get("price"):
-                            live_row = pd.DataFrame({
-                                "open": [live_price_data.get("price")],
-                                "high": [live_price_data.get("price")],
-                                "low": [live_price_data.get("price")],
-                                "close": [live_price_data.get("price")],
-                                "volume": [live_price_data.get("volume") or 0],
-                            }, index=[pd.Timestamp(now_utc)])
-                            raw_prices = pd.concat([raw_prices, live_row])
-
+                        # Price worker provides proper OHLC data
                         num_points = len(raw_prices)
                         logger.info(f"Got {num_points} intraday records for {ticker} today")
 
-                        # Reindex to full trading day
+                        # Reindex to full trading day (9:30 AM - 4:00 PM ET)
+                        # Keep NaN for missing times - no forward-fill
                         prices = raw_prices.reindex(full_day_index)
-
-                        # Forward-fill gaps up to current time
-                        # For filled bars: open=high=low=close=previous_close (no movement)
-                        current_minute = pd.Timestamp(now_utc).floor("min")
-                        mask_past = prices.index <= current_minute
-
-                        # Forward-fill close price first
-                        prices.loc[mask_past, "close"] = prices.loc[mask_past, "close"].ffill()
-                        # For filled bars, set open=high=low=close (no movement)
-                        prices.loc[mask_past, "open"] = prices.loc[mask_past, "open"].fillna(prices.loc[mask_past, "close"])
-                        prices.loc[mask_past, "high"] = prices.loc[mask_past, "high"].fillna(prices.loc[mask_past, "close"])
-                        prices.loc[mask_past, "low"] = prices.loc[mask_past, "low"].fillna(prices.loc[mask_past, "close"])
-
-                        # Fill volume NaN with 0 for filled periods
-                        if "volume" in prices.columns:
-                            prices["volume"] = prices["volume"].fillna(0)
 
                         if num_points < 10:
                             self.status_bar.showMessage(f"Building intraday data for {ticker} ({num_points} points)", 5000)

@@ -660,14 +660,34 @@ class StockChart(QWidget):
         # Check if data is already aggregated (e.g., 15-min bars from 1W period)
         # If the interval between points is >= 5 min, don't resample
         needs_resample = is_intraday
+        is_live_1d = False  # Live 1D data from data server (1-min bars, no resample needed)
         if is_intraday and len(self._data) >= 2:
             time_diff = (self._data.index[1] - self._data.index[0]).total_seconds()
             if time_diff >= 300:  # 5 minutes or more - already aggregated
                 needs_resample = False
+            elif time_diff < 120:  # 1-2 minute data from today = live data
+                # Check if this is today's data (live 1D)
+                today = pd.Timestamp.now().normalize()
+                if self._data.index[-1].normalize() == today:
+                    is_live_1d = True
+                    needs_resample = False  # Use 1-min bars for live data
 
         if chart_type == "Candlestick":
             # For candlestick with 1-min intraday data, aggregate to 5-minute bars
-            if needs_resample:
+            # Exception: live 1D data uses 1-min bars directly (already has delta volumes)
+            if is_live_1d:
+                # Live 1D data: make bars connect by setting open = previous close
+                display_data = self._data.copy()
+                # Shift close to get previous bar's close, use as current bar's open
+                display_data['open'] = display_data['close'].shift(1)
+                # First bar keeps its original open
+                if len(display_data) > 0:
+                    display_data.iloc[0, display_data.columns.get_loc('open')] = self._data.iloc[0]['open']
+                # Set high/low to just open/close (no wicks)
+                display_data['high'] = display_data[['open', 'close']].max(axis=1)
+                display_data['low'] = display_data[['open', 'close']].min(axis=1)
+                display_data = self._filter_volume_outliers_preserve_index(display_data)
+            elif needs_resample:
                 display_data = self._data.resample('5min').agg({
                     'open': 'first',
                     'high': 'max',
@@ -691,7 +711,20 @@ class StockChart(QWidget):
             self.price_widget.addItem(self.candle_item)
         elif chart_type == "OHLC":
             # For OHLC with 1-min intraday data, aggregate to 5-minute bars
-            if needs_resample:
+            # Exception: live 1D data uses 1-min bars directly (already has delta volumes)
+            if is_live_1d:
+                # Live 1D data: make bars connect by setting open = previous close
+                display_data = self._data.copy()
+                # Shift close to get previous bar's close, use as current bar's open
+                display_data['open'] = display_data['close'].shift(1)
+                # First bar keeps its original open
+                if len(display_data) > 0:
+                    display_data.iloc[0, display_data.columns.get_loc('open')] = self._data.iloc[0]['open']
+                # Set high/low to just open/close (no wicks)
+                display_data['high'] = display_data[['open', 'close']].max(axis=1)
+                display_data['low'] = display_data[['open', 'close']].min(axis=1)
+                display_data = self._filter_volume_outliers_preserve_index(display_data)
+            elif needs_resample:
                 display_data = self._data.resample('5min').agg({
                     'open': 'first',
                     'high': 'max',
