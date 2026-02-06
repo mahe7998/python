@@ -33,6 +33,7 @@ from investment_tool.ui.dialogs.category_dialog import CategoryDialog
 from investment_tool.ui.dialogs.add_stock_dialog import AddStockDialog
 from investment_tool.ui.widgets.market_treemap import MarketTreemap, TreemapItem
 from investment_tool.ui.widgets.news_feed import NewsFeedWidget
+from investment_tool.ui.widgets.quarterly_financials import QuarterlyFinancialsWidget
 from investment_tool.ui.widgets.sentiment_gauge import SentimentGaugeWidget
 from investment_tool.ui.widgets.stock_chart import StockChart
 from investment_tool.ui.widgets.watchlist import WatchlistWidget
@@ -243,10 +244,20 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Stock Chart
+        # Tab widget for Chart / Financials toggle
+        self.chart_tabs = QTabWidget()
+        self.chart_tabs.setDocumentMode(True)  # Cleaner tab appearance
+
+        # Stock Chart tab
         self.stock_chart = StockChart()
         # Period is now controlled by treemap, not chart
-        right_layout.addWidget(self.stock_chart, stretch=2)
+        self.chart_tabs.addTab(self.stock_chart, "Chart")
+
+        # Quarterly Financials tab
+        self.quarterly_financials = QuarterlyFinancialsWidget()
+        self.chart_tabs.addTab(self.quarterly_financials, "Financials")
+
+        right_layout.addWidget(self.chart_tabs, stretch=2)
 
         # Key Metrics panel - 3 columns
         self.metrics_group = QGroupBox("Key Metrics")
@@ -474,6 +485,7 @@ class MainWindow(QMainWindow):
             self.watchlist_widget.set_data_manager(self.data_manager)
             self.sentiment_gauge.set_data_manager(self.data_manager)
             self.news_feed.set_data_manager(self.data_manager)
+            self.quarterly_financials.set_data_manager(self.data_manager)
 
             if self.data_manager.is_connected():
                 # Get server status for EODHD API call count
@@ -769,6 +781,11 @@ class MainWindow(QMainWindow):
             self.news_feed.refresh(articles=articles)
             logger.info(f"[TIMING] News feed refresh: {(time.perf_counter() - t5)*1000:.0f}ms")
 
+            # Update quarterly financials
+            t6 = time.perf_counter()
+            self.quarterly_financials.set_ticker(ticker, exchange)
+            logger.info(f"[TIMING] Quarterly financials: {(time.perf_counter() - t6)*1000:.0f}ms")
+
             logger.info(f"[TIMING] TOTAL _on_stock_selected: {(time.perf_counter() - total_start)*1000:.0f}ms")
         finally:
             self._selecting = False
@@ -798,6 +815,9 @@ class MainWindow(QMainWindow):
         if self._selected_ticker and self._selected_exchange:
             self._load_stock_chart(self._selected_ticker, self._selected_exchange)
             self._update_metrics(self._selected_ticker, self._selected_exchange)
+
+        # Update quarterly financials period
+        self.quarterly_financials.set_period(period)
 
         # Set period and refresh watchlist data
         self.watchlist_widget.set_period(period)
