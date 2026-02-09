@@ -415,6 +415,48 @@ async def _enrich_with_live_market_cap(session: AsyncSession, symbol: str, compa
     return company
 
 
+async def _enrich_highlights_market_cap(session: AsyncSession, symbol: str, highlights: dict) -> dict:
+    """Calculate market cap dynamically using best shares_outstanding × current_price.
+
+    Priority: SEC EDGAR shares > yfinance shares > EODHD shares (from highlights).
+    Non-USD market caps are converted to USD using live forex rates.
+    """
+    ticker = symbol.split(".")[0]
+
+    # Try shares_history first (SEC EDGAR > yfinance > EODHD)
+    best_shares = await cache.get_latest_shares_outstanding(session, ticker)
+    if not best_shares:
+        best_shares = highlights.get("shares_outstanding")
+
+    if not best_shares:
+        return highlights
+
+    from data_server.db.models import LivePrice
+    result = await session.execute(
+        select(LivePrice).where(LivePrice.ticker == symbol)
+    )
+    live_price = result.scalar_one_or_none()
+
+    highlights = dict(highlights)
+    highlights["shares_outstanding"] = best_shares
+    if live_price and live_price.price:
+        market_cap_local = int(best_shares * float(live_price.price))
+
+        # Convert to USD if the stock trades in a non-USD currency
+        currency = highlights.get("currency", "USD")
+        if currency and currency != "USD":
+            from data_server.services.eodhd_client import get_forex_rate_to_usd
+            fx_rate = await get_forex_rate_to_usd(currency)
+            if fx_rate:
+                highlights["market_cap"] = int(market_cap_local * fx_rate)
+            else:
+                highlights["market_cap"] = market_cap_local
+        else:
+            highlights["market_cap"] = market_cap_local
+
+    return highlights
+
+
 @router.get("/fundamentals/{symbol}")
 async def get_fundamentals(
     symbol: str,
@@ -422,8 +464,16 @@ async def get_fundamentals(
     fmt: str = Query("json"),
     session: AsyncSession = Depends(get_session),
 ):
-    """Get company fundamentals (cached)."""
+    """Get company fundamentals (cached).
+
+    Returns structured response:
+    {
+        "highlights": { ... company highlights ... },
+        "quarterly_financials": [ ... quarterly rows ... ]
+    }
+    """
     start_time = time.time()
+    ticker = symbol.split(".")[0]
     cache_key = f"fundamentals:{symbol}"
     endpoint = f"GET /fundamentals/{symbol}"
 
@@ -433,13 +483,17 @@ async def get_fundamentals(
     cache_time = (time.time() - cache_start) * 1000
 
     if is_valid:
-        company = await cache.get_company(session, symbol.split(".")[0])
-        if company:
-            # Calculate market cap dynamically using live price
-            company = await _enrich_with_live_market_cap(session, symbol, company)
+        highlights = await cache.get_company_highlights(session, ticker)
+        quarterly = await cache.get_quarterly_financials(session, ticker)
+        if highlights:
+            # Enrich highlights with dynamic market cap
+            highlights = await _enrich_highlights_market_cap(session, symbol, highlights)
             total_time = (time.time() - start_time) * 1000
             log_timing(endpoint, True, cache_time, 0, total_time)
-            return company
+            return {
+                "highlights": highlights,
+                "quarterly_financials": quarterly or [],
+            }
 
     # Fetch from EODHD
     eodhd_start = time.time()
@@ -451,41 +505,153 @@ async def get_fundamentals(
         raise HTTPException(status_code=502, detail=f"Error fetching from EODHD API: {e}")
     eodhd_time = (time.time() - eodhd_start) * 1000
 
-    # Store in cache (extract relevant fields)
-    if data:
-        general = data.get("General", {})
-        highlights = data.get("Highlights", {})
-        shares_stats = data.get("SharesStats", {})
-        company_data = {
-            "ticker": symbol.split(".")[0],
-            "name": general.get("Name"),
-            "exchange": general.get("Exchange"),
-            "sector": general.get("Sector"),
-            "industry": general.get("Industry"),
-            "market_cap": highlights.get("MarketCapitalization"),
-            "shares_outstanding": shares_stats.get("SharesOutstanding"),
-            "pe_ratio": highlights.get("PERatio"),
-            "eps": highlights.get("EarningsShare"),
-        }
-        await cache.store_company(session, company_data)
-        await cache.update_cache_metadata(
-            session,
-            cache_key,
-            "fundamentals",
-            symbol.split(".")[0],
-            settings.cache_fundamentals,
-            1,
-        )
-        await session.commit()
+    if not data:
+        total_time = (time.time() - start_time) * 1000
+        log_timing(endpoint, False, cache_time, eodhd_time, total_time)
+        return {"highlights": {}, "quarterly_financials": []}
 
-        # Enrich with dynamic market cap before returning
-        company_data = await _enrich_with_live_market_cap(session, symbol, company_data)
+    # Store into all tables
+    general = data.get("General", {})
+    highlights_raw = data.get("Highlights", {})
+    shares_stats = data.get("SharesStats", {})
+
+    # 1. Store company table (backward compat)
+    company_data = {
+        "ticker": ticker,
+        "name": general.get("Name"),
+        "exchange": general.get("Exchange"),
+        "sector": general.get("Sector"),
+        "industry": general.get("Industry"),
+        "market_cap": highlights_raw.get("MarketCapitalization"),
+        "shares_outstanding": shares_stats.get("SharesOutstanding"),
+        "pe_ratio": highlights_raw.get("PERatio"),
+        "eps": highlights_raw.get("EarningsShare"),
+    }
+    await cache.store_company(session, company_data)
+
+    # 2. Store company highlights
+    await cache.store_company_highlights(session, ticker, data)
+
+    # 3. Store quarterly financials
+    q_count = await cache.store_quarterly_financials(session, ticker, data)
+
+    await cache.update_cache_metadata(
+        session, cache_key, "fundamentals", ticker,
+        settings.cache_fundamentals, q_count,
+    )
+    await session.commit()
+
+    # 4. Fetch SEC EDGAR shares history in background (don't block response)
+    async def _fetch_shares_bg():
+        try:
+            from data_server.db.database import async_session_factory
+            from data_server.services.sec_edgar import get_sec_edgar_client
+            sec_client = await get_sec_edgar_client()
+            entries = await sec_client.get_shares_history(ticker)
+            if entries:
+                async with async_session_factory() as bg_session:
+                    await cache.store_shares_history(bg_session, ticker, entries)
+                    await cache.update_cache_metadata(
+                        bg_session, f"shares_history:{ticker}",
+                        "shares_history", ticker, 86400, len(entries),
+                    )
+                    await bg_session.commit()
+                logger.info(f"Background SEC EDGAR fetch: {len(entries)} entries for {ticker}")
+        except Exception as e:
+            logger.debug(f"Background SEC EDGAR fetch failed for {ticker}: {e}")
+
+    asyncio.create_task(_fetch_shares_bg())
+
+    # Read back from DB for consistent response format
+    highlights = await cache.get_company_highlights(session, ticker)
+    quarterly = await cache.get_quarterly_financials(session, ticker)
+
+    if highlights:
+        highlights = await _enrich_highlights_market_cap(session, symbol, highlights)
 
     total_time = (time.time() - start_time) * 1000
     log_timing(endpoint, False, cache_time, eodhd_time, total_time)
 
-    # Return enriched company data (not raw EODHD response)
-    return company_data if data else data
+    return {
+        "highlights": highlights or {},
+        "quarterly_financials": quarterly or [],
+    }
+
+
+@router.get("/shares-history/{symbol}")
+async def get_shares_history(
+    symbol: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Get historical shares outstanding data for a symbol.
+
+    On cache miss: fetches from SEC EDGAR, falls back to yfinance.
+    """
+    start_time = time.time()
+    ticker = symbol.split(".")[0]
+    exchange = symbol.split(".")[-1] if "." in symbol else "US"
+    cache_key = f"shares_history:{ticker}"
+    endpoint = f"GET /shares-history/{symbol}"
+
+    # Check cache — refresh daily
+    cache_start = time.time()
+    is_valid = await cache.is_cache_valid(session, cache_key, 86400)
+    cache_time = (time.time() - cache_start) * 1000
+
+    if is_valid:
+        history = await cache.get_shares_history(session, ticker)
+        if history:
+            latest = await cache.get_latest_shares_outstanding(session, ticker)
+            total_time = (time.time() - start_time) * 1000
+            log_timing(endpoint, True, cache_time, 0, total_time)
+            return {
+                "ticker": ticker,
+                "shares_history": history,
+                "latest_shares_outstanding": latest,
+            }
+
+    # Fetch from SEC EDGAR
+    fetch_start = time.time()
+    entries = []
+    try:
+        from data_server.services.sec_edgar import get_sec_edgar_client
+        sec_client = await get_sec_edgar_client()
+        entries = await sec_client.get_shares_history(ticker)
+    except Exception as e:
+        logger.error(f"SEC EDGAR error for {ticker}: {e}")
+
+    # Fallback to yfinance if SEC EDGAR returned nothing
+    if not entries:
+        try:
+            from data_server.services.yfinance_client import get_shares_history_entry
+            yf_entry = await get_shares_history_entry(ticker, exchange)
+            if yf_entry:
+                entries = [yf_entry]
+        except Exception as e:
+            logger.error(f"yfinance error for {ticker}: {e}")
+
+    fetch_time = (time.time() - fetch_start) * 1000
+
+    # Store results
+    if entries:
+        await cache.store_shares_history(session, ticker, entries)
+        await cache.update_cache_metadata(
+            session, cache_key, "shares_history", ticker, 86400, len(entries)
+        )
+        await session.commit()
+
+    # Read back
+    history = await cache.get_shares_history(session, ticker)
+    latest = await cache.get_latest_shares_outstanding(session, ticker)
+
+    total_time = (time.time() - start_time) * 1000
+    log_timing(endpoint, False, cache_time, fetch_time, total_time)
+
+    return {
+        "ticker": ticker,
+        "shares_history": history,
+        "latest_shares_outstanding": latest,
+    }
 
 
 @router.get("/news")
@@ -656,13 +822,16 @@ async def get_batch_daily_changes(
     {
         "symbols": ["AAPL.US", "GOOGL.US", ...],
         "start_date": "2026-01-03",
-        "end_date": "2026-02-02"
+        "end_date": "2026-02-02",
+        "daily_change": false
     }
+
+    When daily_change=true, compares the last 2 trading days (prev close vs last close).
+    When daily_change=false (default), compares start of range to end of range.
 
     Returns:
     {
         "AAPL.US": {"start_price": 150.0, "end_price": 155.0, "change": 0.0333},
-        "GOOGL.US": {"start_price": 140.0, "end_price": 145.0, "change": 0.0357},
         ...
     }
     """
@@ -670,11 +839,12 @@ async def get_batch_daily_changes(
     symbols = request.get("symbols", [])
     start_date = request.get("start_date")
     end_date = request.get("end_date")
+    daily_change = request.get("daily_change", False)
 
     if not symbols:
         return {}
 
-    logger.info(f"Batch daily changes: {len(symbols)} symbols, {start_date} to {end_date}")
+    logger.info(f"Batch daily changes: {len(symbols)} symbols, {start_date} to {end_date}, daily_change={daily_change}")
 
     # Parse dates
     from_date = datetime.fromisoformat(start_date) if start_date else None
@@ -691,12 +861,14 @@ async def get_batch_daily_changes(
             prices = await cache.get_daily_prices(session, symbol, from_date, to_date)
 
             if prices and len(prices) >= 2:
-                # Need at least 2 days for change calculation
-                # Prices are ordered by date ASC, so first item is oldest (start), last is newest (end)
-                # Use adjusted_close for start price to account for stock splits
-                # Use close for end price (current price)
-                start_price = prices[0].get("adjusted_close") or prices[0].get("close")
-                end_price = prices[-1].get("close")
+                if daily_change:
+                    # Compare last 2 trading days (1D change)
+                    start_price = prices[-2].get("adjusted_close") or prices[-2].get("close")
+                    end_price = prices[-1].get("close")
+                else:
+                    # Compare start to end of range
+                    start_price = prices[0].get("adjusted_close") or prices[0].get("close")
+                    end_price = prices[-1].get("close")
 
                 if start_price is not None and end_price is not None and start_price != 0:
                     change = (end_price - start_price) / start_price
@@ -726,9 +898,14 @@ async def get_batch_daily_changes(
                 if data and len(data) > 0:
                     await cache.store_daily_prices(session, symbol, data)
                     # Data is ordered by date ASC from EODHD
-                    # Use adjusted_close for start price to account for stock splits
-                    start_price = data[0].get("adjusted_close") or data[0].get("close")
-                    end_price = data[-1].get("close")
+                    if daily_change and len(data) >= 2:
+                        # Compare last 2 trading days
+                        start_price = data[-2].get("adjusted_close") or data[-2].get("close")
+                        end_price = data[-1].get("close")
+                    else:
+                        # Compare start to end of range
+                        start_price = data[0].get("adjusted_close") or data[0].get("close")
+                        end_price = data[-1].get("close")
 
                     if start_price is not None and end_price is not None and start_price != 0:
                         change = (end_price - start_price) / start_price

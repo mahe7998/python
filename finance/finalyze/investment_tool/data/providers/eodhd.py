@@ -245,9 +245,24 @@ class EODHDProvider(DataProviderBase):
         if not data:
             raise DataNotFoundError(self.name, ticker, "company_info")
 
-        # Handle both EODHD original format (nested) and data server format (flat)
-        if "General" in data:
-            # Original EODHD format
+        # Handle structured format (data server with highlights key)
+        if "highlights" in data:
+            h = data["highlights"]
+            return CompanyInfo(
+                ticker=ticker,
+                name=h.get("name", ticker),
+                exchange=exchange,
+                sector=h.get("sector"),
+                industry=h.get("industry"),
+                market_cap=h.get("market_cap"),
+                country=None,
+                currency=h.get("currency"),
+                pe_ratio=h.get("pe_ratio"),
+                eps=h.get("eps"),
+                last_updated=datetime.now(),
+            )
+        elif "General" in data:
+            # Original EODHD format (direct API)
             general = data.get("General", {})
             highlights = data.get("Highlights", {})
             return CompanyInfo(
@@ -264,7 +279,7 @@ class EODHDProvider(DataProviderBase):
                 last_updated=datetime.now(),
             )
         else:
-            # Data server simplified format
+            # Legacy data server simplified format
             return CompanyInfo(
                 ticker=ticker,
                 name=data.get("name", ticker),
@@ -356,11 +371,24 @@ class EODHDProvider(DataProviderBase):
 
         return articles
 
+    def get_shares_history(self, ticker: str, exchange: str) -> Dict[str, Any]:
+        """Get shares outstanding history from data server."""
+        symbol = self.format_symbol(ticker, exchange)
+
+        if "eodhd.com" in self.BASE_URL:
+            return {"ticker": ticker, "shares_history": [], "latest_shares_outstanding": None}
+
+        data = self._request(f"shares-history/{symbol}")
+        if not data:
+            return {"ticker": ticker, "shares_history": [], "latest_shares_outstanding": None}
+        return data
+
     def get_batch_daily_changes(
         self,
         symbols: List[str],
         start_date: date,
         end_date: date,
+        daily_change: bool = False,
     ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch daily price changes for multiple symbols in a single call.
@@ -372,6 +400,7 @@ class EODHDProvider(DataProviderBase):
             symbols: List of symbols like ["AAPL.US", "GOOGL.US"]
             start_date: Start date for price comparison
             end_date: End date for price comparison
+            daily_change: If True, compare last 2 trading days instead of full range
 
         Returns:
             Dict mapping symbol to {"start_price": float, "end_price": float, "change": float}
@@ -391,6 +420,7 @@ class EODHDProvider(DataProviderBase):
                     "symbols": symbols,
                     "start_date": start_date.isoformat(),
                     "end_date": end_date.isoformat(),
+                    "daily_change": daily_change,
                 },
                 timeout=60,  # Longer timeout for batch requests
             )

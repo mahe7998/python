@@ -153,6 +153,17 @@ class DataProviderBase(ABC):
         """
         pass
 
+    def get_shares_history(
+        self,
+        ticker: str,
+        exchange: str,
+    ) -> Dict[str, Any]:
+        """Get shares outstanding history for a ticker.
+
+        Returns dict with keys: ticker, shares_history, latest_shares_outstanding
+        """
+        return {"ticker": ticker, "shares_history": [], "latest_shares_outstanding": None}
+
     def format_symbol(self, ticker: str, exchange: str) -> str:
         """
         Format symbol for this provider's API.

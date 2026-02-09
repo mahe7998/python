@@ -22,11 +22,33 @@ logger = logging.getLogger(__name__)
 
 class FinancialMetric(Enum):
     """Available financial metrics to display."""
+    # Income Statement
     GROSS_REVENUE = "Gross Revenue"
     GROSS_PROFIT = "Gross Profit"
     AFTER_TAX_INCOME = "Net Income"
+    OPERATING_INCOME = "Operating Income"
+    EBIT = "EBIT"
+    COST_OF_REVENUE = "Cost of Revenue"
+    RD_EXPENSE = "R&D Expense"
+    # Balance Sheet
     CASH_RESERVE = "Cash Reserve"
     TOTAL_CASH = "Total Cash"
+    TOTAL_ASSETS = "Total Assets"
+    TOTAL_LIABILITIES = "Total Liabilities"
+    STOCKHOLDERS_EQUITY = "Stockholders' Equity"
+    LONG_TERM_DEBT = "Long-Term Debt"
+    # Cash Flow
+    OPERATING_CASH_FLOW = "Operating Cash Flow"
+    CAPITAL_EXPENDITURE = "Capital Expenditure"
+    FREE_CASH_FLOW = "Free Cash Flow"
+    DIVIDENDS_PAID = "Dividends Paid"
+
+
+# Group separators for the combo box: (index_after, label)
+_METRIC_GROUPS = [
+    (7, "--- Balance Sheet ---"),
+    (13, "--- Cash Flow ---"),
+]
 
 
 @dataclass
@@ -39,8 +61,20 @@ class QuarterlyFinancial:
     gross_revenue: Optional[float] = None
     gross_profit: Optional[float] = None
     after_tax_income: Optional[float] = None
+    operating_income: Optional[float] = None
+    ebit: Optional[float] = None
+    cost_of_revenue: Optional[float] = None
+    rd_expense: Optional[float] = None
     cash_reserve: Optional[float] = None
     total_cash: Optional[float] = None
+    total_assets: Optional[float] = None
+    total_liabilities: Optional[float] = None
+    stockholders_equity: Optional[float] = None
+    long_term_debt: Optional[float] = None
+    operating_cash_flow: Optional[float] = None
+    capital_expenditure: Optional[float] = None
+    free_cash_flow: Optional[float] = None
+    dividends_paid: Optional[float] = None
 
     @property
     def fiscal_period(self) -> str:
@@ -130,9 +164,16 @@ class QuarterlyFinancialsWidget(QWidget):
         header.addWidget(metric_label)
 
         self.metric_combo = QComboBox()
-        self.metric_combo.setMinimumWidth(150)
+        self.metric_combo.setMinimumWidth(180)
+        # Add metrics with group separators
+        idx = 0
         for metric in FinancialMetric:
+            # Check if we need a separator before this item
+            for sep_idx, sep_label in _METRIC_GROUPS:
+                if idx == sep_idx:
+                    self.metric_combo.insertSeparator(self.metric_combo.count())
             self.metric_combo.addItem(metric.value, metric)
+            idx += 1
         self.metric_combo.currentIndexChanged.connect(self._on_metric_changed)
         header.addWidget(self.metric_combo)
 
@@ -148,6 +189,7 @@ class QuarterlyFinancialsWidget(QWidget):
         chart.showGrid(x=False, y=True, alpha=0.3)
         chart.getAxis("bottom").setStyle(tickTextOffset=10)
         chart.getAxis("bottom").setTextPen(pg.mkPen("#9CA3AF"))
+        chart.getAxis("bottom").setHeight(40)
         chart.getAxis("left").setTextPen(pg.mkPen("#9CA3AF"))
 
         # Hide auto-range button
@@ -193,33 +235,72 @@ class QuarterlyFinancialsWidget(QWidget):
             self._update_chart()
 
     def _parse_quarterly_data(self, fundamentals: Dict[str, Any]) -> List[QuarterlyFinancial]:
-        """Parse EODHD fundamentals into QuarterlyFinancial objects."""
+        """Parse fundamentals into QuarterlyFinancial objects.
+
+        Handles both the new structured format (data server) and legacy EODHD format.
+        """
         quarterly_data = []
 
-        # Get quarterly income statements
+        # New structured format: data has "quarterly_financials" list
+        if "quarterly_financials" in fundamentals:
+            for item in fundamentals["quarterly_financials"]:
+                try:
+                    report_date = date.fromisoformat(item["report_date"])
+                except (ValueError, KeyError):
+                    continue
+
+                cash = self._safe_float(item.get("cash"))
+                short_term_inv = self._safe_float(item.get("short_term_investments"))
+
+                qf = QuarterlyFinancial(
+                    ticker=self._ticker,
+                    quarter=item.get("quarter", ""),
+                    year=item.get("year", 0),
+                    report_date=report_date,
+                    gross_revenue=self._safe_float(item.get("total_revenue")),
+                    gross_profit=self._safe_float(item.get("gross_profit")),
+                    after_tax_income=self._safe_float(item.get("net_income")),
+                    operating_income=self._safe_float(item.get("operating_income")),
+                    ebit=self._safe_float(item.get("ebit")),
+                    cost_of_revenue=self._safe_float(item.get("cost_of_revenue")),
+                    rd_expense=self._safe_float(item.get("research_development")),
+                    cash_reserve=cash,
+                    total_cash=(cash or 0) + (short_term_inv or 0) if cash is not None else None,
+                    total_assets=self._safe_float(item.get("total_assets")),
+                    total_liabilities=self._safe_float(item.get("total_liabilities")),
+                    stockholders_equity=self._safe_float(item.get("stockholders_equity")),
+                    long_term_debt=self._safe_float(item.get("long_term_debt")),
+                    operating_cash_flow=self._safe_float(item.get("operating_cash_flow")),
+                    capital_expenditure=self._safe_float(item.get("capital_expenditure")),
+                    free_cash_flow=self._safe_float(item.get("free_cash_flow")),
+                    dividends_paid=self._safe_float(item.get("dividends_paid")),
+                )
+                quarterly_data.append(qf)
+
+            quarterly_data.sort(key=lambda x: x.report_date, reverse=True)
+            return quarterly_data
+
+        # Legacy EODHD format fallback
         income_quarterly = fundamentals.get("Financials", {}).get(
             "Income_Statement", {}
         ).get("quarterly", {})
-
-        # Get quarterly balance sheets
         balance_quarterly = fundamentals.get("Financials", {}).get(
             "Balance_Sheet", {}
         ).get("quarterly", {})
+        cashflow_quarterly = fundamentals.get("Financials", {}).get(
+            "Cash_Flow", {}
+        ).get("quarterly", {})
 
-        # Combine by date
         for date_key, income in income_quarterly.items():
             try:
                 report_date = date.fromisoformat(date_key)
             except ValueError:
-                logger.warning(f"Invalid date format: {date_key}")
                 continue
 
             quarter, year = self._date_to_quarter(report_date)
-
-            # Get corresponding balance sheet
             balance = balance_quarterly.get(date_key, {})
+            cashflow = cashflow_quarterly.get(date_key, {})
 
-            # Parse values safely
             cash = self._safe_float(balance.get("cash"))
             short_term_inv = self._safe_float(balance.get("shortTermInvestments"))
 
@@ -231,14 +312,24 @@ class QuarterlyFinancialsWidget(QWidget):
                 gross_revenue=self._safe_float(income.get("totalRevenue")),
                 gross_profit=self._safe_float(income.get("grossProfit")),
                 after_tax_income=self._safe_float(income.get("netIncome")),
+                operating_income=self._safe_float(income.get("operatingIncome")),
+                ebit=self._safe_float(income.get("ebit")),
+                cost_of_revenue=self._safe_float(income.get("costOfRevenue")),
+                rd_expense=self._safe_float(income.get("researchDevelopment")),
                 cash_reserve=cash,
                 total_cash=(cash or 0) + (short_term_inv or 0) if cash is not None else None,
+                total_assets=self._safe_float(balance.get("totalAssets")),
+                total_liabilities=self._safe_float(balance.get("totalLiab")),
+                stockholders_equity=self._safe_float(balance.get("totalStockholderEquity")),
+                long_term_debt=self._safe_float(balance.get("longTermDebt")),
+                operating_cash_flow=self._safe_float(cashflow.get("totalCashFromOperatingActivities")),
+                capital_expenditure=self._safe_float(cashflow.get("capitalExpenditures")),
+                free_cash_flow=self._safe_float(cashflow.get("freeCashFlow")),
+                dividends_paid=self._safe_float(cashflow.get("dividendsPaid")),
             )
             quarterly_data.append(qf)
 
-        # Sort by date descending (newest first)
         quarterly_data.sort(key=lambda x: x.report_date, reverse=True)
-
         return quarterly_data
 
     def _safe_float(self, value) -> Optional[float]:
@@ -321,10 +412,14 @@ class QuarterlyFinancialsWidget(QWidget):
         # Set y-axis label
         self.chart.setLabel("left", metric.value)
 
-        # Auto-range with padding
+        # Auto-range with padding, supporting negative values
         self.chart.setXRange(-0.5, len(quarters) - 0.5, padding=0.1)
-        if len(values) > 0 and np.max(values) > 0:
-            self.chart.setYRange(0, np.max(values) * 1.1)
+        if len(values) > 0:
+            min_val = min(0, float(np.min(values)))
+            max_val = float(np.max(values))
+            if max_val > min_val:
+                padding = (max_val - min_val) * 0.1
+                self.chart.setYRange(min_val - padding, max_val + padding)
 
         # Clear legend for combined view (no year grouping needed)
         self._clear_legend()
@@ -350,8 +445,6 @@ class QuarterlyFinancialsWidget(QWidget):
 
         # Build data matrix: quarters x years
         bar_width = 0.8 / len(years) if years else 0.2
-        x_positions = []
-        labels = []
 
         for q_idx, quarter in enumerate(quarters):
             for y_idx, year in enumerate(years):
@@ -370,8 +463,6 @@ class QuarterlyFinancialsWidget(QWidget):
                 )
                 self.chart.addItem(bar)
 
-            labels.append(quarter)
-
         # Set x-axis ticks to quarter labels
         x_axis = self.chart.getAxis("bottom")
         x_axis.setTicks([[(i, q) for i, q in enumerate(quarters)]])
@@ -379,17 +470,20 @@ class QuarterlyFinancialsWidget(QWidget):
         # Set y-axis label
         self.chart.setLabel("left", metric.value)
 
-        # Auto-range
+        # Auto-range, supporting negative values
         self.chart.setXRange(-0.5, len(quarters) - 0.5, padding=0.1)
 
-        # Find max value for y-range
         all_values = []
         for q in self._quarterly_data:
             val = self._get_metric_value(q, metric)
             if val is not None:
                 all_values.append(val)
         if all_values:
-            self.chart.setYRange(0, max(all_values) * 1.1)
+            min_val = min(0, min(all_values))
+            max_val = max(all_values)
+            if max_val > min_val:
+                padding = (max_val - min_val) * 0.1
+                self.chart.setYRange(min_val - padding, max_val + padding)
 
         # Update legend
         self._update_legend(years)
@@ -407,8 +501,20 @@ class QuarterlyFinancialsWidget(QWidget):
             FinancialMetric.GROSS_REVENUE: qf.gross_revenue,
             FinancialMetric.GROSS_PROFIT: qf.gross_profit,
             FinancialMetric.AFTER_TAX_INCOME: qf.after_tax_income,
+            FinancialMetric.OPERATING_INCOME: qf.operating_income,
+            FinancialMetric.EBIT: qf.ebit,
+            FinancialMetric.COST_OF_REVENUE: qf.cost_of_revenue,
+            FinancialMetric.RD_EXPENSE: qf.rd_expense,
             FinancialMetric.CASH_RESERVE: qf.cash_reserve,
             FinancialMetric.TOTAL_CASH: qf.total_cash,
+            FinancialMetric.TOTAL_ASSETS: qf.total_assets,
+            FinancialMetric.TOTAL_LIABILITIES: qf.total_liabilities,
+            FinancialMetric.STOCKHOLDERS_EQUITY: qf.stockholders_equity,
+            FinancialMetric.LONG_TERM_DEBT: qf.long_term_debt,
+            FinancialMetric.OPERATING_CASH_FLOW: qf.operating_cash_flow,
+            FinancialMetric.CAPITAL_EXPENDITURE: qf.capital_expenditure,
+            FinancialMetric.FREE_CASH_FLOW: qf.free_cash_flow,
+            FinancialMetric.DIVIDENDS_PAID: qf.dividends_paid,
         }
         return mapping.get(metric)
 

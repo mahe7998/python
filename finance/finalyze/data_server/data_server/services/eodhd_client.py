@@ -1,6 +1,7 @@
 """EODHD API client for making actual API calls."""
 
 import logging
+import time
 from datetime import datetime
 from typing import Any, Optional
 
@@ -234,3 +235,41 @@ async def close_eodhd_client():
     if _client is not None:
         await _client.close()
         _client = None
+
+
+# --- Forex rate cache ---
+_forex_cache: dict[str, tuple[float, float]] = {}  # currency -> (rate_to_usd, monotonic_ts)
+_FOREX_CACHE_TTL = 3600  # 1 hour
+
+
+async def get_forex_rate_to_usd(currency: str) -> Optional[float]:
+    """Get exchange rate from currency to USD (e.g., HKD -> 0.128).
+
+    Returns 1.0 for USD. Caches rates for 1 hour.
+    Falls back to previous cached value on fetch failure.
+    """
+    if currency == "USD":
+        return 1.0
+
+    now = time.monotonic()
+    if currency in _forex_cache:
+        rate, ts = _forex_cache[currency]
+        if now - ts < _FOREX_CACHE_TTL:
+            return rate
+
+    try:
+        client = await get_eodhd_client()
+        data = await client.get_real_time(f"{currency}USD.FOREX")
+        rate = float(data.get("close", 0))
+        if rate > 0:
+            _forex_cache[currency] = (rate, now)
+            logger.info(f"Forex rate {currency}/USD = {rate}")
+            return rate
+    except Exception as e:
+        logger.error(f"Failed to fetch forex rate for {currency}/USD: {e}")
+
+    # Fallback to stale cached value
+    if currency in _forex_cache:
+        return _forex_cache[currency][0]
+
+    return None

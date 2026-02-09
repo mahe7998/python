@@ -215,6 +215,129 @@ class LivePrice(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class QuarterlyFinancial(Base):
+    """Quarterly financial data (income statement, balance sheet, cash flow)."""
+
+    __tablename__ = "quarterly_financials"
+
+    ticker: Mapped[str] = mapped_column(String(20), primary_key=True)
+    report_date: Mapped[datetime] = mapped_column(Date, primary_key=True)
+    quarter: Mapped[Optional[str]] = mapped_column(String(4))
+    year: Mapped[Optional[int]] = mapped_column(Integer)
+    # Income Statement
+    total_revenue: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    gross_profit: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    operating_income: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    net_income: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    ebit: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    cost_of_revenue: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    research_development: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    selling_general_admin: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    interest_expense: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    tax_provision: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    # Balance Sheet
+    cash: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    short_term_investments: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    total_assets: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    total_current_assets: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    total_liabilities: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    total_current_liabilities: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    stockholders_equity: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    long_term_debt: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    retained_earnings: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    # Cash Flow
+    operating_cash_flow: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    capital_expenditure: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    free_cash_flow: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    dividends_paid: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    # Metadata
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_quarterly_financials_ticker", "ticker"),
+    )
+
+
+class CompanyHighlight(Base):
+    """Company highlights: valuation, profitability, growth, share stats, technicals."""
+
+    __tablename__ = "company_highlights"
+
+    ticker: Mapped[str] = mapped_column(String(20), primary_key=True)
+    # General
+    name: Mapped[Optional[str]] = mapped_column(String(255))
+    sector: Mapped[Optional[str]] = mapped_column(String(100))
+    industry: Mapped[Optional[str]] = mapped_column(String(100))
+    exchange: Mapped[Optional[str]] = mapped_column(String(20))
+    currency: Mapped[Optional[str]] = mapped_column(String(10))
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    # Valuation
+    pe_ratio: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    forward_pe: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    peg_ratio: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    pb_ratio: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    ps_ratio: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    ev_revenue: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    ev_ebitda: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    enterprise_value: Mapped[Optional[int]] = mapped_column(BigInteger)
+    # Profitability
+    profit_margin: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 6))
+    operating_margin: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 6))
+    roe: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 6))
+    roa: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 6))
+    gross_profit_ttm: Mapped[Optional[int]] = mapped_column(BigInteger)
+    ebitda: Mapped[Optional[int]] = mapped_column(BigInteger)
+    revenue_ttm: Mapped[Optional[int]] = mapped_column(BigInteger)
+    revenue_per_share: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    eps: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    diluted_eps_ttm: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    # Growth
+    quarterly_revenue_growth_yoy: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 6))
+    quarterly_earnings_growth_yoy: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 6))
+    eps_estimate_current_year: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    wall_street_target_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    # Dividends
+    dividend_yield: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 6))
+    dividend_share: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    # Share Stats
+    shares_outstanding: Mapped[Optional[int]] = mapped_column(BigInteger)
+    shares_float: Mapped[Optional[int]] = mapped_column(BigInteger)
+    percent_insiders: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 4))
+    percent_institutions: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 4))
+    shares_short: Mapped[Optional[int]] = mapped_column(BigInteger)
+    short_ratio: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    # Technicals
+    beta: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 4))
+    week_52_high: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    week_52_low: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    day_50_ma: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    day_200_ma: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    # Market
+    market_cap: Mapped[Optional[int]] = mapped_column(BigInteger)
+    # Metadata
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class SharesHistory(Base):
+    """Historical shares outstanding data from multiple sources."""
+
+    __tablename__ = "shares_history"
+
+    ticker: Mapped[str] = mapped_column(String(20), primary_key=True)
+    report_date: Mapped[datetime] = mapped_column(Date, primary_key=True)
+    source: Mapped[str] = mapped_column(String(20), primary_key=True)  # sec_edgar, eodhd, yfinance
+    shares_outstanding: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    filing_type: Mapped[Optional[str]] = mapped_column(String(10))  # 10-K, 10-Q (SEC only)
+    filed_date: Mapped[Optional[datetime]] = mapped_column(Date)  # SEC filing date
+    fiscal_year: Mapped[Optional[int]] = mapped_column(Integer)
+    fiscal_period: Mapped[Optional[str]] = mapped_column(String(4))  # Q1-Q4, FY
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_shares_history_ticker_date", "ticker", "report_date"),
+    )
+
+
 class CacheMetadata(Base):
     """Cache metadata for staleness checking."""
 

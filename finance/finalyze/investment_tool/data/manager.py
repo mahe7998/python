@@ -119,20 +119,12 @@ class DataManager:
         exchange: str,
         use_cache: bool = True,
     ) -> Optional[CompanyInfo]:
-        """Get company information."""
-        # Check local cache first for quick UI access
-        if use_cache:
-            cached = self.user_store.get_company(ticker)
-            if cached is not None:
-                cache_age = datetime.now() - (cached.last_updated or datetime.min)
-                # Check if cache is valid (has essential data like market_cap)
-                is_complete = cached.market_cap is not None
-                if cache_age < timedelta(days=self.config.data.max_cache_age_days) and is_complete:
-                    return cached
-                # If cache is incomplete, re-fetch
-                if not is_complete:
-                    logger.debug(f"Cached company info for {ticker} is incomplete, re-fetching")
+        """Get company information.
 
+        Always fetches from the data server (which handles its own caching)
+        to ensure market_cap reflects the latest shares_outstanding × live_price.
+        Local cache is only used as fallback when the server is unavailable.
+        """
         company = self._fetch_from_providers(
             "get_company_info",
             ticker=ticker,
@@ -141,8 +133,15 @@ class DataManager:
 
         if company is not None:
             self.user_store.store_company(company)
+            return company
 
-        return company
+        # Fallback to local cache if server is unavailable
+        if use_cache:
+            cached = self.user_store.get_company(ticker)
+            if cached is not None:
+                return cached
+
+        return None
 
     def get_news(
         self,
@@ -256,11 +255,24 @@ class DataManager:
                 logger.warning(f"Failed to get live price: {e}")
         return None
 
+    def get_shares_history(
+        self,
+        ticker: str,
+        exchange: str,
+    ) -> Dict[str, Any]:
+        """Get shares outstanding history."""
+        return self._fetch_from_providers(
+            "get_shares_history",
+            ticker=ticker,
+            exchange=exchange,
+        ) or {"ticker": ticker, "shares_history": [], "latest_shares_outstanding": None}
+
     def get_batch_daily_changes(
         self,
         symbols: List[str],
         start_date: date,
         end_date: date,
+        daily_change: bool = False,
     ) -> Dict[str, Dict[str, Any]]:
         """
         Get daily price changes for multiple symbols in a single call.
@@ -271,6 +283,7 @@ class DataManager:
             symbols: List of symbols like ["AAPL.US", "GOOGL.US"]
             start_date: Start date for price comparison
             end_date: End date for price comparison
+            daily_change: If True, compare last 2 trading days instead of full range
 
         Returns:
             Dict mapping symbol to {"start_price": float, "end_price": float, "change": float}
@@ -278,7 +291,7 @@ class DataManager:
         eodhd = self.providers.get("eodhd")
         if eodhd and isinstance(eodhd, EODHDProvider):
             try:
-                return eodhd.get_batch_daily_changes(symbols, start_date, end_date)
+                return eodhd.get_batch_daily_changes(symbols, start_date, end_date, daily_change)
             except Exception as e:
                 logger.warning(f"Failed to get batch daily changes: {e}")
         return {}

@@ -520,6 +520,9 @@ class WatchlistWidget(QWidget):
                         )
                         logger.info(f"Got daily prices for {item.ticker}: {len(prices) if prices is not None else 'None'}")
 
+                        # Get live price for current value and prev_close
+                        live = self.data_manager.get_live_price(item.ticker, "US")
+
                         if prices is not None and len(prices) >= 1:
                             # Sort by date ascending to ensure correct first/last
                             prices_sorted = prices.sort_index(ascending=True)
@@ -529,8 +532,11 @@ class WatchlistWidget(QWidget):
                             row["open"] = first.get("open") or first.get("Open")  # Period start open
                             row["volume"] = prices_sorted["volume"].sum() if "volume" in prices_sorted.columns else (prices_sorted["Volume"].sum() if "Volume" in prices_sorted.columns else None)
 
-                            # Get today's live price for current value
-                            live = self.data_manager.get_live_price(item.ticker, "US")
+                            # Get prev_close from live price (previous trading day's close)
+                            if live:
+                                row["prev_close"] = live.get("previous_close")
+
+                            # Get current price from live data or latest close
                             if live and live.get("price"):
                                 row["price"] = live.get("price")
                             else:
@@ -542,6 +548,16 @@ class WatchlistWidget(QWidget):
                             if period_open and row["price"]:
                                 row["change"] = row["price"] - period_open
                                 row["change_percent"] = row["change"] / period_open
+                        elif live:
+                            # No historical data, use live price only
+                            row["price"] = live.get("price")
+                            row["open"] = live.get("open")
+                            row["prev_close"] = live.get("previous_close")
+                            row["volume"] = live.get("volume")
+                            if live.get("change") is not None:
+                                row["change"] = live.get("change")
+                            if live.get("change_percent") is not None:
+                                row["change_percent"] = live.get("change_percent") / 100  # Convert from percent to decimal
 
                     # Get P/E ratio and market cap from company info
                     company = self.data_manager.get_company_info(item.ticker, "US")
@@ -550,6 +566,9 @@ class WatchlistWidget(QWidget):
                             row["pe_ratio"] = company.pe_ratio
                         if company.market_cap:
                             row["market_cap"] = company.market_cap
+
+                    # Log final row values for debugging
+                    logger.info(f"{item.ticker} row: price={row.get('price')}, open={row.get('open')}, prev_close={row.get('prev_close')}, volume={row.get('volume')}, change={row.get('change')}")
                 except Exception as e:
                     logger.error(f"Error fetching prices for {item.ticker}: {e}")
                     import traceback

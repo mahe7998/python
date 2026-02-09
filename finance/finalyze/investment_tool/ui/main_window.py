@@ -31,6 +31,7 @@ from investment_tool.ui.styles.theme import get_stylesheet
 from investment_tool.ui.dialogs.settings_dialog import SettingsDialog
 from investment_tool.ui.dialogs.category_dialog import CategoryDialog
 from investment_tool.ui.dialogs.add_stock_dialog import AddStockDialog
+from investment_tool.ui.widgets.fundamentals_overview import FundamentalsOverviewWidget
 from investment_tool.ui.widgets.market_treemap import MarketTreemap, TreemapItem
 from investment_tool.ui.widgets.news_feed import NewsFeedWidget
 from investment_tool.ui.widgets.quarterly_financials import QuarterlyFinancialsWidget
@@ -256,6 +257,10 @@ class MainWindow(QMainWindow):
         # Quarterly Financials tab
         self.quarterly_financials = QuarterlyFinancialsWidget()
         self.chart_tabs.addTab(self.quarterly_financials, "Financials")
+
+        # Fundamentals Overview tab
+        self.fundamentals_overview = FundamentalsOverviewWidget()
+        self.chart_tabs.addTab(self.fundamentals_overview, "Fundamentals")
 
         right_layout.addWidget(self.chart_tabs, stretch=2)
 
@@ -486,6 +491,7 @@ class MainWindow(QMainWindow):
             self.sentiment_gauge.set_data_manager(self.data_manager)
             self.news_feed.set_data_manager(self.data_manager)
             self.quarterly_financials.set_data_manager(self.data_manager)
+            self.fundamentals_overview.set_data_manager(self.data_manager)
 
             if self.data_manager.is_connected():
                 # Get server status for EODHD API call count
@@ -631,10 +637,13 @@ class MainWindow(QMainWindow):
 
             # Fallback to batch API if no live prices or market closed or not 1D
             if not batch_changes:
+                # For 1D, compare last 2 trading days (EODHD daily prices)
+                use_daily_change = (selected_period == "1D")
                 batch_changes = self.data_manager.get_batch_daily_changes(
                     symbols,
                     start.date() if hasattr(start, 'date') else start,
                     end.date() if hasattr(end, 'date') else end,
+                    daily_change=use_daily_change,
                 )
                 logger.info(f"Batch API returned {len(batch_changes)}/{len(symbols)} price changes for period={selected_period}")
 
@@ -786,6 +795,11 @@ class MainWindow(QMainWindow):
             self.quarterly_financials.set_ticker(ticker, exchange)
             logger.info(f"[TIMING] Quarterly financials: {(time.perf_counter() - t6)*1000:.0f}ms")
 
+            # Update fundamentals overview
+            t7 = time.perf_counter()
+            self.fundamentals_overview.set_ticker(ticker, exchange)
+            logger.info(f"[TIMING] Fundamentals overview: {(time.perf_counter() - t7)*1000:.0f}ms")
+
             logger.info(f"[TIMING] TOTAL _on_stock_selected: {(time.perf_counter() - total_start)*1000:.0f}ms")
         finally:
             self._selecting = False
@@ -818,6 +832,9 @@ class MainWindow(QMainWindow):
 
         # Update quarterly financials period
         self.quarterly_financials.set_period(period)
+
+        # Update fundamentals overview period (no-op but keeps interface consistent)
+        self.fundamentals_overview.set_period(period)
 
         # Set period and refresh watchlist data
         self.watchlist_widget.set_period(period)
@@ -1153,15 +1170,15 @@ class MainWindow(QMainWindow):
             period_prices = self.data_manager.get_daily_prices(ticker, exchange, start, end)
 
             if is_intraday_period(period):
-                # For 1D: only use live prices if market is actually open
-                # When market is closed, live prices are stale and will give wrong results
+                # For 1D: use EODHD daily prices for prev_close (accurate),
+                # live prices only for current price during market hours
                 market_open = is_market_open(exchange)
 
                 symbol = f"{ticker}.{exchange}"
                 live_prices = self.data_manager.get_all_live_prices() if market_open else None
                 live_data = live_prices.get(symbol) if live_prices else None
 
-                # Get previous day's close from daily prices for change calculation
+                # Get previous day's close from EODHD daily prices
                 prev_close = None
                 if period_prices is not None and len(period_prices) >= 2:
                     prev_close = period_prices["close"].iloc[-2]
@@ -1173,7 +1190,7 @@ class MainWindow(QMainWindow):
                     day_open = live_data.get("open")
                     day_high = live_data.get("high")
                     day_low = live_data.get("low")
-                    # Calculate change from prev day close to live price
+                    # Calculate change from EODHD prev day close to live price
                     if prev_close is not None:
                         change = current - prev_close
                         change_pct = change / prev_close if prev_close != 0 else 0
@@ -1182,7 +1199,7 @@ class MainWindow(QMainWindow):
                         change_pct = 0
                     logger.debug(f"Using live price for {ticker}: ${current:.2f} ({change_pct*100:.2f}%)")
                 else:
-                    # Market is closed - use daily prices entirely
+                    # Market is closed - use EODHD daily prices entirely
                     if period_prices is not None and len(period_prices) >= 1:
                         last_day = period_prices.iloc[-1]
                         current = last_day["close"]

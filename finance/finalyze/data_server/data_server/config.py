@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     cache_company_info: int = 604800  # 7 days
     cache_search: int = 3600  # 1 hour
 
+    # SEC EDGAR
+    sec_edgar_user_agent: str = "FinalyzeApp admin@finalyze.local"
+    sec_edgar_rate_limit: float = 0.15  # seconds between requests
+
     # Worker intervals (seconds)
     worker_price_interval: int = 15
     worker_news_interval: int = 900  # 15 minutes
