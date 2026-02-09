@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QLabel,
 )
+from PySide6.QtGui import QCursor
 import pyqtgraph as pg
 import numpy as np
 
@@ -124,8 +125,22 @@ class QuarterlyFinancialsWidget(QWidget):
         self._exchange: Optional[str] = None
         self._current_period: str = "1Y"
         self._quarterly_data: List[QuarterlyFinancial] = []
+        self._bar_regions: List[Dict] = []
 
         self._setup_ui()
+
+        # Custom floating tooltip (persists while mouse is over a bar)
+        self._tooltip = QLabel(None, Qt.ToolTip)
+        self._tooltip.setStyleSheet(
+            "QLabel {"
+            "  background-color: #1F2937;"
+            "  color: #F9FAFB;"
+            "  border: 1px solid #374151;"
+            "  border-radius: 4px;"
+            "  padding: 6px 8px;"
+            "}"
+        )
+        self._tooltip.hide()
 
     def _setup_ui(self) -> None:
         """Setup the widget UI."""
@@ -194,6 +209,10 @@ class QuarterlyFinancialsWidget(QWidget):
 
         # Hide auto-range button
         chart.hideButtons()
+
+        # Enable mouse tracking for tooltip hit-testing
+        self._plot_item = chart.plotItem
+        chart.scene().sigMouseMoved.connect(self._on_mouse_moved)
 
         return chart
 
@@ -356,6 +375,7 @@ class QuarterlyFinancialsWidget(QWidget):
 
     def _update_chart(self) -> None:
         """Update the chart based on current period and metric."""
+        self._bar_regions = []
         self.chart.clear()
 
         if not self._quarterly_data:
@@ -366,12 +386,7 @@ class QuarterlyFinancialsWidget(QWidget):
             return
 
         metric = self.metric_combo.currentData()
-        is_short_period = self._current_period in ("1D", "1W", "1M", "3M", "6M", "YTD", "1Y")
-
-        if is_short_period:
-            self._render_combined_view(metric)
-        else:
-            self._render_grouped_view(metric)
+        self._render_grouped_view(metric)
 
     def _render_combined_view(self, metric: FinancialMetric) -> None:
         """Render last 4 quarters in a simple bar chart."""
@@ -404,6 +419,13 @@ class QuarterlyFinancialsWidget(QWidget):
                 brush=pg.mkBrush(color), pen=pg.mkPen(color, width=1)
             )
             self.chart.addItem(bar)
+            self._bar_regions.append({
+                "x_min": xval - bar_width / 2,
+                "x_max": xval + bar_width / 2,
+                "quarter": quarters[i].quarter,
+                "year": quarters[i].year,
+                "value": float(height),
+            })
 
         # Set x-axis labels
         x_axis = self.chart.getAxis("bottom")
@@ -429,13 +451,7 @@ class QuarterlyFinancialsWidget(QWidget):
         if not self._quarterly_data:
             return
 
-        # Determine number of years based on period
-        if self._current_period == "2Y":
-            num_years = 2
-        elif self._current_period == "5Y":
-            num_years = 5
-        else:
-            num_years = 3  # Default for 3M, etc.
+        num_years = 5
 
         # Get unique years (most recent first)
         years = sorted(set(q.year for q in self._quarterly_data), reverse=True)[:num_years]
@@ -457,11 +473,19 @@ class QuarterlyFinancialsWidget(QWidget):
                 x = q_idx + (y_idx - len(years) / 2 + 0.5) * bar_width
                 color = YEAR_COLORS[y_idx % len(YEAR_COLORS)]
 
+                actual_width = bar_width * 0.9
                 bar = pg.BarGraphItem(
-                    x=[x], height=[value], width=bar_width * 0.9,
+                    x=[x], height=[value], width=actual_width,
                     brush=pg.mkBrush(color), pen=pg.mkPen(color, width=1)
                 )
                 self.chart.addItem(bar)
+                self._bar_regions.append({
+                    "x_min": x - actual_width / 2,
+                    "x_max": x + actual_width / 2,
+                    "quarter": quarter,
+                    "year": year,
+                    "value": float(value),
+                })
 
         # Set x-axis ticks to quarter labels
         x_axis = self.chart.getAxis("bottom")
@@ -517,6 +541,114 @@ class QuarterlyFinancialsWidget(QWidget):
             FinancialMetric.DIVIDENDS_PAID: qf.dividends_paid,
         }
         return mapping.get(metric)
+
+    def _format_value(self, v: float) -> str:
+        """Format a financial value with appropriate suffix."""
+        negative = v < 0
+        av = abs(v)
+        if av >= 1e12:
+            s = f"${av/1e12:.2f}T"
+        elif av >= 1e9:
+            s = f"${av/1e9:.2f}B"
+        elif av >= 1e6:
+            s = f"${av/1e6:.2f}M"
+        elif av >= 1e3:
+            s = f"${av/1e3:.2f}K"
+        else:
+            s = f"${av:,.0f}"
+        return f"-{s}" if negative else s
+
+    def _on_mouse_moved(self, pos) -> None:
+        """Handle mouse movement over chart for tooltip display."""
+        if not self._bar_regions:
+            self._tooltip.hide()
+            return
+
+        vb = self._plot_item.vb
+        mouse_point = vb.mapSceneToView(pos)
+        mx, my = mouse_point.x(), mouse_point.y()
+
+        for region in self._bar_regions:
+            val = region["value"]
+            if region["x_min"] <= mx <= region["x_max"]:
+                # Check y bounds (handle negative bars)
+                hit = (val >= 0 and 0 <= my <= val) or (val < 0 and val <= my <= 0)
+                if hit:
+                    html = self._build_tooltip_html(region)
+                    self._tooltip.setText(html)
+                    self._tooltip.adjustSize()
+                    cursor_pos = QCursor.pos()
+                    self._tooltip.move(cursor_pos.x() + 16, cursor_pos.y() + 16)
+                    self._tooltip.show()
+                    return
+
+        self._tooltip.hide()
+
+    def _build_tooltip_html(self, region: Dict) -> str:
+        """Build rich HTML tooltip for a hovered bar."""
+        quarter = region["quarter"]
+        year = region["year"]
+        value = region["value"]
+        metric = self.metric_combo.currentData()
+
+        # Exact value
+        formatted_value = self._format_value(value)
+
+        # Annual total: sum all quarters of this year for the current metric
+        annual_values = []
+        for qf in self._quarterly_data:
+            if qf.year == year:
+                v = self._get_metric_value(qf, metric)
+                if v is not None:
+                    annual_values.append(v)
+        annual_total = sum(annual_values) if annual_values else None
+        num_quarters = len(annual_values)
+
+        # % of annual
+        pct_of_annual = None
+        if annual_total and annual_total != 0 and value >= 0:
+            pct_of_annual = value / annual_total * 100
+
+        # YoY change
+        prev_value = self._find_quarter_value(quarter, year - 1, metric)
+        yoy_change = None
+        if prev_value is not None and prev_value != 0:
+            yoy_change = (value - prev_value) / abs(prev_value) * 100
+
+        # Build HTML
+        rows = f'<tr><td>Value:</td><td align="right"><b>{formatted_value}</b></td></tr>'
+
+        if annual_total is not None:
+            rows += (
+                f'<tr><td>Annual Total:&nbsp;&nbsp;</td>'
+                f'<td align="right">{self._format_value(annual_total)} ({num_quarters} quarter{"s" if num_quarters != 1 else ""})</td></tr>'
+            )
+
+        if pct_of_annual is not None:
+            rows += f'<tr><td>% of Annual:</td><td align="right">{pct_of_annual:.1f}%</td></tr>'
+
+        if yoy_change is not None:
+            color = "#22C55E" if yoy_change >= 0 else "#EF4444"
+            sign = "+" if yoy_change >= 0 else ""
+            rows += (
+                f'<tr><td>YoY Change:</td>'
+                f'<td align="right" style="color: {color};">{sign}{yoy_change:.1f}%</td></tr>'
+            )
+
+        if prev_value is not None:
+            rows += (
+                f'<tr><td>{quarter} {year - 1}:</td>'
+                f'<td align="right">{self._format_value(prev_value)}</td></tr>'
+            )
+
+        html = (
+            f'<div style="font-family: monospace; font-size: 12px;">'
+            f'<b>{quarter} {year} &mdash; {metric.value}</b><br>'
+            f'<hr>'
+            f'<table>{rows}</table>'
+            f'</div>'
+        )
+        return html
 
     def _on_metric_changed(self, index: int) -> None:
         """Handle metric selection change."""

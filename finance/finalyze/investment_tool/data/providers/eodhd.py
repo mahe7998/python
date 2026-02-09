@@ -371,6 +371,44 @@ class EODHDProvider(DataProviderBase):
 
         return articles
 
+    def get_split_history(self, ticker: str, exchange: str) -> List[Dict[str, Any]]:
+        """Detect stock splits from raw daily price data.
+
+        Compares adjusted_close/close ratio between consecutive days.
+        A significant change in this ratio indicates a split.
+
+        Returns list of {"date": "YYYY-MM-DD", "ratio": int} (e.g. ratio=10 for 10:1 split).
+        """
+        symbol = self.format_symbol(ticker, exchange)
+
+        # Fetch raw EOD data (data server returns both close and adjusted_close)
+        data = self._request(
+            f"eod/{symbol}",
+            params={"from": "2000-01-01", "to": date.today().isoformat()},
+        )
+        if not data or len(data) < 2:
+            return []
+
+        splits = []
+        prev_ratio = None
+        for i, row in enumerate(data):
+            close = row.get("close")
+            adj = row.get("adjusted_close")
+            if not close or not adj or close == 0:
+                continue
+            ratio = adj / close
+            if prev_ratio is not None and prev_ratio != 0:
+                factor = ratio / prev_ratio
+                rounded = round(factor)
+                if rounded >= 2 and abs(factor - rounded) / rounded < 0.05:
+                    splits.append({
+                        "date": row["date"],
+                        "ratio": rounded,
+                    })
+            prev_ratio = ratio
+
+        return splits
+
     def get_shares_history(self, ticker: str, exchange: str) -> Dict[str, Any]:
         """Get shares outstanding history from data server."""
         symbol = self.format_symbol(ticker, exchange)

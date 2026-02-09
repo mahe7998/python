@@ -267,6 +267,14 @@ class DataManager:
             exchange=exchange,
         ) or {"ticker": ticker, "shares_history": [], "latest_shares_outstanding": None}
 
+    def get_split_history(self, ticker: str, exchange: str) -> List[Dict]:
+        """Get stock split history detected from daily price data."""
+        return self._fetch_from_providers(
+            "get_split_history",
+            ticker=ticker,
+            exchange=exchange,
+        ) or []
+
     def get_batch_daily_changes(
         self,
         symbols: List[str],
