@@ -34,6 +34,9 @@ gymnasium>=0.29.0
 # NLP & Transcription
 faster-whisper>=1.0.0
 
+# MCP Server
+mcp>=1.0.0
+
 # Utilities
 python-dotenv>=1.0.0
 loguru>=0.7.0

@@ -244,12 +244,19 @@ async def get_intraday_prices(
             logger.info(f"No intraday data yet for {symbol} today - data will accumulate from price worker")
             return []
 
-    # If we already have EODHD data, return it
-    if cached_source == "eodhd" and cached_data:
+    # A full US trading day has ~390 1-minute bars (9:30 AM - 4:00 PM ET).
+    # Consider data "complete" if it covers at least 80% of the day.
+    min_complete_bars = 310
+
+    # If we already have complete EODHD data, return it
+    if cached_source == "eodhd" and cached_data and len(cached_data) >= min_complete_bars:
         total_time = (time.time() - start_time) * 1000
         log_timing(endpoint, True, cache_time, 0, total_time)
-        logger.info(f"[CACHE HIT] EODHD data for {symbol}")
+        logger.info(f"[CACHE HIT] EODHD data for {symbol} ({len(cached_data)} bars)")
         return cached_data
+
+    if cached_source == "eodhd" and cached_data:
+        logger.info(f"Cached EODHD data for {symbol} is incomplete ({len(cached_data)} bars < {min_complete_bars}), retrying")
 
     logger.info(f"Will try EODHD for {symbol} (market_open={market_open}, cached_source={cached_source})")
 
@@ -271,15 +278,51 @@ async def get_intraday_prices(
             raise HTTPException(status_code=502, detail=f"Error fetching from EODHD API: {e}")
         eodhd_time = (time.time() - eodhd_start) * 1000
 
-        # If EODHD returned no data, fall back to cached
+        # If EODHD data is missing or incomplete, try yfinance as fallback
+        eodhd_is_complete = data and len(data) >= min_complete_bars
+        if not eodhd_is_complete and not market_open:
+            eodhd_count = len(data) if data else 0
+            logger.info(f"EODHD data incomplete for {symbol} ({eodhd_count} bars), trying yfinance fallback")
+
+            try:
+                from data_server.services.yfinance_client import get_intraday_prices as yf_intraday
+
+                # Determine target date from the request timestamps
+                target_date = from_ts.date() if from_ts else today
+                yf_data = await yf_intraday(
+                    ticker=symbol.split(".")[0],
+                    exchange=symbol.split(".")[-1] if "." in symbol else "US",
+                    interval=interval,
+                    target_date=target_date,
+                )
+
+                if yf_data and len(yf_data) > eodhd_count:
+                    logger.info(f"yfinance returned {len(yf_data)} bars for {symbol} (vs EODHD {eodhd_count})")
+                    data = yf_data
+                else:
+                    logger.info(f"yfinance returned {len(yf_data) if yf_data else 0} bars, not better than EODHD")
+            except Exception as e:
+                logger.warning(f"yfinance fallback failed for {symbol}: {e}")
+
         if not data:
-            logger.info(f"EODHD returned no data for {symbol}, falling back to cached")
+            logger.info(f"No intraday data from any source for {symbol}, falling back to cached")
             if cached_data:
                 return cached_data
             return []
 
-        # Store EODHD data with source='eodhd'
-        count = await cache.store_intraday_prices(session, symbol, data, source="eodhd")
+        # Only mark as 'eodhd' source if data covers most of the trading day.
+        # Otherwise keep as 'live' so we retry on next request.
+        is_complete = len(data) >= min_complete_bars
+        source_label = "eodhd" if is_complete else "live"
+        if not is_complete:
+            logger.info(f"Storing incomplete data for {symbol} ({len(data)} bars), keeping source='live' for retry")
+
+            # If cached data has more records, prefer it
+            if cached_data and len(cached_data) >= len(data):
+                logger.info(f"Cached data has more records ({len(cached_data)} vs {len(data)}), keeping cached")
+                return cached_data
+
+        count = await cache.store_intraday_prices(session, symbol, data, source=source_label)
         await cache.update_cache_metadata(
             session,
             cache_key,

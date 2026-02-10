@@ -8,7 +8,7 @@ import hashlib
 import os
 import time
 from datetime import date, datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 import requests
 import pandas as pd
@@ -42,10 +42,18 @@ class EODHDProvider(DataProviderBase):
         BASE_URL = "https://eodhd.com/api"
     RATE_LIMIT_DELAY = 0.1  # Reduced since data server handles rate limiting
 
+    # TTL for cached fundamentals/shares data (seconds)
+    _CACHE_TTL = 300  # 5 minutes
+
     def __init__(self, api_key: str, cache: Optional[Any] = None):
         super().__init__(api_key, cache)
         self._last_request_time = 0.0
         self.api_call_count = 0
+
+        # Session-level caches to avoid redundant API calls
+        self._split_cache: Dict[str, List[Dict]] = {}
+        self._fundamentals_cache: Dict[str, Tuple[float, Any]] = {}
+        self._shares_cache: Dict[str, Tuple[float, Any]] = {}
 
         # Log which server we're using
         if "eodhd.com" in self.BASE_URL:
@@ -236,11 +244,25 @@ class EODHDProvider(DataProviderBase):
 
         return df[columns]
 
+    def _get_cached_fundamentals(self, ticker: str, exchange: str) -> Any:
+        """Get fundamentals data with TTL cache."""
+        key = f"{ticker}.{exchange}"
+        now = time.time()
+        if key in self._fundamentals_cache:
+            cached_time, cached_data = self._fundamentals_cache[key]
+            if now - cached_time < self._CACHE_TTL:
+                logger.debug(f"Fundamentals cache hit for {key}")
+                return cached_data
+
+        symbol = self.format_symbol(ticker, exchange)
+        data = self._request(f"fundamentals/{symbol}")
+        if data is not None:
+            self._fundamentals_cache[key] = (now, data)
+        return data
+
     def get_company_info(self, ticker: str, exchange: str) -> CompanyInfo:
         """Fetch company metadata from EODHD or data server."""
-        symbol = self.format_symbol(ticker, exchange)
-
-        data = self._request(f"fundamentals/{symbol}")
+        data = self._get_cached_fundamentals(ticker, exchange)
 
         if not data:
             raise DataNotFoundError(self.name, ticker, "company_info")
@@ -296,9 +318,7 @@ class EODHDProvider(DataProviderBase):
 
     def get_fundamentals(self, ticker: str, exchange: str) -> Dict[str, Any]:
         """Fetch fundamental data from EODHD."""
-        symbol = self.format_symbol(ticker, exchange)
-
-        data = self._request(f"fundamentals/{symbol}")
+        data = self._get_cached_fundamentals(ticker, exchange)
 
         if not data:
             raise DataNotFoundError(self.name, ticker, "fundamentals")
@@ -379,6 +399,11 @@ class EODHDProvider(DataProviderBase):
 
         Returns list of {"date": "YYYY-MM-DD", "ratio": int} (e.g. ratio=10 for 10:1 split).
         """
+        key = f"{ticker}.{exchange}"
+        if key in self._split_cache:
+            logger.debug(f"Split cache hit for {key}")
+            return self._split_cache[key]
+
         symbol = self.format_symbol(ticker, exchange)
 
         # Fetch raw EOD data (data server returns both close and adjusted_close)
@@ -387,6 +412,7 @@ class EODHDProvider(DataProviderBase):
             params={"from": "2000-01-01", "to": date.today().isoformat()},
         )
         if not data or len(data) < 2:
+            self._split_cache[key] = []
             return []
 
         splits = []
@@ -407,18 +433,31 @@ class EODHDProvider(DataProviderBase):
                     })
             prev_ratio = ratio
 
+        self._split_cache[key] = splits
         return splits
 
     def get_shares_history(self, ticker: str, exchange: str) -> Dict[str, Any]:
         """Get shares outstanding history from data server."""
-        symbol = self.format_symbol(ticker, exchange)
+        key = f"{ticker}.{exchange}"
+        now = time.time()
+        if key in self._shares_cache:
+            cached_time, cached_data = self._shares_cache[key]
+            if now - cached_time < self._CACHE_TTL:
+                logger.debug(f"Shares cache hit for {key}")
+                return cached_data
+
+        empty_result = {"ticker": ticker, "shares_history": [], "latest_shares_outstanding": None}
 
         if "eodhd.com" in self.BASE_URL:
-            return {"ticker": ticker, "shares_history": [], "latest_shares_outstanding": None}
+            self._shares_cache[key] = (now, empty_result)
+            return empty_result
 
+        symbol = self.format_symbol(ticker, exchange)
         data = self._request(f"shares-history/{symbol}")
         if not data:
-            return {"ticker": ticker, "shares_history": [], "latest_shares_outstanding": None}
+            self._shares_cache[key] = (now, empty_result)
+            return empty_result
+        self._shares_cache[key] = (now, data)
         return data
 
     def get_batch_daily_changes(

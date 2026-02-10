@@ -37,6 +37,7 @@ from investment_tool.ui.widgets.news_feed import NewsFeedWidget
 from investment_tool.ui.widgets.quarterly_financials import QuarterlyFinancialsWidget
 from investment_tool.ui.widgets.sentiment_gauge import SentimentGaugeWidget
 from investment_tool.ui.widgets.stock_chart import StockChart
+from investment_tool.ui.control_server import ControlServer
 from investment_tool.ui.widgets.watchlist import WatchlistWidget
 from investment_tool.utils.helpers import (
     get_date_range,
@@ -74,6 +75,13 @@ class MainWindow(QMainWindow):
         self._setup_timers()
 
         self._initialize_data()
+
+        # Start embedded HTTP control server for external tool integration
+        self._control_server = ControlServer(port=18765, parent=self)
+        self._control_server.state_requested.connect(self._on_control_get_state)
+        self._control_server.select_stock_requested.connect(self._on_control_select_stock)
+        self._control_server.set_period_requested.connect(self._on_control_set_period)
+        self._control_server.start()
 
     def _setup_window(self) -> None:
         """Configure main window properties."""
@@ -825,10 +833,9 @@ class MainWindow(QMainWindow):
         # Reload treemap data
         self._load_treemap_data()
 
-        # Reload stock chart if a stock is selected
+        # Reload stock chart if a stock is selected (skip metrics - they don't depend on period)
         if self._selected_ticker and self._selected_exchange:
             self._load_stock_chart(self._selected_ticker, self._selected_exchange)
-            self._update_metrics(self._selected_ticker, self._selected_exchange)
 
         # Update quarterly financials period
         self.quarterly_financials.set_period(period)
@@ -1437,6 +1444,42 @@ class MainWindow(QMainWindow):
             "</ul>",
         )
 
+    # --- Control server handlers (called on main thread via signals) ---
+
+    def _on_control_get_state(self):
+        """Provide current UI state to the control server."""
+        state = {
+            "ticker": self._selected_ticker,
+            "exchange": self._selected_exchange,
+            "period": self.treemap.get_selected_period(),
+            "filter": self.treemap.get_selected_filter(),
+        }
+        self._control_server.provide_result(state)
+
+    def _on_control_select_stock(self, ticker: str, exchange: str):
+        """Handle stock selection from control server."""
+        logger.info(f"Control API: selecting {ticker}.{exchange}")
+        self._on_stock_selected(ticker, exchange)
+        self._control_server.provide_result({
+            "status": "ok",
+            "ticker": ticker,
+            "exchange": exchange,
+        })
+
+    def _on_control_set_period(self, period: str):
+        """Handle period change from control server."""
+        logger.info(f"Control API: setting period to {period}")
+        # Setting currentText triggers currentTextChanged → _on_treemap_period_changed
+        self.treemap.period_combo.setCurrentText(period)
+        self._control_server.provide_result({
+            "status": "ok",
+            "period": period,
+        })
+
     def closeEvent(self, event) -> None:
         """Handle window close event."""
+        # Stop control server
+        if hasattr(self, '_control_server'):
+            self._control_server.stop()
+            self._control_server.wait(2000)
         event.accept()
