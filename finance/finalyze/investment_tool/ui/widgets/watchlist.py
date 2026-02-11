@@ -146,6 +146,12 @@ class WatchlistTableModel(QAbstractTableModel):
             return self._data[row].get("ticker")
         return None
 
+    def get_exchange_at(self, row: int) -> str:
+        """Get exchange at row index."""
+        if 0 <= row < len(self._data):
+            return self._data[row].get("exchange", "US")
+        return "US"
+
     def remove_row(self, row: int) -> None:
         """Remove a row from the model."""
         if 0 <= row < len(self._data):
@@ -358,9 +364,10 @@ class WatchlistWidget(QWidget):
         # Build data - fetch real prices if data_manager available
         data = []
         for item in items:
+            exchange = item.exchange or "US"
             row = {
                 "ticker": item.ticker,
-                "exchange": "US",
+                "exchange": exchange,
                 "prev_close": None,
                 "open": None,
                 "price": None,
@@ -380,7 +387,7 @@ class WatchlistWidget(QWidget):
                         from datetime import date, timedelta
 
                         # Get intraday for current price, open, and volume
-                        market_open, market_close = get_last_trading_day_hours("US")
+                        market_open, market_close = get_last_trading_day_hours(exchange)
                         now_utc = datetime.now(timezone.utc)
 
                         # Check if market is currently open
@@ -394,7 +401,7 @@ class WatchlistWidget(QWidget):
                         # No need for force_refresh when market is closed
                         # Use 1m interval - EODHD 5m data has gaps/NULLs for some stocks
                         intraday = self.data_manager.get_intraday_prices(
-                            item.ticker, "US", "1m", market_open, end_dt,
+                            item.ticker, exchange, "1m", market_open, end_dt,
                             use_cache=True, force_refresh=False
                         )
                         logger.info(f"Got intraday prices for {item.ticker}: {len(intraday) if intraday is not None else 'None'}")
@@ -403,7 +410,7 @@ class WatchlistWidget(QWidget):
                         start = date.today() - timedelta(days=10)
                         end = date.today()
                         daily_prices = self.data_manager.get_daily_prices(
-                            item.ticker, "US", start, end
+                            item.ticker, exchange, start, end
                         )
 
                         if intraday is not None and len(intraday) >= 1:
@@ -469,9 +476,24 @@ class WatchlistWidget(QWidget):
                                         # Remember this day's close as potential prev_close
                                         prev_day_close = daily_prices.iloc[i].get("close") or daily_prices.iloc[i].get("Close")
 
+                                # If trading_day wasn't found in daily data (e.g., non-US market
+                                # already closed today but daily data not yet updated), use the
+                                # last daily close as prev_close and intraday open as open.
+                                if row["prev_close"] is None and prev_day_close is not None:
+                                    row["prev_close"] = prev_day_close
+                                    if row["open"] is None:
+                                        # Use first bar's open from intraday data
+                                        open_col = "open" if "open" in intraday.columns else "Open"
+                                        first_valid = intraday[intraday[open_col].notna()]
+                                        if len(first_valid) > 0:
+                                            row["open"] = first_valid.iloc[0][open_col]
+                                    if row["price"] is not None:
+                                        row["change"] = row["price"] - prev_day_close
+                                        row["change_percent"] = row["change"] / prev_day_close
+
                             # Fallback to live prices if daily data is missing open/prev_close
                             if row["open"] is None or row["prev_close"] is None:
-                                live = self.data_manager.get_live_price(item.ticker, "US")
+                                live = self.data_manager.get_live_price(item.ticker, exchange)
                                 logger.debug(f"Live price fallback for {item.ticker}: {live}")
                                 if live:
                                     if row["open"] is None:
@@ -497,7 +519,7 @@ class WatchlistWidget(QWidget):
 
                         # Final fallback to live prices if still missing data
                         if row["price"] is None or row["open"] is None or row["prev_close"] is None:
-                            live = self.data_manager.get_live_price(item.ticker, "US")
+                            live = self.data_manager.get_live_price(item.ticker, exchange)
                             logger.debug(f"Final live price fallback for {item.ticker}: {live}")
                             if live:
                                 if row["price"] is None:
@@ -516,12 +538,12 @@ class WatchlistWidget(QWidget):
                         # For other periods (1W, 1M, etc.), use daily data
                         start, end = get_date_range(self._current_period, min_trading_days=0)
                         prices = self.data_manager.get_daily_prices(
-                            item.ticker, "US", start, end
+                            item.ticker, exchange, start, end
                         )
                         logger.info(f"Got daily prices for {item.ticker}: {len(prices) if prices is not None else 'None'}")
 
                         # Get live price for current value and prev_close
-                        live = self.data_manager.get_live_price(item.ticker, "US")
+                        live = self.data_manager.get_live_price(item.ticker, exchange)
 
                         if prices is not None and len(prices) >= 1:
                             # Sort by date ascending to ensure correct first/last
@@ -560,12 +582,19 @@ class WatchlistWidget(QWidget):
                                 row["change_percent"] = live.get("change_percent") / 100  # Convert from percent to decimal
 
                     # Get P/E ratio and market cap from company info
-                    company = self.data_manager.get_company_info(item.ticker, "US")
+                    company = self.data_manager.get_company_info(item.ticker, exchange)
                     if company:
                         if company.pe_ratio:
                             row["pe_ratio"] = company.pe_ratio
                         if company.market_cap:
                             row["market_cap"] = company.market_cap
+
+                        # Convert non-USD prices to USD
+                        fx = company.fx_rate_to_usd
+                        if fx and company.currency and company.currency != "USD":
+                            for key in ("price", "open", "prev_close", "change"):
+                                if row.get(key) is not None:
+                                    row[key] = row[key] * fx
 
                     # Log final row values for debugging
                     logger.info(f"{item.ticker} row: price={row.get('price')}, open={row.get('open')}, prev_close={row.get('prev_close')}, volume={row.get('volume')}, change={row.get('change')}")
@@ -622,7 +651,7 @@ class WatchlistWidget(QWidget):
         if dialog.exec():
             ticker, exchange, _, _ = dialog.get_result()
             if ticker:
-                self.data_manager.add_to_watchlist(self._current_watchlist_id, ticker)
+                self.data_manager.add_to_watchlist(self._current_watchlist_id, ticker, exchange or "US")
                 # Also add to Uncategorized category so it appears in All Stocks
                 self._add_to_uncategorized(ticker, exchange or "US")
                 self._refresh_current()
@@ -633,7 +662,7 @@ class WatchlistWidget(QWidget):
         if not self._current_watchlist_id or not self.data_manager:
             return
 
-        self.data_manager.add_to_watchlist(self._current_watchlist_id, ticker)
+        self.data_manager.add_to_watchlist(self._current_watchlist_id, ticker, exchange)
         # Also add to Uncategorized category so it appears in All Stocks
         self._add_to_uncategorized(ticker, exchange)
         self._refresh_current()
@@ -804,18 +833,19 @@ class WatchlistWidget(QWidget):
         ticker = model.get_ticker_at(row)
         if not ticker:
             return
+        exchange = model.get_exchange_at(row)
 
         menu = QMenu(self)
         menu.setStyleSheet("QMenu { font-size: 11px; }")
 
         view_action = menu.addAction(f"View {ticker}")
         view_action.triggered.connect(
-            lambda: self.stock_selected.emit(ticker, "US")
+            lambda: self.stock_selected.emit(ticker, exchange)
         )
 
         chart_action = menu.addAction("Open Chart")
         chart_action.triggered.connect(
-            lambda: self.stock_double_clicked.emit(ticker, "US")
+            lambda: self.stock_double_clicked.emit(ticker, exchange)
         )
 
         menu.addSeparator()
@@ -863,7 +893,8 @@ class WatchlistWidget(QWidget):
 
         ticker = model.get_ticker_at(row)
         if ticker:
-            self.stock_selected.emit(ticker, "US")
+            exchange = model.get_exchange_at(row)
+            self.stock_selected.emit(ticker, exchange)
 
     def _on_row_double_clicked(self, table: QTableView, index: QModelIndex) -> None:
         """Handle row double-click."""
@@ -880,7 +911,8 @@ class WatchlistWidget(QWidget):
 
         ticker = model.get_ticker_at(row)
         if ticker:
-            self.stock_double_clicked.emit(ticker, "US")
+            exchange = model.get_exchange_at(row)
+            self.stock_double_clicked.emit(ticker, exchange)
 
     def update_stock_data(self, data: List[Dict[str, Any]]) -> None:
         """Update stock data for all watchlists."""

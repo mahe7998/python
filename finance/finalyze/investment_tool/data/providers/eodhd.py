@@ -282,6 +282,7 @@ class EODHDProvider(DataProviderBase):
                 pe_ratio=h.get("pe_ratio"),
                 eps=h.get("eps"),
                 last_updated=datetime.now(),
+                fx_rate_to_usd=h.get("fx_rate_to_usd"),
             )
         elif "General" in data:
             # Original EODHD format (direct API)

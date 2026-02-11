@@ -45,7 +45,11 @@ from investment_tool.utils.helpers import (
     format_large_number,
     is_intraday_period,
     get_last_trading_day_hours,
+)
+from investment_tool.utils.exchange_hours import (
+    get_market_hours as _get_market_hours,
     is_market_open,
+    clear_lunch_break as _clear_lunch_break,
 )
 
 
@@ -461,7 +465,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_live_prices(self) -> None:
         """Refresh live prices if 1D period is selected and market is open."""
-        from investment_tool.utils.helpers import is_market_open
+        from investment_tool.utils.exchange_hours import is_market_open
 
         if not self.data_manager:
             return
@@ -897,43 +901,42 @@ class MainWindow(QMainWindow):
 
         try:
             if is_intraday_period(period):
-                # For 1D: show full trading day (9:30 AM - 4:00 PM ET)
+                # For 1D: show full trading day using exchange-specific market hours
                 now_utc = datetime.utcnow()
-
-                # Convert UTC to Eastern Time (EST = UTC-5, simplified - no DST handling)
-                # TODO: Use zoneinfo for proper DST handling
-                now_et = now_utc - timedelta(hours=5)
-                current_time_et = now_et.time()
-                current_date_et = now_et.date()
-
-                # Market hours in ET
                 from datetime import time as dt_time
-                market_open_et = dt_time(9, 30)
-                market_close_et = dt_time(16, 0)
 
-                # Determine trading date based on ET time
-                if current_time_et < market_open_et:
-                    # Before market open in ET - show previous trading day
-                    trading_date = current_date_et - timedelta(days=1)
+                # Get market hours for this exchange
+                utc_offset, open_h, open_m, close_h, close_m = _get_market_hours(exchange)
+
+                # Convert UTC to exchange local time
+                now_local = now_utc + timedelta(hours=utc_offset)
+                current_time_local = now_local.time()
+                current_date_local = now_local.date()
+
+                market_open_local = dt_time(open_h, open_m)
+                market_close_local = dt_time(close_h, close_m)
+
+                # Determine trading date in local time
+                if current_time_local < market_open_local:
+                    trading_date = current_date_local - timedelta(days=1)
                 else:
-                    # During or after market hours - show today's trading data
-                    trading_date = current_date_et
+                    trading_date = current_date_local
 
                 # Skip weekends (Saturday=5, Sunday=6)
                 while trading_date.weekday() >= 5:
                     trading_date = trading_date - timedelta(days=1)
 
-                logger.info(f"ET time: {now_et.strftime('%Y-%m-%d %H:%M')} ET, trading_date: {trading_date}")
+                logger.info(f"Exchange {exchange}: local time {now_local.strftime('%Y-%m-%d %H:%M')} (UTC{utc_offset:+g}), trading_date: {trading_date}")
 
                 prices = None
 
-                # Trading day in UTC: 9:30 AM - 4:00 PM ET = 14:30 - 21:00 UTC
-                market_open_utc = datetime(trading_date.year, trading_date.month, trading_date.day, 14, 30)
-                market_close_utc = datetime(trading_date.year, trading_date.month, trading_date.day, 21, 0)
+                # Market hours in UTC for the trading date
+                market_open_utc = datetime(trading_date.year, trading_date.month, trading_date.day, open_h, open_m) - timedelta(hours=utc_offset)
+                market_close_utc = datetime(trading_date.year, trading_date.month, trading_date.day, close_h, close_m) - timedelta(hours=utc_offset)
 
-                # Check if market is currently open (using ET time)
-                is_weekday = current_date_et.weekday() < 5
-                market_is_open = is_weekday and market_open_et <= current_time_et <= market_close_et and trading_date == current_date_et
+                # Check if market is currently open
+                is_weekday = current_date_local.weekday() < 5
+                market_is_open = is_weekday and market_open_local <= current_time_local <= market_close_local and trading_date == current_date_local
 
                 # Create full trading day index (1-minute intervals)
                 full_day_index = pd.date_range(
@@ -948,47 +951,54 @@ class MainWindow(QMainWindow):
                     raw_prices = None
                     display_date = trading_date
 
-                    for days_back in range(5):  # Try up to 5 trading days back
-                        check_date = trading_date - timedelta(days=days_back)
+                    # Try recent trading days (handles holidays + weekends)
+                    check_date = trading_date
+                    for _ in range(10):
                         # Skip weekends
                         while check_date.weekday() >= 5:
                             check_date = check_date - timedelta(days=1)
 
-                        day_open = datetime(check_date.year, check_date.month, check_date.day, 14, 30)
-                        day_close = datetime(check_date.year, check_date.month, check_date.day, 21, 0)
+                        day_open = datetime(check_date.year, check_date.month, check_date.day, open_h, open_m) - timedelta(hours=utc_offset)
+                        day_close = datetime(check_date.year, check_date.month, check_date.day, close_h, close_m) - timedelta(hours=utc_offset)
 
-                        logger.info(f"Checking EODHD intraday for {ticker} on {check_date}")
+                        logger.info(f"Checking intraday for {ticker} on {check_date}")
                         try:
                             raw_prices = self.data_manager.get_intraday_prices(
                                 ticker, exchange, "1m",
                                 day_open.replace(tzinfo=timezone.utc),
                                 day_close.replace(tzinfo=timezone.utc),
                                 use_cache=True,
-                                force_refresh=True,  # Only use EODHD data
+                                force_refresh=True,
                             )
                         except Exception as e:
-                            logger.warning(f"Failed to get EODHD intraday for {check_date}: {e}")
+                            logger.warning(f"Failed to get intraday for {check_date}: {e}")
                             raw_prices = None
 
                         if raw_prices is not None and not raw_prices.empty:
                             display_date = check_date
                             market_open_utc = day_open
                             market_close_utc = day_close
-                            # Update full day index for this date
                             full_day_index = pd.date_range(
                                 start=market_open_utc,
                                 end=market_close_utc,
                                 freq="1min"
                             )
-                            logger.info(f"Found EODHD data for {check_date} ({len(raw_prices)} records)")
+                            logger.info(f"Found intraday data for {check_date} ({len(raw_prices)} records)")
                             break
 
-                        # Move to previous trading day
-                        trading_date = check_date - timedelta(days=1)
+                        check_date = check_date - timedelta(days=1)
 
                     if raw_prices is not None and not raw_prices.empty:
                         if "timestamp" in raw_prices.columns:
                             raw_prices = raw_prices.set_index("timestamp")
+
+                        # EODHD often dumps total daily volume into the last bar -
+                        # cap outlier volume at the 95th percentile of other bars
+                        if "volume" in raw_prices.columns and len(raw_prices) > 10:
+                            vol = raw_prices["volume"].dropna()
+                            p95 = vol.quantile(0.95)
+                            if p95 > 0:
+                                raw_prices["volume"] = raw_prices["volume"].clip(upper=p95)
 
                         # Reindex to full trading day and forward-fill gaps
                         # This ensures bars connect (open of bar N = close of bar N-1)
@@ -1003,7 +1013,9 @@ class MainWindow(QMainWindow):
 
                         if "volume" in prices.columns:
                             prices["volume"] = prices["volume"].fillna(0)
-                        if display_date != current_date_et:
+                        # Clear lunch break so chart shows a gap instead of flat line
+                        _clear_lunch_break(prices, exchange, utc_offset, display_date)
+                        if display_date != current_date_local:
                             self.status_bar.showMessage(
                                 f"Showing {display_date.strftime('%b %d')} - latest EODHD data available", 5000
                             )
@@ -1038,7 +1050,7 @@ class MainWindow(QMainWindow):
                         num_points = len(raw_prices)
                         logger.info(f"Got {num_points} intraday records for {ticker} today")
 
-                        # Reindex to full trading day (9:30 AM - 4:00 PM ET)
+                        # Reindex to full trading day
                         # Keep NaN for missing times - no forward-fill
                         prices = raw_prices.reindex(full_day_index)
 
@@ -1064,34 +1076,68 @@ class MainWindow(QMainWindow):
 
                         self.status_bar.showMessage(f"Live: ${live_price_data.get('price'):.2f} (building intraday)", 5000)
                     else:
-                        # No live data - fallback to daily data
-                        logger.info(f"No live data for {ticker}, falling back to daily")
-                        start = trading_date - timedelta(days=7)
-                        end = trading_date
-                        prices = self.data_manager.get_daily_prices(ticker, exchange, start, end)
-                        if prices is not None and "volume" in prices.columns:
-                            prices["volume"] = prices["volume"].fillna(0)
-                        self.status_bar.showMessage(f"Showing daily data for {ticker}", 5000)
+                        # No live data - likely a holiday. Try previous days' intraday.
+                        logger.info(f"No live data for {ticker}, trying previous days' intraday")
+                        check_date = trading_date - timedelta(days=1)
+                        for _ in range(10):
+                            while check_date.weekday() >= 5:
+                                check_date = check_date - timedelta(days=1)
+                            day_open = datetime(check_date.year, check_date.month, check_date.day, open_h, open_m) - timedelta(hours=utc_offset)
+                            day_close = datetime(check_date.year, check_date.month, check_date.day, close_h, close_m) - timedelta(hours=utc_offset)
+                            logger.info(f"Checking intraday for {ticker} on {check_date}")
+                            try:
+                                raw_prev = self.data_manager.get_intraday_prices(
+                                    ticker, exchange, "1m",
+                                    day_open.replace(tzinfo=timezone.utc),
+                                    day_close.replace(tzinfo=timezone.utc),
+                                    use_cache=True, force_refresh=True,
+                                )
+                            except Exception:
+                                raw_prev = None
+                            if raw_prev is not None and not raw_prev.empty:
+                                if "timestamp" in raw_prev.columns:
+                                    raw_prev = raw_prev.set_index("timestamp")
+                                if "volume" in raw_prev.columns and len(raw_prev) > 10:
+                                    p95 = raw_prev["volume"].dropna().quantile(0.95)
+                                    if p95 > 0:
+                                        raw_prev["volume"] = raw_prev["volume"].clip(upper=p95)
+                                prev_index = pd.date_range(start=day_open, end=day_close, freq="1min")
+                                prices = raw_prev.reindex(prev_index)
+                                prices["close"] = prices["close"].ffill()
+                                prices["open"] = prices["open"].fillna(prices["close"])
+                                prices["high"] = prices["high"].fillna(prices["close"])
+                                prices["low"] = prices["low"].fillna(prices["close"])
+                                if "volume" in prices.columns:
+                                    prices["volume"] = prices["volume"].fillna(0)
+                                # Clear lunch break so chart shows a gap instead of flat line
+                                _clear_lunch_break(prices, exchange, utc_offset, check_date)
+                                logger.info(f"Found intraday data for {check_date} ({len(raw_prev)} records)")
+                                self.status_bar.showMessage(
+                                    f"Showing {check_date.strftime('%b %d')} - market closed today", 5000
+                                )
+                                break
+                            check_date = check_date - timedelta(days=1)
             elif period == "1W":
                 # Fetch intraday data for each trading day separately (EODHD limitation)
                 # This gives ~130 data points (5 days * 26 fifteen-min periods)
                 all_prices = []
 
-                # Use ET date for consistency with US market
+                # Use exchange-aware local date
                 now_utc = datetime.utcnow()
-                now_et = now_utc - timedelta(hours=5)  # EST = UTC-5
-                today_et = now_et.date()
+                utc_off, oh, om, ch, cm = _get_market_hours(exchange)
+                now_local_1w = now_utc + timedelta(hours=utc_off)
+                today_local = now_local_1w.date()
 
                 # Get last 7 calendar days, fetch each trading day
                 for days_ago in range(7, -1, -1):
-                    check_date = today_et - timedelta(days=days_ago)
+                    check_date = today_local - timedelta(days=days_ago)
                     # Skip weekends
                     if check_date.weekday() >= 5:
                         continue
 
-                    # Market hours: 9:30 AM - 4:00 PM ET = 14:30 - 21:00 UTC
-                    day_start = datetime(check_date.year, check_date.month, check_date.day, 14, 30, tzinfo=timezone.utc)
-                    day_end = datetime(check_date.year, check_date.month, check_date.day, 21, 0, tzinfo=timezone.utc)
+                    # Market hours in UTC for this exchange
+                    day_start = datetime(check_date.year, check_date.month, check_date.day, oh, om, tzinfo=timezone.utc) - timedelta(hours=utc_off)
+                    day_end = datetime(check_date.year, check_date.month, check_date.day, ch, cm, tzinfo=timezone.utc) - timedelta(hours=utc_off)
 
                     # Use 1m interval - EODHD 5m data has gaps/NULLs for some stocks
                     day_prices = self.data_manager.get_intraday_prices(
@@ -1106,19 +1152,20 @@ class MainWindow(QMainWindow):
                     if "timestamp" in prices.columns:
                         prices = prices.set_index("timestamp")
                     prices = prices.sort_index()
+                    # Cap outlier volume (EODHD dumps daily total into last bar)
+                    if "volume" in prices.columns and len(prices) > 10:
+                        vol = prices["volume"].dropna()
+                        p95 = vol.quantile(0.95)
+                        if p95 > 0:
+                            prices["volume"] = prices["volume"].clip(upper=p95)
                     # Resample to 15-minute OHLC for smooth graph
-                    # EODHD intraday volume is cumulative, so use 'last' then diff()
                     prices = prices.resample("15min").agg({
                         "open": "first",
                         "high": "max",
                         "low": "min",
                         "close": "last",
-                        "volume": "last"
+                        "volume": "sum"
                     }).dropna()
-                    # Convert cumulative volume to per-period volume
-                    if "volume" in prices.columns and len(prices) > 0:
-                        prices["volume"] = prices["volume"].diff().fillna(prices["volume"].iloc[0])
-                        prices["volume"] = prices["volume"].clip(lower=0)
                     if "volume" in prices.columns:
                         prices["volume"] = prices["volume"].fillna(0)
                     logger.info(f"Got {len(prices)} 15-min records for {ticker} (1W)")
@@ -1144,7 +1191,21 @@ class MainWindow(QMainWindow):
                 logger.debug(f"Selection changed during load, discarding data for {ticker}")
                 return
 
+            # Convert chart prices to USD for non-USD stocks
+            if prices is not None and not prices.empty and exchange != "US":
+                try:
+                    company = self.data_manager.get_company_info(ticker, exchange)
+                    if company and company.fx_rate_to_usd and company.currency and company.currency != "USD":
+                        fx = company.fx_rate_to_usd
+                        for col in ("open", "high", "low", "close"):
+                            if col in prices.columns:
+                                prices[col] = prices[col] * fx
+                        logger.info(f"Converted {ticker} chart prices to USD (fx={fx:.6f})")
+                except Exception as e:
+                    logger.warning(f"Failed to convert chart prices to USD: {e}")
+
             if prices is not None and not prices.empty:
+                logger.info(f"Chart data for {ticker}: {len(prices)} rows, index={prices.index[0]} to {prices.index[-1]}, dates={set(d.date() if hasattr(d, 'date') else d for d in prices.index)}")
                 self.stock_chart.set_data(prices, ticker, exchange)
             else:
                 self.stock_chart.clear()
@@ -1241,6 +1302,21 @@ class MainWindow(QMainWindow):
                     change_pct = 0
                     total_volume = 0
 
+            # Convert prices to USD for non-USD stocks
+            fx = company.fx_rate_to_usd if company and company.fx_rate_to_usd else None
+            if fx and company.currency and company.currency != "USD":
+                if current is not None:
+                    current = current * fx
+                if change is not None:
+                    change = change * fx
+                if is_intraday_period(period):
+                    if day_open is not None:
+                        day_open = day_open * fx
+                    if day_high is not None:
+                        day_high = day_high * fx
+                    if day_low is not None:
+                        day_low = day_low * fx
+
             if current is not None:
                 self.price_label.setText(f"${current:.2f}")
 
@@ -1271,6 +1347,9 @@ class MainWindow(QMainWindow):
             if week52_prices is not None and len(week52_prices) >= 1:
                 week52_high = week52_prices["high"].max()
                 week52_low = week52_prices["low"].min()
+                if fx and company and company.currency and company.currency != "USD":
+                    week52_high = week52_high * fx
+                    week52_low = week52_low * fx
                 self.week52_high_label.setText(f"${week52_high:.2f}")
                 self.week52_low_label.setText(f"${week52_low:.2f}")
             else:

@@ -202,7 +202,7 @@ class EODHDClient:
         if exchange:
             params["exchange"] = exchange
 
-        data = await self._request("search/" + query, {})
+        data = await self._request("search/" + query, params)
         return data if isinstance(data, list) else []
 
     # Exchanges
@@ -246,6 +246,7 @@ async def get_forex_rate_to_usd(currency: str) -> Optional[float]:
     """Get exchange rate from currency to USD (e.g., HKD -> 0.128).
 
     Returns 1.0 for USD. Caches rates for 1 hour.
+    Uses EOD inverse pair (USD/{currency}) for best precision, with real-time fallback.
     Falls back to previous cached value on fetch failure.
     """
     if currency == "USD":
@@ -257,16 +258,38 @@ async def get_forex_rate_to_usd(currency: str) -> Optional[float]:
         if now - ts < _FOREX_CACHE_TTL:
             return rate
 
+    client = await get_eodhd_client()
+
+    # Strategy 1: EOD inverse pair USD{currency}.FOREX → compute 1/rate
+    # Best precision, especially for currencies like KRW where direct pair rounds badly
     try:
-        client = await get_eodhd_client()
+        from datetime import datetime as dt
+        today = dt.utcnow().strftime("%Y-%m-%d")
+        eod_data = await client.get_eod(
+            f"USD{currency}.FOREX",
+            from_date=(dt.utcnow().replace(day=max(1, dt.utcnow().day - 10))).strftime("%Y-%m-%d"),
+            to_date=today,
+        )
+        if eod_data:
+            inverse_rate = float(eod_data[-1].get("close", 0))
+            if inverse_rate > 0:
+                rate = 1.0 / inverse_rate
+                _forex_cache[currency] = (rate, now)
+                logger.info(f"Forex rate {currency}/USD = {rate:.8f} (EOD inverse, USD/{currency} = {inverse_rate})")
+                return rate
+    except Exception as e:
+        logger.warning(f"EOD forex USD{currency}.FOREX failed: {e}")
+
+    # Strategy 2: Real-time {currency}USD.FOREX (e.g., HKDUSD.FOREX)
+    try:
         data = await client.get_real_time(f"{currency}USD.FOREX")
         rate = float(data.get("close", 0))
         if rate > 0:
             _forex_cache[currency] = (rate, now)
-            logger.info(f"Forex rate {currency}/USD = {rate}")
+            logger.info(f"Forex rate {currency}/USD = {rate} (real-time)")
             return rate
     except Exception as e:
-        logger.error(f"Failed to fetch forex rate for {currency}/USD: {e}")
+        logger.warning(f"Real-time forex {currency}USD.FOREX failed: {e}")
 
     # Fallback to stale cached value
     if currency in _forex_cache:

@@ -269,7 +269,7 @@ def get_market_hours(exchange: str = "US") -> Tuple[datetime, datetime]:
     """
     Get market open and close times for today in UTC.
 
-    US Market hours: 9:30 AM - 4:00 PM ET (Eastern Time)
+    Delegates to exchange_hours for accurate per-exchange hours.
 
     Args:
         exchange: Exchange code (default "US")
@@ -277,20 +277,11 @@ def get_market_hours(exchange: str = "US") -> Tuple[datetime, datetime]:
     Returns:
         Tuple of (market_open, market_close) in UTC (timezone-aware)
     """
+    from investment_tool.utils.exchange_hours import get_market_hours as _get_mkt_hours
     today = date.today()
-
-    if exchange == "US":
-        # US market hours: 9:30 AM - 4:00 PM ET
-        # ET is UTC-5 (EST) or UTC-4 (EDT)
-        # For simplicity, assume UTC-5 (winter) - adjust if needed
-        # Market open: 14:30 UTC, Market close: 21:00 UTC
-        market_open = datetime(today.year, today.month, today.day, 14, 30, tzinfo=timezone.utc)
-        market_close = datetime(today.year, today.month, today.day, 21, 0, tzinfo=timezone.utc)
-    else:
-        # Default to full day
-        market_open = datetime(today.year, today.month, today.day, 0, 0, tzinfo=timezone.utc)
-        market_close = datetime(today.year, today.month, today.day, 23, 59, tzinfo=timezone.utc)
-
+    utc_offset, open_h, open_m, close_h, close_m = _get_mkt_hours(exchange)
+    market_open = datetime(today.year, today.month, today.day, open_h, open_m, tzinfo=timezone.utc) - timedelta(hours=utc_offset)
+    market_close = datetime(today.year, today.month, today.day, close_h, close_m, tzinfo=timezone.utc) - timedelta(hours=utc_offset)
     return (market_open, market_close)
 
 
@@ -370,10 +361,9 @@ def calculate_cagr(
 
 def is_market_open(exchange: str = "US") -> bool:
     """
-    Check if market is currently open (simplified).
+    Check if market is currently open.
 
-    Uses UTC to work correctly regardless of user's local timezone.
-    US market hours: 9:30 AM - 4:00 PM ET = 14:30 - 21:00 UTC (EST)
+    Delegates to exchange_hours module for accurate per-exchange hours.
 
     Args:
         exchange: Exchange code
@@ -381,26 +371,8 @@ def is_market_open(exchange: str = "US") -> bool:
     Returns:
         True if market is likely open
     """
-    now_utc = datetime.now(timezone.utc)
-
-    # Check weekday in ET (UTC-5 for EST)
-    # Subtract 5 hours to get approximate ET day
-    et_offset = timedelta(hours=5)
-    now_et = now_utc - et_offset
-
-    if now_et.weekday() >= 5:  # Saturday or Sunday in ET
-        return False
-
-    if exchange == "US":
-        # US market: 9:30 AM - 4:00 PM ET = 14:30 - 21:00 UTC
-        market_open_utc = now_utc.replace(hour=14, minute=30, second=0, microsecond=0)
-        market_close_utc = now_utc.replace(hour=21, minute=0, second=0, microsecond=0)
-    else:
-        # Default: assume similar hours
-        market_open_utc = now_utc.replace(hour=14, minute=0, second=0, microsecond=0)
-        market_close_utc = now_utc.replace(hour=22, minute=30, second=0, microsecond=0)
-
-    return market_open_utc <= now_utc <= market_close_utc
+    from investment_tool.utils.exchange_hours import is_market_open as _is_open
+    return _is_open(exchange)
 
 
 def truncate_text(text: str, max_length: int, suffix: str = "...") -> str:

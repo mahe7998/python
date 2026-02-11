@@ -46,6 +46,17 @@ class UserDataStore:
             except Exception:
                 pass
 
+        # Migrate: backfill missing exchange in watchlist items from companies data
+        migrated = False
+        for wl_id, items in self._watchlist_items.items():
+            for item in items:
+                if "exchange" not in item:
+                    company = self._companies.get(item["ticker"], {})
+                    item["exchange"] = company.get("exchange", "US")
+                    migrated = True
+        if migrated:
+            self._save_watchlists()
+
     def _save_watchlists(self) -> None:
         """Save watchlists to JSON file."""
         data = {
@@ -91,7 +102,7 @@ class UserDataStore:
         self._save_watchlists()
 
     def add_to_watchlist(
-        self, watchlist_id: int, ticker: str, notes: Optional[str] = None
+        self, watchlist_id: int, ticker: str, exchange: str = "US", notes: Optional[str] = None
     ) -> None:
         """Add a stock to a watchlist."""
         if watchlist_id not in self._watchlist_items:
@@ -104,6 +115,7 @@ class UserDataStore:
         ]
         self._watchlist_items[watchlist_id].append({
             "ticker": ticker,
+            "exchange": exchange,
             "added_at": datetime.now().isoformat(),
             "notes": notes,
         })
@@ -125,6 +137,7 @@ class UserDataStore:
             WatchlistItem(
                 watchlist_id=watchlist_id,
                 ticker=item["ticker"],
+                exchange=item.get("exchange", "US"),
                 added_at=datetime.fromisoformat(item["added_at"]) if isinstance(item["added_at"], str) else item["added_at"],
                 notes=item.get("notes"),
             )

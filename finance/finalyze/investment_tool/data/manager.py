@@ -352,8 +352,8 @@ class DataManager:
     def delete_watchlist(self, watchlist_id: int):
         return self.user_store.delete_watchlist(watchlist_id)
 
-    def add_to_watchlist(self, watchlist_id: int, ticker: str, notes: Optional[str] = None):
-        return self.user_store.add_to_watchlist(watchlist_id, ticker, notes)
+    def add_to_watchlist(self, watchlist_id: int, ticker: str, exchange: str = "US", notes: Optional[str] = None):
+        return self.user_store.add_to_watchlist(watchlist_id, ticker, exchange, notes)
 
     def remove_from_watchlist(self, watchlist_id: int, ticker: str):
         return self.user_store.remove_from_watchlist(watchlist_id, ticker)

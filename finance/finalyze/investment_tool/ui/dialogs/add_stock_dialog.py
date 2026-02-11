@@ -445,10 +445,26 @@ class AddStockDialog(QDialog):
         self.selection_label.setText("No stock selected")
         self.add_btn.setEnabled(False)
 
-        if not self._search_results:
-            item = QListWidgetItem("No results found")
-            item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
+        # Offer manual entry if query looks like TICKER.EXCHANGE
+        query = self.search_input.text().strip()
+        if "." in query:
+            parts = query.split(".", 1)
+            manual_ticker = parts[0].upper()
+            manual_exchange = parts[1].upper()
+            manual_company = CompanyInfo(
+                ticker=manual_ticker,
+                exchange=manual_exchange,
+                name=f"(Manual entry)",
+            )
+            item = QListWidgetItem(f"{manual_ticker}.{manual_exchange}  (Add manually - exchange not in search index)")
+            item.setData(Qt.UserRole, manual_company)
             self.results_list.addItem(item)
+
+        if not self._search_results:
+            if "." not in query:
+                item = QListWidgetItem("No results found. Tip: type TICKER.EXCHANGE (e.g. 7203.TSE) to add manually")
+                item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
+                self.results_list.addItem(item)
             return
 
         for company in self._search_results:

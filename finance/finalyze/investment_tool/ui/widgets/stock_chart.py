@@ -5,9 +5,11 @@ from datetime import date, datetime, timezone, timedelta
 from typing import Optional, List, Dict, Tuple, Any
 import numpy as np
 
-# Eastern Time offset (UTC-5 for EST, UTC-4 for EDT)
-# For simplicity, using EST (UTC-5) - could be made dynamic
-ET_OFFSET = timedelta(hours=-5)
+from investment_tool.utils.exchange_hours import (
+    get_utc_offset as _get_exchange_offset,
+    get_local_market_hours,
+    is_market_open,
+)
 
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtWidgets import (
@@ -611,23 +613,38 @@ class StockChart(QWidget):
         self._ticker = ticker
         self._exchange = exchange
 
+        # Trim trailing NaN rows (future times) to avoid rendering artifacts,
+        # but remember the full day range so the x-axis shows the whole session.
+        self._full_day_index = self._data.index
+        last_valid = self._data['close'].last_valid_index()
+        if last_valid is not None:
+            trim_pos = self._data.index.get_loc(last_valid)
+            if trim_pos < len(self._data) - 1:
+                self._data = self._data.iloc[:trim_pos + 1]
+
         # Update labels with date
         date_str = ""
-        if not data.empty and hasattr(data.index[0], 'strftime'):
+        if not self._data.empty and hasattr(self._data.index[0], 'strftime'):
             # Get the date from the first data point
-            first_dt = data.index[0]
+            first_dt = self._data.index[0]
             if hasattr(first_dt, 'date'):
-                # Convert to ET for display
-                first_dt_et = first_dt + ET_OFFSET
-                date_str = f" - {first_dt_et.strftime('%b %d, %Y')}"
+                # Convert to exchange-local time for display
+                offset = _get_exchange_offset(exchange)
+                first_dt_local = first_dt + offset
+                date_str = f" - {first_dt_local.strftime('%b %d, %Y')}"
             elif hasattr(first_dt, 'strftime'):
                 date_str = f" - {first_dt.strftime('%b %d, %Y')}"
         self.ticker_label.setText(f"{ticker}.{exchange}{date_str}")
 
-        if not data.empty:
-            last_price = data["close"].iloc[-1]
-            prev_close = data["close"].iloc[-2] if len(data) > 1 else last_price
-            change = (last_price - prev_close) / prev_close
+        if not self._data.empty:
+            last_price = self._data["close"].dropna().iloc[-1] if not self._data["close"].dropna().empty else None
+            if last_price is not None:
+                closes = self._data["close"].dropna()
+                prev_close = closes.iloc[-2] if len(closes) > 1 else last_price
+                change = (last_price - prev_close) / prev_close if prev_close else 0
+            else:
+                change = 0
+                last_price = 0
 
             change_color = "#22C55E" if change >= 0 else "#EF4444"
             sign = "+" if change >= 0 else ""
@@ -683,9 +700,9 @@ class StockChart(QWidget):
                 # First bar keeps its original open
                 if len(display_data) > 0:
                     display_data.iloc[0, display_data.columns.get_loc('open')] = self._data.iloc[0]['open']
-                # Set high/low to just open/close (no wicks)
-                display_data['high'] = display_data[['open', 'close']].max(axis=1)
-                display_data['low'] = display_data[['open', 'close']].min(axis=1)
+                # Extend high/low to include new open but preserve real wicks
+                display_data['high'] = display_data[['open', 'high']].max(axis=1)
+                display_data['low'] = display_data[['open', 'low']].min(axis=1)
                 display_data = self._filter_volume_outliers_preserve_index(display_data)
             elif needs_resample:
                 display_data = self._data.resample('5min').agg({
@@ -693,12 +710,8 @@ class StockChart(QWidget):
                     'high': 'max',
                     'low': 'min',
                     'close': 'last',
-                    'volume': 'last'  # EODHD intraday volume is cumulative
+                    'volume': 'sum'  # Sum per-bar volumes into 5-min buckets
                 })
-                # Convert cumulative volume to per-period volume
-                if 'volume' in display_data.columns:
-                    display_data['volume'] = display_data['volume'].diff().fillna(display_data['volume'].iloc[0] if len(display_data) > 0 else 0)
-                    display_data['volume'] = display_data['volume'].clip(lower=0)  # No negative volumes
                 # Don't dropna() - keep full day index with NaN for future times
                 # Remove outlier volume bars (e.g., closing auction totals) only for valid data
                 valid_data = display_data.dropna()
@@ -720,9 +733,9 @@ class StockChart(QWidget):
                 # First bar keeps its original open
                 if len(display_data) > 0:
                     display_data.iloc[0, display_data.columns.get_loc('open')] = self._data.iloc[0]['open']
-                # Set high/low to just open/close (no wicks)
-                display_data['high'] = display_data[['open', 'close']].max(axis=1)
-                display_data['low'] = display_data[['open', 'close']].min(axis=1)
+                # Extend high/low to include new open but preserve real wicks
+                display_data['high'] = display_data[['open', 'high']].max(axis=1)
+                display_data['low'] = display_data[['open', 'low']].min(axis=1)
                 display_data = self._filter_volume_outliers_preserve_index(display_data)
             elif needs_resample:
                 display_data = self._data.resample('5min').agg({
@@ -730,12 +743,8 @@ class StockChart(QWidget):
                     'high': 'max',
                     'low': 'min',
                     'close': 'last',
-                    'volume': 'last'  # EODHD intraday volume is cumulative
+                    'volume': 'sum'  # Sum per-bar volumes into 5-min buckets
                 })
-                # Convert cumulative volume to per-period volume
-                if 'volume' in display_data.columns:
-                    display_data['volume'] = display_data['volume'].diff().fillna(display_data['volume'].iloc[0] if len(display_data) > 0 else 0)
-                    display_data['volume'] = display_data['volume'].clip(lower=0)  # No negative volumes
                 # Don't dropna() - keep full day index with NaN for future times
                 valid_data = display_data.dropna()
                 if not valid_data.empty:
@@ -794,13 +803,30 @@ class StockChart(QWidget):
         # Auto-range price widget
         self.price_widget.autoRange()
 
+        # If market is open AND data is from today, extend x-range to show the
+        # full trading session. If data is from a previous day (holiday, etc.),
+        # don't extend even if the market is technically open.
+        exchange = getattr(self, '_exchange', 'US') or 'US'
+        today = pd.Timestamp.now().normalize()
+        data_is_today = (
+            isinstance(display_data.index, pd.DatetimeIndex)
+            and len(display_data) > 0
+            and display_data.index[-1].normalize() == today
+        )
+        if is_market_open(exchange) and data_is_today:
+            full_day_len = len(getattr(self, '_full_day_index', display_data.index))
+            x_max = full_day_len - 1
+            self.price_widget.setXRange(0, x_max, padding=0.02)
+        else:
+            x_max = len(display_data) - 1
+
         # Set volume Y-axis range explicitly (0 to max volume with padding)
         display_data = getattr(self, '_display_data', self._data)
         if "volume" in display_data.columns:
             max_vol = display_data["volume"].max(skipna=True)
             if pd.notna(max_vol) and max_vol > 0:
                 self.volume_widget.setYRange(0, max_vol * 1.1, padding=0)
-            self.volume_widget.setXRange(0, len(display_data) - 1, padding=0.02)
+            self.volume_widget.setXRange(0, x_max, padding=0.02)
 
     def _update_indicators(self) -> None:
         """Update indicator overlays."""
@@ -923,8 +949,24 @@ class StockChart(QWidget):
         if display_data is None or display_data.empty:
             return
 
+        # Use the full day index for tick generation when market is open AND
+        # data is from today. Previous-day data (holiday etc.) uses trimmed index.
+        exchange = getattr(self, '_exchange', 'US') or 'US'
+        today = pd.Timestamp.now().normalize()
+        data_is_today = (
+            isinstance(display_data.index, pd.DatetimeIndex)
+            and len(display_data) > 0
+            and display_data.index[-1].normalize() == today
+        )
+        if is_market_open(exchange) and data_is_today:
+            tick_index = getattr(self, '_full_day_index', display_data.index)
+        else:
+            tick_index = display_data.index
+
         # Create date strings for x-axis - handle various date formats
-        if isinstance(display_data.index, pd.DatetimeIndex):
+        if isinstance(tick_index, pd.DatetimeIndex):
+            dates = tick_index
+        elif isinstance(display_data.index, pd.DatetimeIndex):
             dates = display_data.index
         elif "date" in display_data.columns:
             dates = pd.to_datetime(display_data["date"])
@@ -953,32 +995,35 @@ class StockChart(QWidget):
             last_date = dates[-1].date() if hasattr(dates[-1], 'date') else dates[-1]
             is_multi_day = first_date != last_date
 
+            # Use exchange-specific offset for time display
+            exchange = getattr(self, '_exchange', 'US') or 'US'
+            local_offset = _get_exchange_offset(exchange)
+            mkt_open_h, mkt_open_m, mkt_close_h, _ = get_local_market_hours(exchange)
+
             if is_multi_day:
                 # For multi-day intraday (1W view), show date at start of each day
                 daily_ticks = []
                 last_date_shown = None
                 for i, dt in enumerate(dates):
-                    dt_et = dt + ET_OFFSET if hasattr(dt, '__add__') else dt
-                    current_date = dt_et.date() if hasattr(dt_et, 'date') else dt_et
+                    dt_local = dt + local_offset if hasattr(dt, '__add__') else dt
+                    current_date = dt_local.date() if hasattr(dt_local, 'date') else dt_local
                     if current_date != last_date_shown:
-                        date_str = dt_et.strftime("%b %d") if hasattr(dt_et, 'strftime') else str(current_date)[:5]
+                        date_str = dt_local.strftime("%b %d") if hasattr(dt_local, 'strftime') else str(current_date)[:5]
                         daily_ticks.append((i, date_str))
                         last_date_shown = current_date
                 ticks = daily_ticks
             else:
-                # For single day intraday, show hourly ticks starting from market open
-                # Find indices that correspond to each hour (9:30, 10:30, 11:30, etc.)
+                # For single day intraday, show hourly ticks
                 hourly_ticks = []
                 last_hour = -1
                 for i, dt in enumerate(dates):
-                    # Convert to ET
-                    dt_et = dt + ET_OFFSET
-                    hour = dt_et.hour
-                    minute = dt_et.minute
-                    # Show tick at :30 of each hour (market opens at 9:30)
-                    if minute >= 30 and hour != last_hour:
-                        if hour >= 9 and hour <= 16:  # Market hours 9:30 AM - 4:00 PM
-                            time_str = f"{hour}:30" if hour >= 10 else f"9:30"
+                    dt_local = dt + local_offset
+                    hour = dt_local.hour
+                    minute = dt_local.minute
+                    # Show tick at the market-open minute of each hour
+                    if minute >= mkt_open_m and hour != last_hour:
+                        if mkt_open_h <= hour <= mkt_close_h:
+                            time_str = f"{hour}:{mkt_open_m:02d}"
                             hourly_ticks.append((i, time_str))
                             last_hour = hour
                 ticks = hourly_ticks
@@ -1027,14 +1072,16 @@ class StockChart(QWidget):
                     has_time = hasattr(dt, 'hour') and (dt.hour != 0 or dt.minute != 0)
 
                     if has_time:
-                        # Intraday data - show date and time in ET
-                        dt_et = dt + ET_OFFSET
+                        # Intraday data - show date and time in exchange-local time
+                        exchange = getattr(self, '_exchange', 'US') or 'US'
+                        local_offset = _get_exchange_offset(exchange)
+                        dt_local = dt + local_offset
                         current_period = self._current_period
                         if current_period == "1D":
-                            time_str = dt_et.strftime("%H:%M") + " ET  "
+                            time_str = dt_local.strftime("%H:%M") + "  "
                         else:
                             # For 1W (hourly data), show date and time
-                            time_str = dt_et.strftime("%b %d %H:%M") + " ET  "
+                            time_str = dt_local.strftime("%b %d %H:%M") + "  "
                     else:
                         # Daily data - show date only
                         time_str = dt.strftime("%b %d, %Y") + "  "

@@ -103,6 +103,7 @@ class CompanyInfo:
     asset_type: Optional[str] = None  # Common Stock, ETF, Fund, Index, etc.
     isin: Optional[str] = None
     previous_close: Optional[float] = None
+    fx_rate_to_usd: Optional[float] = None  # Forex rate to convert local currency to USD
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -255,6 +256,7 @@ class WatchlistItem:
     """Item in a watchlist."""
     watchlist_id: int
     ticker: str
+    exchange: str = "US"
     added_at: datetime = field(default_factory=datetime.now)
     notes: Optional[str] = None
 
@@ -262,6 +264,7 @@ class WatchlistItem:
         return {
             "watchlist_id": self.watchlist_id,
             "ticker": self.ticker,
+            "exchange": self.exchange,
             "added_at": self.added_at.isoformat(),
             "notes": self.notes,
         }

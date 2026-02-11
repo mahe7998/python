@@ -14,6 +14,7 @@ from data_server.config import get_settings
 from data_server.db.database import get_session
 from data_server.db import cache
 from data_server.services.eodhd_client import get_eodhd_client, get_eodhd_stats
+from data_server.utils.exchange_hours import is_market_open as is_exchange_market_open
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -22,29 +23,8 @@ router = APIRouter()
 
 
 def is_us_market_open() -> bool:
-    """Check if US stock market is currently open.
-
-    NYSE/NASDAQ hours: Monday-Friday, 9:30 AM - 4:00 PM Eastern Time.
-    Returns False on weekends and outside market hours.
-    """
-    try:
-        from zoneinfo import ZoneInfo
-    except ImportError:
-        from backports.zoneinfo import ZoneInfo
-
-    # Get current time in Eastern Time
-    eastern = ZoneInfo("America/New_York")
-    now_et = datetime.now(eastern)
-
-    # Check if it's a weekend (Saturday=5, Sunday=6)
-    if now_et.weekday() >= 5:
-        return False
-
-    # Check if within market hours (9:30 AM - 4:00 PM ET)
-    market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
-    market_close = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
-
-    return market_open <= now_et <= market_close
+    """Check if US stock market is currently open."""
+    return is_exchange_market_open("US")
 
 # Per-key locks to prevent concurrent fetches for the same data
 _fetch_locks: Dict[str, asyncio.Lock] = {}
@@ -99,7 +79,6 @@ async def get_eod_prices(
 
     if cached_data and len(cached_data) > 0:
         # We have data! Check if it covers the requested range adequately
-        # For daily prices, having at least 1 record in the range is usually sufficient
         # The data is ordered by date ASC, so first item is oldest, last is newest
         oldest_date = cached_data[0].get("date")
         newest_date = cached_data[-1].get("date")
@@ -107,16 +86,25 @@ async def get_eod_prices(
         # Check if we need to fetch more recent data (today's data might be missing)
         today = datetime.now().date()
         to_date_obj = to_date.date() if to_date else today
+        from_date_obj = from_date.date() if from_date else None
 
         # If the newest cached date is recent enough (within 1 day of requested end),
-        # consider it a cache hit
+        # AND the oldest cached date covers the requested start, consider it a cache hit
         if newest_date:
             newest_date_obj = datetime.fromisoformat(newest_date).date() if isinstance(newest_date, str) else newest_date
             days_behind = (to_date_obj - newest_date_obj).days
 
+            # Also check that cached data covers the start of requested range
+            start_covered = True
+            if from_date_obj and oldest_date:
+                oldest_date_obj = datetime.fromisoformat(oldest_date).date() if isinstance(oldest_date, str) else oldest_date
+                # Allow up to 5 days slack (weekends + holidays)
+                if oldest_date_obj > from_date_obj + timedelta(days=5):
+                    start_covered = False
+
             # Cache hit if we're at most 1 trading day behind (weekends don't count)
             # Or if the to_date is in the past (historical data won't change)
-            if days_behind <= 1 or to_date_obj < today:
+            if start_covered and (days_behind <= 1 or to_date_obj < today):
                 total_time = (time.time() - start_time) * 1000
                 log_timing(endpoint, True, cache_time, 0, total_time)
                 return cached_data
@@ -131,13 +119,20 @@ async def get_eod_prices(
         # Double-check cache after acquiring lock (another request may have populated it)
         cached_data = await cache.get_daily_prices(session, symbol, from_date, to_date)
         if cached_data and len(cached_data) > 0:
+            oldest_date = cached_data[0].get("date")
             newest_date = cached_data[-1].get("date")
             if newest_date:
                 today = datetime.now().date()
                 to_date_obj = to_date.date() if to_date else today
+                from_date_obj = from_date.date() if from_date else None
                 newest_date_obj = datetime.fromisoformat(newest_date).date() if isinstance(newest_date, str) else newest_date
                 days_behind = (to_date_obj - newest_date_obj).days
-                if days_behind <= 1 or to_date_obj < today:
+                start_covered = True
+                if from_date_obj and oldest_date:
+                    oldest_date_obj = datetime.fromisoformat(oldest_date).date() if isinstance(oldest_date, str) else oldest_date
+                    if oldest_date_obj > from_date_obj + timedelta(days=5):
+                        start_covered = False
+                if start_covered and (days_behind <= 1 or to_date_obj < today):
                     total_time = (time.time() - start_time) * 1000
                     logger.info(f"[CACHE HIT after lock] {endpoint}")
                     return cached_data
@@ -148,9 +143,21 @@ async def get_eod_prices(
         try:
             data = await client.get_eod(symbol, from_, to, period)
         except Exception as e:
-            logger.error(f"EODHD error: {e}")
-            raise HTTPException(status_code=502, detail=f"Error fetching from EODHD API: {e}")
+            logger.warning(f"EODHD error for {symbol}: {e}")
+            data = []  # Let yfinance fallback handle it
         eodhd_time = (time.time() - eodhd_start) * 1000
+
+        # If EODHD returned nothing, try yfinance as fallback
+        if not data:
+            try:
+                from data_server.services.yfinance_client import get_daily_prices as yf_daily
+                ticker_part = symbol.split(".")[0]
+                exchange_part = symbol.split(".")[-1] if "." in symbol else "US"
+                data = await yf_daily(ticker_part, exchange_part, from_, to)
+                if data:
+                    logger.info(f"yfinance returned {len(data)} daily bars for {symbol}")
+            except Exception as e:
+                logger.warning(f"yfinance daily fallback failed for {symbol}: {e}")
 
         # Store in cache (even if empty, to avoid repeated fetches for missing data)
         count = await cache.store_daily_prices(session, symbol, data)
@@ -212,8 +219,9 @@ async def get_intraday_prices(
     # Initialize cache_time for logging
     cache_time = 0
 
-    # Check if market is closed
-    market_open = is_us_market_open()
+    # Check if market is open for this exchange
+    exchange_code = symbol.split(".")[-1] if "." in symbol else "US"
+    market_open = is_exchange_market_open(exchange_code)
 
     # For historical data, use longer cache TTL (24h) since it won't change
     # For today's data, use shorter TTL (60s) to get fresh updates
@@ -225,6 +233,21 @@ async def get_intraday_prices(
     cached_source = await cache.get_intraday_source(session, symbol, from_ts, to_ts)
     cache_time = (time.time() - cache_start) * 1000
 
+    # Check if cached data is stale (for today's data during market hours)
+    # If the newest cached bar is more than 5 minutes old, try to refresh
+    cache_is_stale = False
+    if cached_data and is_today and market_open:
+        newest_ts = cached_data[-1].get("timestamp", "")
+        if newest_ts:
+            try:
+                newest_dt = datetime.fromisoformat(newest_ts)
+                age_minutes = (datetime.utcnow() - newest_dt).total_seconds() / 60
+                if age_minutes > 5:
+                    cache_is_stale = True
+                    logger.info(f"Cached intraday for {symbol} is stale ({age_minutes:.0f}min old), will refresh")
+            except (ValueError, TypeError):
+                pass
+
     # Determine if we should try EODHD:
     # 1. force_eodhd=true explicitly requested (but NOT for today's data during market hours - EODHD won't have it)
     # 2. Market is closed AND data is from 'live' source (not yet replaced with EODHD)
@@ -232,17 +255,27 @@ async def get_intraday_prices(
     force_eodhd_effective = force_eodhd and not (is_today and market_open)
     should_try_eodhd = force_eodhd_effective or (not market_open and cached_source == "live" and not is_today)
 
-    if not should_try_eodhd:
-        # Return cached data if available
+    if not should_try_eodhd and not cache_is_stale:
+        # Return cached data if available and fresh
         if cached_data:
             total_time = (time.time() - start_time) * 1000
             log_timing(endpoint, True, cache_time, 0, total_time)
             return cached_data
 
-        # If requesting today and no cached data, return empty (data will build up from price worker)
+        # If requesting today and no cached data:
+        # - For US stocks during/before market hours: return empty (data accumulates from price worker)
+        # - For non-US stocks (or closed markets): try yfinance since their market may have already closed today
         if is_today:
-            logger.info(f"No intraday data yet for {symbol} today - data will accumulate from price worker")
-            return []
+            exchange_code = symbol.split(".")[-1] if "." in symbol else "US"
+            if exchange_code == "US" and market_open:
+                logger.info(f"No intraday data yet for {symbol} today - data will accumulate from price worker")
+                return []
+            elif exchange_code == "US":
+                # US market closed today, but might not have EODHD data yet - try yfinance
+                logger.info(f"US market closed, no cached data for {symbol} today - trying yfinance")
+            else:
+                # Non-US stock - market may have already closed today, try yfinance
+                logger.info(f"Non-US stock {symbol}, no cached data today - trying yfinance fallback")
 
     # A full US trading day has ~390 1-minute bars (9:30 AM - 4:00 PM ET).
     # Consider data "complete" if it covers at least 80% of the day.
@@ -270,18 +303,15 @@ async def get_intraday_prices(
         try:
             data = await client.get_intraday(symbol, interval, from_, to)
         except Exception as e:
-            logger.error(f"EODHD error for {symbol}: {e}")
-            # Fall back to cached data if EODHD fails
-            if cached_data:
-                logger.info(f"Falling back to cached live data for {symbol}")
-                return cached_data
-            raise HTTPException(status_code=502, detail=f"Error fetching from EODHD API: {e}")
+            logger.warning(f"EODHD error for {symbol}: {e}")
+            data = []  # Let yfinance fallback handle it below
         eodhd_time = (time.time() - eodhd_start) * 1000
 
         # If EODHD data is missing or incomplete, try yfinance as fallback
-        eodhd_is_complete = data and len(data) >= min_complete_bars
-        if not eodhd_is_complete and not market_open:
-            eodhd_count = len(data) if data else 0
+        # Always try yfinance if EODHD returned nothing (exchange may not be supported)
+        eodhd_count = len(data) if data else 0
+        eodhd_is_complete = eodhd_count >= min_complete_bars
+        if not eodhd_is_complete and (not market_open or eodhd_count == 0):
             logger.info(f"EODHD data incomplete for {symbol} ({eodhd_count} bars), trying yfinance fallback")
 
             try:
@@ -482,20 +512,51 @@ async def _enrich_highlights_market_cap(session: AsyncSession, symbol: str, high
 
     highlights = dict(highlights)
     highlights["shares_outstanding"] = best_shares
+
+    currency = highlights.get("currency", "USD")
+
+    # Get forex rate once (needed for both live and fallback paths)
+    fx_rate = None
+    if currency and currency != "USD":
+        from data_server.services.eodhd_client import get_forex_rate_to_usd
+        fx_rate = await get_forex_rate_to_usd(currency)
+        if fx_rate:
+            highlights["fx_rate_to_usd"] = fx_rate
+
     if live_price and live_price.price:
         market_cap_local = int(best_shares * float(live_price.price))
 
         # Convert to USD if the stock trades in a non-USD currency
-        currency = highlights.get("currency", "USD")
-        if currency and currency != "USD":
-            from data_server.services.eodhd_client import get_forex_rate_to_usd
-            fx_rate = await get_forex_rate_to_usd(currency)
+        if fx_rate:
+            highlights["market_cap"] = int(market_cap_local * fx_rate)
+        else:
+            highlights["market_cap"] = market_cap_local
+    elif best_shares:
+        # No live price — use latest cached EOD close for shares × price calculation
+        from data_server.db.models import DailyPrice
+        last_close = None
+        try:
+            result = await session.execute(
+                select(DailyPrice.close)
+                .where(DailyPrice.ticker == symbol)
+                .order_by(DailyPrice.date.desc())
+                .limit(1)
+            )
+            row = result.scalar_one_or_none()
+            if row:
+                last_close = float(row)
+        except Exception as e:
+            logger.warning(f"Failed to query cached EOD close for {symbol}: {e}")
+
+        if last_close and last_close > 0:
+            market_cap_local = int(best_shares * last_close)
             if fx_rate:
                 highlights["market_cap"] = int(market_cap_local * fx_rate)
             else:
                 highlights["market_cap"] = market_cap_local
-        else:
-            highlights["market_cap"] = market_cap_local
+        elif fx_rate and highlights.get("market_cap"):
+            # Fall back to converting raw EODHD market cap if no cached EOD data
+            highlights["market_cap"] = int(highlights["market_cap"] * fx_rate)
 
     return highlights
 
@@ -541,12 +602,23 @@ async def get_fundamentals(
     # Fetch from EODHD
     eodhd_start = time.time()
     client = await get_eodhd_client()
+    data = None
     try:
         data = await client.get_fundamentals(symbol)
     except Exception as e:
-        logger.error(f"EODHD error: {e}")
-        raise HTTPException(status_code=502, detail=f"Error fetching from EODHD API: {e}")
+        logger.warning(f"EODHD fundamentals failed for {symbol}: {e}")
     eodhd_time = (time.time() - eodhd_start) * 1000
+
+    # Fallback to yfinance when EODHD has no data
+    if not data:
+        try:
+            from data_server.services.yfinance_client import get_fundamentals as yf_fundamentals
+            exchange_part = symbol.split(".")[-1] if "." in symbol else "US"
+            data = await yf_fundamentals(ticker, exchange_part)
+            if data:
+                logger.info(f"Using yfinance fundamentals fallback for {symbol}")
+        except Exception as e:
+            logger.warning(f"yfinance fundamentals fallback failed for {symbol}: {e}")
 
     if not data:
         total_time = (time.time() - start_time) * 1000
@@ -740,30 +812,57 @@ async def search_symbols(
     fmt: str = Query("json"),
     session: AsyncSession = Depends(get_session),
 ):
-    """Search for symbols (cached)."""
-    cache_key = f"search:{query}:{exchange}:{limit}"
+    """Search for symbols from EODHD + yfinance, merged and deduplicated."""
+    import asyncio as _asyncio
+    from data_server.services.yfinance_client import search as yf_search
 
-    # Check cache validity
-    if await cache.is_cache_valid(session, cache_key, settings.cache_search):
-        logger.debug(f"Cache hit for {cache_key}")
-        # For search, we don't store results in DB, just use cache metadata
-        pass
-
-    # Fetch from EODHD
+    # Search both sources in parallel
     client = await get_eodhd_client()
-    try:
-        data = await client.search(query, limit, exchange)
-    except Exception as e:
-        logger.error(f"EODHD error: {e}")
-        raise HTTPException(status_code=502, detail="Error fetching from EODHD API")
 
-    # Update cache metadata
-    await cache.update_cache_metadata(
-        session, cache_key, "search", None, settings.cache_search, len(data)
+    async def _eodhd_search():
+        try:
+            return await client.search(query, limit, exchange)
+        except Exception as e:
+            logger.error(f"EODHD search error: {e}")
+            return []
+
+    eodhd_results, yf_results = await _asyncio.gather(
+        _eodhd_search(),
+        yf_search(query, max_results=limit, exchange=exchange),
     )
-    await session.commit()
 
-    return data
+    # Merge: deduplicate by ticker+exchange, interleave so yfinance-only
+    # results (e.g. Japanese stocks) appear near the top, not pushed out
+    # by dozens of obscure EODHD exchange variants.
+    seen = set()
+    eodhd_deduped = []
+    for item in eodhd_results:
+        key = (item.get("Code", "").upper(), item.get("Exchange", "").upper())
+        if key not in seen:
+            seen.add(key)
+            eodhd_deduped.append(item)
+
+    yf_unique = []
+    for item in yf_results:
+        key = (item.get("Code", "").upper(), item.get("Exchange", "").upper())
+        if key not in seen:
+            seen.add(key)
+            yf_unique.append(item)
+
+    # Interleave: take from each source alternately, EODHD first
+    merged = []
+    ei, yi = 0, 0
+    while ei < len(eodhd_deduped) or yi < len(yf_unique):
+        # Take 2 from EODHD, then 1 from yfinance
+        for _ in range(2):
+            if ei < len(eodhd_deduped):
+                merged.append(eodhd_deduped[ei])
+                ei += 1
+        if yi < len(yf_unique):
+            merged.append(yf_unique[yi])
+            yi += 1
+
+    return merged[:limit]
 
 
 @router.get("/exchanges-list")
