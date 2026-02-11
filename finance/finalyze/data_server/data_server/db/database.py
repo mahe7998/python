@@ -48,10 +48,15 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 async def init_db():
     """Initialize database and create tables."""
     from data_server.db import models  # noqa: F401
+    from sqlalchemy import text
 
     logger.info("Initializing database...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Migrations for columns added after initial create_all
+        await conn.execute(text(
+            "ALTER TABLE quarterly_financials ADD COLUMN IF NOT EXISTS data_source VARCHAR(20) DEFAULT 'eodhd'"
+        ))
     logger.info("Database initialized")
 
 

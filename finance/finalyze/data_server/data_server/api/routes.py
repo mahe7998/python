@@ -21,6 +21,110 @@ settings = get_settings()
 
 router = APIRouter()
 
+# Fields to compare between EODHD and yfinance quarterly data
+COMPARISON_FIELDS = ["total_revenue", "gross_profit", "net_income", "operating_income"]
+DISCREPANCY_THRESHOLD = 0.05  # 5%
+
+
+def compare_quarterly_data(
+    eodhd_quarters: list[dict], yf_quarters: list[dict]
+) -> list[dict]:
+    """Compare EODHD vs yfinance quarterly data and return discrepancies.
+
+    Skips records where data_source='yfinance' (already overridden).
+    Returns list of discrepancy dicts with field diffs and full yfinance record.
+    """
+    # Index yfinance quarters by report_date
+    yf_by_date = {}
+    for yf_q in yf_quarters:
+        d = yf_q.get("date")
+        if d:
+            yf_by_date[d] = yf_q
+
+    discrepancies = []
+    for eodhd_q in eodhd_quarters:
+        if eodhd_q.get("data_source") == "yfinance":
+            continue  # Already overridden, skip
+
+        report_date = eodhd_q.get("report_date")
+        if not report_date or report_date not in yf_by_date:
+            continue
+
+        yf_q = yf_by_date[report_date]
+        yf_income = yf_q.get("income", {})
+
+        # Map comparison fields to yfinance keys
+        field_map = {
+            "total_revenue": "totalRevenue",
+            "gross_profit": "grossProfit",
+            "net_income": "netIncome",
+            "operating_income": "operatingIncome",
+        }
+
+        field_diffs = []
+        for field, yf_key in field_map.items():
+            eodhd_val = eodhd_q.get(field)
+            yf_val = yf_income.get(yf_key)
+
+            if eodhd_val is None or yf_val is None:
+                continue
+            if eodhd_val == 0 and yf_val == 0:
+                continue
+
+            denominator = max(abs(eodhd_val), abs(yf_val))
+            if denominator == 0:
+                continue
+
+            pct_diff = abs(eodhd_val - yf_val) / denominator
+            if pct_diff > DISCREPANCY_THRESHOLD:
+                field_diffs.append({
+                    "field": field,
+                    "eodhd_value": eodhd_val,
+                    "yfinance_value": yf_val,
+                    "pct_diff": round(pct_diff * 100, 1),
+                })
+
+        if field_diffs:
+            # Build full yfinance override record
+            yf_balance = yf_q.get("balance", {})
+            yf_cashflow = yf_q.get("cashflow", {})
+            yf_record = {
+                "report_date": report_date,
+                "total_revenue": yf_income.get("totalRevenue"),
+                "gross_profit": yf_income.get("grossProfit"),
+                "operating_income": yf_income.get("operatingIncome"),
+                "net_income": yf_income.get("netIncome"),
+                "ebit": yf_income.get("ebit"),
+                "cost_of_revenue": yf_income.get("costOfRevenue"),
+                "research_development": yf_income.get("researchDevelopment"),
+                "selling_general_admin": yf_income.get("sellingGeneralAdministrative"),
+                "interest_expense": yf_income.get("interestExpense"),
+                "tax_provision": yf_income.get("taxProvision"),
+                "cash": yf_balance.get("cash"),
+                "short_term_investments": yf_balance.get("shortTermInvestments"),
+                "total_assets": yf_balance.get("totalAssets"),
+                "total_current_assets": yf_balance.get("totalCurrentAssets"),
+                "total_liabilities": yf_balance.get("totalLiab"),
+                "total_current_liabilities": yf_balance.get("totalCurrentLiabilities"),
+                "stockholders_equity": yf_balance.get("totalStockholderEquity"),
+                "long_term_debt": yf_balance.get("longTermDebt"),
+                "retained_earnings": yf_balance.get("retainedEarnings"),
+                "operating_cash_flow": yf_cashflow.get("totalCashFromOperatingActivities"),
+                "capital_expenditure": yf_cashflow.get("capitalExpenditures"),
+                "free_cash_flow": yf_cashflow.get("freeCashFlow"),
+                "dividends_paid": yf_cashflow.get("dividendsPaid"),
+            }
+
+            discrepancies.append({
+                "report_date": report_date,
+                "quarter": eodhd_q.get("quarter"),
+                "year": eodhd_q.get("year"),
+                "field_diffs": field_diffs,
+                "yfinance_record": yf_record,
+            })
+
+    return discrepancies
+
 
 def is_us_market_open() -> bool:
     """Check if US stock market is currently open."""
@@ -597,23 +701,39 @@ async def get_fundamentals(
             return {
                 "highlights": highlights,
                 "quarterly_financials": quarterly or [],
+                "discrepancies": [],
             }
 
-    # Fetch from EODHD
+    # Fetch from EODHD + yfinance quarterly in parallel (for cross-validation)
+    from data_server.services.yfinance_client import (
+        get_fundamentals as yf_fundamentals,
+        get_quarterly_financials as yf_quarterly,
+    )
+    exchange_part = symbol.split(".")[-1] if "." in symbol else "US"
+
     eodhd_start = time.time()
     client = await get_eodhd_client()
-    data = None
-    try:
-        data = await client.get_fundamentals(symbol)
-    except Exception as e:
-        logger.warning(f"EODHD fundamentals failed for {symbol}: {e}")
+
+    async def _fetch_eodhd():
+        try:
+            return await client.get_fundamentals(symbol)
+        except Exception as e:
+            logger.warning(f"EODHD fundamentals failed for {symbol}: {e}")
+            return None
+
+    async def _fetch_yf_quarterly():
+        try:
+            return await yf_quarterly(ticker, exchange_part)
+        except Exception as e:
+            logger.warning(f"yfinance quarterly fetch failed for {symbol}: {e}")
+            return []
+
+    data, yf_quarters = await asyncio.gather(_fetch_eodhd(), _fetch_yf_quarterly())
     eodhd_time = (time.time() - eodhd_start) * 1000
 
     # Fallback to yfinance when EODHD has no data
     if not data:
         try:
-            from data_server.services.yfinance_client import get_fundamentals as yf_fundamentals
-            exchange_part = symbol.split(".")[-1] if "." in symbol else "US"
             data = await yf_fundamentals(ticker, exchange_part)
             if data:
                 logger.info(f"Using yfinance fundamentals fallback for {symbol}")
@@ -623,7 +743,7 @@ async def get_fundamentals(
     if not data:
         total_time = (time.time() - start_time) * 1000
         log_timing(endpoint, False, cache_time, eodhd_time, total_time)
-        return {"highlights": {}, "quarterly_financials": []}
+        return {"highlights": {}, "quarterly_financials": [], "discrepancies": []}
 
     # Store into all tables
     general = data.get("General", {})
@@ -649,6 +769,29 @@ async def get_fundamentals(
 
     # 3. Store quarterly financials
     q_count = await cache.store_quarterly_financials(session, ticker, data)
+
+    # 3b. If EODHD had no quarterly data, use already-fetched yfinance data
+    if q_count == 0 and yf_quarters:
+        try:
+            income_q, balance_q, cashflow_q = {}, {}, {}
+            for q in yf_quarters:
+                d = q["date"]
+                income_q[d] = q.get("income", {})
+                balance_q[d] = q.get("balance", {})
+                cashflow_q[d] = q.get("cashflow", {})
+            eodhd_compat = {
+                "Financials": {
+                    "Income_Statement": {"quarterly": income_q},
+                    "Balance_Sheet": {"quarterly": balance_q},
+                    "Cash_Flow": {"quarterly": cashflow_q},
+                }
+            }
+            q_count = await cache.store_quarterly_financials(
+                session, ticker, eodhd_compat, data_source="yfinance"
+            )
+            logger.info(f"Stored {q_count} quarterly records from yfinance for {symbol}")
+        except Exception as e:
+            logger.warning(f"yfinance quarterly storage failed for {symbol}: {e}")
 
     await cache.update_cache_metadata(
         session, cache_key, "fundamentals", ticker,
@@ -684,11 +827,62 @@ async def get_fundamentals(
     if highlights:
         highlights = await _enrich_highlights_market_cap(session, symbol, highlights)
 
+    # Cross-validate EODHD vs yfinance quarterly data
+    discrepancies = []
+    if yf_quarters and quarterly:
+        try:
+            discrepancies = compare_quarterly_data(quarterly, yf_quarters)
+            if discrepancies:
+                logger.info(
+                    f"Found {len(discrepancies)} quarterly discrepancies for {symbol}"
+                )
+        except Exception as e:
+            logger.warning(f"Quarterly comparison failed for {symbol}: {e}")
+
     total_time = (time.time() - start_time) * 1000
     log_timing(endpoint, False, cache_time, eodhd_time, total_time)
 
     return {
         "highlights": highlights or {},
+        "quarterly_financials": quarterly or [],
+        "discrepancies": discrepancies,
+    }
+
+
+@router.post("/fundamentals/{symbol}/override-quarterly")
+async def override_quarterly_financials(
+    symbol: str,
+    request: dict,
+    session: AsyncSession = Depends(get_session),
+):
+    """Override quarterly financial records with yfinance data.
+
+    Request body:
+    {
+        "overrides": [
+            {"report_date": "2025-03-31", "total_revenue": 184700000, ...},
+            ...
+        ]
+    }
+
+    Sets data_source='yfinance' on overridden records so they are not
+    compared again on subsequent fetches.
+    """
+    ticker = symbol.split(".")[0]
+    overrides = request.get("overrides", [])
+
+    if not overrides:
+        return {"count": 0, "quarterly_financials": []}
+
+    count = await cache.override_quarterly_financials(session, ticker, overrides)
+    await session.commit()
+
+    logger.info(f"Overrode {count} quarterly records for {symbol} with yfinance data")
+
+    # Return updated quarterly financials
+    quarterly = await cache.get_quarterly_financials(session, ticker)
+    return {
+        "count": count,
         "quarterly_financials": quarterly or [],
     }
 

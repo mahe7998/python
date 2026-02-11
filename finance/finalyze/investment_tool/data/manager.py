@@ -304,6 +304,30 @@ class DataManager:
                 logger.warning(f"Failed to get batch daily changes: {e}")
         return {}
 
+    def override_quarterly_financials(
+        self,
+        ticker: str,
+        exchange: str,
+        overrides: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Override quarterly financial records with yfinance data.
+
+        Args:
+            ticker: Stock ticker
+            exchange: Exchange code
+            overrides: List of dicts with report_date and financial fields
+
+        Returns:
+            Response dict with count and updated quarterly_financials
+        """
+        eodhd = self.providers.get("eodhd")
+        if eodhd and isinstance(eodhd, EODHDProvider):
+            try:
+                return eodhd.override_quarterly_financials(ticker, exchange, overrides)
+            except Exception as e:
+                logger.warning(f"Failed to override quarterly financials: {e}")
+        return {"count": 0, "quarterly_financials": []}
+
     def get_all_live_prices(self) -> Dict[str, Dict[str, Any]]:
         """
         Get all live prices from the data server.

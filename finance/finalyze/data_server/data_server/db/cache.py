@@ -570,26 +570,54 @@ def _date_to_quarter(report_date) -> tuple:
 
 
 async def store_quarterly_financials(
-    session: AsyncSession, ticker: str, eodhd_data: dict
+    session: AsyncSession, ticker: str, eodhd_data: dict,
+    data_source: str = "eodhd",
 ) -> int:
     """Parse EODHD fundamentals and store quarterly financial rows.
 
     Reads from Financials.Income_Statement.quarterly,
     Financials.Balance_Sheet.quarterly, and Financials.Cash_Flow.quarterly.
+    Skips rows where data_source='yfinance' (user-overridden).
     """
     financials = eodhd_data.get("Financials", {})
     income_q = financials.get("Income_Statement", {}).get("quarterly", {})
     balance_q = financials.get("Balance_Sheet", {}).get("quarterly", {})
     cashflow_q = financials.get("Cash_Flow", {}).get("quarterly", {})
 
-    count = 0
     all_dates = set(income_q.keys()) | set(balance_q.keys()) | set(cashflow_q.keys())
 
+    # Find which report_dates already have data_source='yfinance' — skip those
+    if all_dates:
+        parsed_dates = []
+        for dk in all_dates:
+            try:
+                parsed_dates.append(datetime.strptime(dk, "%Y-%m-%d").date())
+            except ValueError:
+                pass
+        if parsed_dates:
+            result = await session.execute(
+                select(QuarterlyFinancial.report_date)
+                .where(
+                    QuarterlyFinancial.ticker == ticker,
+                    QuarterlyFinancial.data_source == "yfinance",
+                    QuarterlyFinancial.report_date.in_(parsed_dates),
+                )
+            )
+            yf_dates = {r[0] for r in result.all()}
+        else:
+            yf_dates = set()
+    else:
+        yf_dates = set()
+
+    count = 0
     for date_key in all_dates:
         try:
             report_date = datetime.strptime(date_key, "%Y-%m-%d").date()
         except ValueError:
             continue
+
+        if report_date in yf_dates:
+            continue  # Don't overwrite user-overridden yfinance data
 
         income = income_q.get(date_key, {})
         balance = balance_q.get(date_key, {})
@@ -624,6 +652,7 @@ async def store_quarterly_financials(
             "capital_expenditure": _safe_num(cashflow.get("capitalExpenditures")),
             "free_cash_flow": _safe_num(cashflow.get("freeCashFlow")),
             "dividends_paid": _safe_num(cashflow.get("dividendsPaid")),
+            "data_source": data_source,
             "updated_at": datetime.utcnow(),
         }
 
@@ -678,9 +707,72 @@ async def get_quarterly_financials(
             "capital_expenditure": float(r.capital_expenditure) if r.capital_expenditure is not None else None,
             "free_cash_flow": float(r.free_cash_flow) if r.free_cash_flow is not None else None,
             "dividends_paid": float(r.dividends_paid) if r.dividends_paid is not None else None,
+            "data_source": r.data_source or "eodhd",
         }
         for r in rows
     ]
+
+
+async def override_quarterly_financials(
+    session: AsyncSession, ticker: str, overrides: list[dict]
+) -> int:
+    """Override quarterly financial rows with yfinance data.
+
+    Each override dict should contain report_date plus financial fields.
+    Sets data_source='yfinance' on each overridden row.
+    """
+    count = 0
+    for item in overrides:
+        report_date = item.get("report_date")
+        if isinstance(report_date, str):
+            report_date = datetime.strptime(report_date, "%Y-%m-%d").date()
+        if not report_date:
+            continue
+
+        quarter, year = _date_to_quarter(report_date)
+
+        values = {
+            "ticker": ticker,
+            "report_date": report_date,
+            "quarter": quarter,
+            "year": year,
+            "total_revenue": _safe_num(item.get("total_revenue")),
+            "gross_profit": _safe_num(item.get("gross_profit")),
+            "operating_income": _safe_num(item.get("operating_income")),
+            "net_income": _safe_num(item.get("net_income")),
+            "ebit": _safe_num(item.get("ebit")),
+            "cost_of_revenue": _safe_num(item.get("cost_of_revenue")),
+            "research_development": _safe_num(item.get("research_development")),
+            "selling_general_admin": _safe_num(item.get("selling_general_admin")),
+            "interest_expense": _safe_num(item.get("interest_expense")),
+            "tax_provision": _safe_num(item.get("tax_provision")),
+            "cash": _safe_num(item.get("cash")),
+            "short_term_investments": _safe_num(item.get("short_term_investments")),
+            "total_assets": _safe_num(item.get("total_assets")),
+            "total_current_assets": _safe_num(item.get("total_current_assets")),
+            "total_liabilities": _safe_num(item.get("total_liabilities")),
+            "total_current_liabilities": _safe_num(item.get("total_current_liabilities")),
+            "stockholders_equity": _safe_num(item.get("stockholders_equity")),
+            "long_term_debt": _safe_num(item.get("long_term_debt")),
+            "retained_earnings": _safe_num(item.get("retained_earnings")),
+            "operating_cash_flow": _safe_num(item.get("operating_cash_flow")),
+            "capital_expenditure": _safe_num(item.get("capital_expenditure")),
+            "free_cash_flow": _safe_num(item.get("free_cash_flow")),
+            "dividends_paid": _safe_num(item.get("dividends_paid")),
+            "data_source": "yfinance",
+            "updated_at": datetime.utcnow(),
+        }
+
+        stmt = insert(QuarterlyFinancial).values(**values)
+        update_vals = {k: v for k, v in values.items() if k not in ("ticker", "report_date")}
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["ticker", "report_date"],
+            set_=update_vals,
+        )
+        await session.execute(stmt)
+        count += 1
+
+    return count
 
 
 # Company Highlights

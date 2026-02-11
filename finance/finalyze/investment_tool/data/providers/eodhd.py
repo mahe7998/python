@@ -690,6 +690,51 @@ class EODHDProvider(DataProviderBase):
             for sym in data
         ]
 
+    def override_quarterly_financials(
+        self,
+        ticker: str,
+        exchange: str,
+        overrides: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Override quarterly financial records with yfinance data.
+
+        Args:
+            ticker: Stock ticker
+            exchange: Exchange code
+            overrides: List of dicts with report_date and financial fields
+
+        Returns:
+            Response dict with count and updated quarterly_financials
+        """
+        if "eodhd.com" in self.BASE_URL:
+            logger.warning("Override not available with direct EODHD API")
+            return {"count": 0, "quarterly_financials": []}
+
+        symbol = self.format_symbol(ticker, exchange)
+        url = f"{self.BASE_URL}/fundamentals/{symbol}/override-quarterly"
+
+        try:
+            self.api_call_count += 1
+            response = requests.post(
+                url,
+                json={"overrides": overrides},
+                timeout=30,
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            # Invalidate fundamentals cache so next fetch gets fresh data
+            key = f"{ticker}.{exchange}"
+            self._fundamentals_cache.pop(key, None)
+
+            return result
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Override request failed: {e}")
+            return {"count": 0, "quarterly_financials": []}
+        except Exception as e:
+            logger.error(f"Override unexpected error: {e}")
+            return {"count": 0, "quarterly_financials": []}
+
     def get_server_status(self) -> Optional[Dict[str, Any]]:
         """Get data server status including EODHD API call statistics.
 

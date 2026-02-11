@@ -76,6 +76,7 @@ class QuarterlyFinancial:
     capital_expenditure: Optional[float] = None
     free_cash_flow: Optional[float] = None
     dividends_paid: Optional[float] = None
+    data_source: Optional[str] = None
 
     @property
     def fiscal_period(self) -> str:
@@ -124,6 +125,8 @@ class QuarterlyFinancialsWidget(QWidget):
         self._ticker: Optional[str] = None
         self._exchange: Optional[str] = None
         self._current_period: str = "1Y"
+        self._fx_rate: Optional[float] = None
+        self._is_annual: bool = False
         self._quarterly_data: List[QuarterlyFinancial] = []
         self._bar_regions: List[Dict] = []
 
@@ -224,6 +227,7 @@ class QuarterlyFinancialsWidget(QWidget):
         """Set the current ticker and update display."""
         self._ticker = ticker
         self._exchange = exchange
+        self._is_annual = False
         self.ticker_label.setText(f"Quarterly Financials - {ticker}")
         self._fetch_and_display()
 
@@ -242,7 +246,29 @@ class QuarterlyFinancialsWidget(QWidget):
                 self._ticker, self._exchange
             )
             if fundamentals:
+                # Get forex rate for non-USD currencies
+                highlights = fundamentals.get("highlights", {})
+                currency = highlights.get("currency", "USD")
+                self._fx_rate = highlights.get("fx_rate_to_usd") if currency != "USD" else None
+
                 self._quarterly_data = self._parse_quarterly_data(fundamentals)
+
+                # Convert all financial values to USD if needed
+                if self._fx_rate:
+                    self._convert_to_usd(self._fx_rate)
+
+                # Check for discrepancies and show dialog
+                discrepancies = fundamentals.get("discrepancies", [])
+                if discrepancies:
+                    self._handle_discrepancies(discrepancies)
+
+                # Detect if data is annual (≤1 period per year)
+                self._is_annual = self._detect_annual_data()
+                if self._is_annual:
+                    self.ticker_label.setText(f"Annual Financials - {self._ticker}")
+                else:
+                    self.ticker_label.setText(f"Quarterly Financials - {self._ticker}")
+
                 self._update_chart()
             else:
                 logger.warning(f"No fundamentals data for {self._ticker}")
@@ -252,6 +278,49 @@ class QuarterlyFinancialsWidget(QWidget):
             logger.error(f"Failed to fetch fundamentals for {self._ticker}: {e}")
             self._quarterly_data = []
             self._update_chart()
+
+    def _handle_discrepancies(self, discrepancies: list) -> None:
+        """Show discrepancy dialog and apply overrides if accepted."""
+        from investment_tool.ui.dialogs.discrepancy_dialog import DiscrepancyDialog
+
+        dialog = DiscrepancyDialog(self._ticker, discrepancies, parent=self)
+        if dialog.exec() == DiscrepancyDialog.Accepted:
+            overrides = dialog.get_selected_overrides()
+            if overrides and self._data_manager:
+                try:
+                    result = self._data_manager.override_quarterly_financials(
+                        self._ticker, self._exchange, overrides
+                    )
+                    count = result.get("count", 0)
+                    if count > 0:
+                        logger.info(f"Overrode {count} quarters for {self._ticker}")
+                        # Re-parse from updated response
+                        updated_quarterly = result.get("quarterly_financials", [])
+                        if updated_quarterly:
+                            fake_fundamentals = {
+                                "quarterly_financials": updated_quarterly,
+                            }
+                            self._quarterly_data = self._parse_quarterly_data(
+                                fake_fundamentals
+                            )
+                            if self._fx_rate:
+                                self._convert_to_usd(self._fx_rate)
+                except Exception as e:
+                    logger.error(f"Failed to apply overrides: {e}")
+
+    def _convert_to_usd(self, fx_rate: float) -> None:
+        """Convert all financial values from local currency to USD."""
+        currency_fields = [
+            'gross_revenue', 'gross_profit', 'after_tax_income', 'operating_income',
+            'ebit', 'cost_of_revenue', 'rd_expense', 'cash_reserve', 'total_cash',
+            'total_assets', 'total_liabilities', 'stockholders_equity', 'long_term_debt',
+            'operating_cash_flow', 'capital_expenditure', 'free_cash_flow', 'dividends_paid',
+        ]
+        for qf in self._quarterly_data:
+            for field in currency_fields:
+                val = getattr(qf, field, None)
+                if val is not None:
+                    setattr(qf, field, val * fx_rate)
 
     def _parse_quarterly_data(self, fundamentals: Dict[str, Any]) -> List[QuarterlyFinancial]:
         """Parse fundamentals into QuarterlyFinancial objects.
@@ -293,6 +362,7 @@ class QuarterlyFinancialsWidget(QWidget):
                     capital_expenditure=self._safe_float(item.get("capital_expenditure")),
                     free_cash_flow=self._safe_float(item.get("free_cash_flow")),
                     dividends_paid=self._safe_float(item.get("dividends_paid")),
+                    data_source=item.get("data_source"),
                 )
                 quarterly_data.append(qf)
 
@@ -373,6 +443,20 @@ class QuarterlyFinancialsWidget(QWidget):
         else:
             return "Q4", report_date.year
 
+    def _detect_annual_data(self) -> bool:
+        """Detect if data is annual rather than quarterly.
+
+        Returns True if most years have only 1 data point.
+        """
+        if not self._quarterly_data:
+            return False
+        from collections import Counter
+        year_counts = Counter(q.year for q in self._quarterly_data)
+        if not year_counts:
+            return False
+        avg_per_year = sum(year_counts.values()) / len(year_counts)
+        return avg_per_year <= 1.5
+
     def _update_chart(self) -> None:
         """Update the chart based on current period and metric."""
         self._bar_regions = []
@@ -386,7 +470,10 @@ class QuarterlyFinancialsWidget(QWidget):
             return
 
         metric = self.metric_combo.currentData()
-        self._render_grouped_view(metric)
+        if self._is_annual:
+            self._render_annual_view(metric)
+        else:
+            self._render_grouped_view(metric)
 
     def _render_combined_view(self, metric: FinancialMetric) -> None:
         """Render last 4 quarters in a simple bar chart."""
@@ -444,6 +531,61 @@ class QuarterlyFinancialsWidget(QWidget):
                 self.chart.setYRange(min_val - padding, max_val + padding)
 
         # Clear legend for combined view (no year grouping needed)
+        self._clear_legend()
+
+    def _render_annual_view(self, metric: FinancialMetric) -> None:
+        """Render annual data as a simple year-by-year bar chart."""
+        # Deduplicate by year (take most recent report per year)
+        year_data = {}
+        for qf in self._quarterly_data:
+            if qf.year not in year_data:
+                year_data[qf.year] = qf
+
+        years = sorted(year_data.keys())[-7:]  # Last 7 years max
+        if not years:
+            return
+
+        x = np.arange(len(years))
+        values = np.array([self._get_metric_value(year_data[y], metric) or 0 for y in years])
+        labels = [f"FY{y}" for y in years]
+
+        # Color bars by trend
+        colors = []
+        for i, v in enumerate(values):
+            if i > 0 and v > values[i - 1]:
+                colors.append("#22C55E")
+            elif i > 0 and v < values[i - 1]:
+                colors.append("#EF4444")
+            else:
+                colors.append("#3B82F6")
+
+        bar_width = 0.6
+        for i, (xval, height, color) in enumerate(zip(x, values, colors)):
+            bar = pg.BarGraphItem(
+                x=[xval], height=[height], width=bar_width,
+                brush=pg.mkBrush(color), pen=pg.mkPen(color, width=1)
+            )
+            self.chart.addItem(bar)
+            self._bar_regions.append({
+                "x_min": xval - bar_width / 2,
+                "x_max": xval + bar_width / 2,
+                "quarter": year_data[years[i]].quarter,
+                "year": years[i],
+                "value": float(height),
+            })
+
+        x_axis = self.chart.getAxis("bottom")
+        x_axis.setTicks([[(i, labels[i]) for i in range(len(labels))]])
+        self.chart.setLabel("left", metric.value)
+        self.chart.setXRange(-0.5, len(years) - 0.5, padding=0.1)
+
+        if len(values) > 0:
+            min_val = min(0, float(np.min(values)))
+            max_val = float(np.max(values))
+            if max_val > min_val:
+                padding = (max_val - min_val) * 0.1
+                self.chart.setYRange(min_val - padding, max_val + padding)
+
         self._clear_legend()
 
     def _render_grouped_view(self, metric: FinancialMetric) -> None:

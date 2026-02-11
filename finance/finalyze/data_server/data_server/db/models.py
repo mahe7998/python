@@ -250,6 +250,8 @@ class QuarterlyFinancial(Base):
     capital_expenditure: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
     free_cash_flow: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
     dividends_paid: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 2))
+    # Data source tracking
+    data_source: Mapped[Optional[str]] = mapped_column(String(20), default="eodhd")
     # Metadata
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
