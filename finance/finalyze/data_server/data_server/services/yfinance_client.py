@@ -385,3 +385,138 @@ async def search(query: str, max_results: int = 15, exchange: str = None) -> lis
             return []
 
     return await asyncio.to_thread(_fetch)
+
+
+def _build_financial_record(col_date, income_df, balance_df, cashflow_df) -> dict:
+    """Build a single financial record from yfinance DataFrames for a given date.
+
+    Works for both quarterly and annual DataFrames since field names are identical.
+    """
+    import math
+
+    dt = col_date.date() if hasattr(col_date, 'date') else col_date
+    date_str = str(dt)
+
+    def _get(df, field):
+        if df is not None and not df.empty and field in df.index and col_date in df.columns:
+            val = df.loc[field, col_date]
+            if val is not None:
+                try:
+                    fval = float(val)
+                    if not math.isnan(fval):
+                        return fval
+                except (ValueError, TypeError):
+                    pass
+        return None
+
+    income = {
+        "totalRevenue": _get(income_df, "Total Revenue"),
+        "grossProfit": _get(income_df, "Gross Profit"),
+        "operatingIncome": _get(income_df, "Operating Income"),
+        "netIncome": _get(income_df, "Net Income"),
+        "ebit": _get(income_df, "EBIT"),
+        "costOfRevenue": _get(income_df, "Cost Of Revenue"),
+        "researchDevelopment": _get(income_df, "Selling General And Administration"),
+        "interestExpense": _get(income_df, "Interest Expense"),
+        "taxProvision": _get(income_df, "Tax Provision"),
+    }
+    balance = {}
+    if balance_df is not None and not balance_df.empty and col_date in balance_df.columns:
+        balance = {
+            "cash": _get(balance_df, "Cash And Cash Equivalents"),
+            "shortTermInvestments": _get(balance_df, "Other Short Term Investments"),
+            "totalAssets": _get(balance_df, "Total Assets"),
+            "totalCurrentAssets": _get(balance_df, "Current Assets"),
+            "totalLiab": _get(balance_df, "Total Liabilities Net Minority Interest"),
+            "totalCurrentLiabilities": _get(balance_df, "Current Liabilities"),
+            "totalStockholderEquity": _get(balance_df, "Stockholders Equity"),
+            "longTermDebt": _get(balance_df, "Long Term Debt"),
+            "retainedEarnings": _get(balance_df, "Retained Earnings"),
+        }
+    cashflow = {}
+    if cashflow_df is not None and not cashflow_df.empty and col_date in cashflow_df.columns:
+        cashflow = {
+            "totalCashFromOperatingActivities": _get(cashflow_df, "Operating Cash Flow"),
+            "capitalExpenditures": _get(cashflow_df, "Capital Expenditure"),
+            "freeCashFlow": _get(cashflow_df, "Free Cash Flow"),
+            "dividendsPaid": _get(cashflow_df, "Cash Dividends Paid"),
+        }
+
+    return {
+        "date": date_str,
+        "income": income,
+        "balance": balance,
+        "cashflow": cashflow,
+    }
+
+
+def _has_income_data(records: list[dict]) -> bool:
+    """Check if any record has meaningful income data (revenue or net income)."""
+    for r in records:
+        inc = r.get("income", {})
+        if inc.get("totalRevenue") is not None or inc.get("netIncome") is not None:
+            return True
+    return False
+
+
+async def get_quarterly_financials(ticker: str, exchange: str = "US") -> list[dict]:
+    """Get quarterly financials from yfinance in EODHD-compatible format.
+
+    Uses union of dates from income, balance sheet, and cashflow DataFrames.
+    If quarterly data lacks income metrics (common for Japanese stocks),
+    supplements with annual financial data.
+    """
+    def _fetch() -> list[dict]:
+        try:
+            import yfinance as yf
+
+            symbol = _to_yfinance_symbol(ticker, exchange)
+            t = yf.Ticker(symbol)
+
+            qf = t.quarterly_financials
+            qbs = t.quarterly_balance_sheet
+            qcf = t.quarterly_cashflow
+
+            # Use union of ALL quarterly dates (not just income statement)
+            all_dates = set()
+            for df in [qf, qbs, qcf]:
+                if df is not None and not df.empty:
+                    all_dates.update(df.columns)
+
+            results = []
+            for col_date in sorted(all_dates, reverse=True):
+                record = _build_financial_record(col_date, qf, qbs, qcf)
+                results.append(record)
+
+            # If quarterly data lacks income metrics, use annual data ONLY
+            # (don't mix quarterly balance-only records with annual income records)
+            if not _has_income_data(results):
+                logger.info(f"Quarterly data for {symbol} lacks income metrics, using annual data")
+                af = t.financials
+                abs_ = t.balance_sheet
+                acf = t.cashflow
+
+                annual_dates = set()
+                for df in [af, abs_, acf]:
+                    if df is not None and not df.empty:
+                        annual_dates.update(df.columns)
+
+                if annual_dates:
+                    # Replace quarterly-only records with annual data
+                    results = []
+                    for col_date in sorted(annual_dates, reverse=True):
+                        record = _build_financial_record(col_date, af, abs_, acf)
+                        results.append(record)
+                    logger.info(f"Using {len(results)} annual periods for {symbol}")
+
+            if not results:
+                return []
+
+            logger.info(f"yfinance returned {len(results)} financial periods for {symbol}")
+            return results
+
+        except Exception as e:
+            logger.error(f"yfinance quarterly error for {ticker}: {e}")
+            return []
+
+    return await asyncio.to_thread(_fetch)

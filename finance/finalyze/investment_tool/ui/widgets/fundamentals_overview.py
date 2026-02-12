@@ -113,6 +113,8 @@ class FundamentalsOverviewWidget(QWidget):
         self._data_manager = None
         self._ticker: Optional[str] = None
         self._exchange: Optional[str] = None
+        self._currency: str = "USD"
+        self._fx_rate: Optional[float] = None  # None = no conversion needed
         self._value_labels: Dict[str, QLabel] = {}
         self._shares_bar_regions: List[Dict] = []
         self._shares_splits: List[Dict] = []  # detected splits
@@ -318,6 +320,10 @@ class FundamentalsOverviewWidget(QWidget):
             highlights = fundamentals.get("highlights", {})
             if not highlights:
                 return
+
+            # Get forex rate for non-USD currencies
+            self._currency = highlights.get("currency", "USD")
+            self._fx_rate = highlights.get("fx_rate_to_usd") if self._currency != "USD" else None
 
             self._populate(highlights)
         except Exception as e:
@@ -633,14 +639,14 @@ class FundamentalsOverviewWidget(QWidget):
                     continue
 
                 value = data.get(key)
-                text, color = self._format_value(value, fmt)
+                text, color = self._format_value(value, fmt, key=key)
                 label.setText(text)
                 label.setStyleSheet(
                     f"color: {color}; font-size: 12px; font-weight: bold;"
                 )
 
     def _format_value(
-        self, value: Any, fmt: str
+        self, value: Any, fmt: str, key: str = ""
     ) -> Tuple[str, str]:
         """Format a value and return (text, color)."""
         default_color = "#F9FAFB"
@@ -649,12 +655,20 @@ class FundamentalsOverviewWidget(QWidget):
             return "--", "#6B7280"
 
         if fmt == _TEXT:
+            # Show conversion note on currency field
+            if key == "currency" and self._fx_rate:
+                return f"{value} (shown in USD)", default_color
             return str(value), default_color
 
         try:
             num = float(value)
         except (ValueError, TypeError):
             return str(value), default_color
+
+        # Convert to USD for currency-denominated values (skip market_cap, already in USD)
+        fx = getattr(self, '_fx_rate', None)
+        if fx and fmt in (_CURRENCY, _CURRENCY_LARGE) and key != "market_cap":
+            num = num * fx
 
         if fmt == _RATIO:
             return f"{num:.2f}", default_color

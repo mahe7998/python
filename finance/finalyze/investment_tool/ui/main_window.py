@@ -690,6 +690,11 @@ class MainWindow(QMainWindow):
                 market_cap = company.market_cap if company else 1e9
                 pe_ratio = company.pe_ratio if company else None
 
+                # Convert price to USD for non-USD stocks
+                price_usd = current
+                if company and company.fx_rate_to_usd and company.currency and company.currency != "USD":
+                    price_usd = current * company.fx_rate_to_usd
+
                 # Apply market cap filter
                 if selected_filter == "Large Cap (>$200B)" and (market_cap or 0) < 200e9:
                     continue
@@ -707,7 +712,7 @@ class MainWindow(QMainWindow):
                     value=market_cap or 1e9,
                     change_percent=change,
                     sector=category.name,
-                    price=current,
+                    price=price_usd,
                     pe_ratio=pe_ratio,
                     market_cap=market_cap,
                 ))
