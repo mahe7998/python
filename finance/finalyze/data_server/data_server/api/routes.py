@@ -241,17 +241,25 @@ async def get_eod_prices(
                     logger.info(f"[CACHE HIT after lock] {endpoint}")
                     return cached_data
 
-        # Fetch from EODHD
+        # Check if EODHD supports this exchange
+        from data_server.services.yfinance_client import is_exchange_supported_by_eodhd
+        exchange_code = symbol.split(".")[-1] if "." in symbol else "US"
+
+        # Fetch from EODHD (only if exchange is supported)
         eodhd_start = time.time()
-        client = await get_eodhd_client()
-        try:
-            data = await client.get_eod(symbol, from_, to, period)
-        except Exception as e:
-            logger.warning(f"EODHD error for {symbol}: {e}")
-            data = []  # Let yfinance fallback handle it
+        data = []
+        if is_exchange_supported_by_eodhd(exchange_code):
+            client = await get_eodhd_client()
+            try:
+                data = await client.get_eod(symbol, from_, to, period)
+            except Exception as e:
+                logger.warning(f"EODHD error for {symbol}: {e}")
+                data = []  # Let yfinance fallback handle it
+        else:
+            logger.info(f"Skipping EODHD for {symbol} (exchange {exchange_code} not supported)")
         eodhd_time = (time.time() - eodhd_start) * 1000
 
-        # If EODHD returned nothing, try yfinance as fallback
+        # If EODHD returned nothing or was skipped, try yfinance as fallback
         if not data:
             try:
                 from data_server.services.yfinance_client import get_daily_prices as yf_daily
@@ -400,15 +408,23 @@ async def get_intraday_prices(
     # Try to fetch from EODHD
     fetch_lock = await get_fetch_lock(cache_key)
     async with fetch_lock:
-        # Fetch from EODHD
-        logger.info(f"Fetching {symbol} from EODHD")
+        # Check if EODHD supports this exchange
+        from data_server.services.yfinance_client import is_exchange_supported_by_eodhd
+        eodhd_supported = is_exchange_supported_by_eodhd(exchange_code)
+
+        # Fetch from EODHD (only if exchange is supported)
         eodhd_start = time.time()
-        client = await get_eodhd_client()
-        try:
-            data = await client.get_intraday(symbol, interval, from_, to)
-        except Exception as e:
-            logger.warning(f"EODHD error for {symbol}: {e}")
-            data = []  # Let yfinance fallback handle it below
+        data = []
+        if eodhd_supported:
+            logger.info(f"Fetching {symbol} from EODHD")
+            client = await get_eodhd_client()
+            try:
+                data = await client.get_intraday(symbol, interval, from_, to)
+            except Exception as e:
+                logger.warning(f"EODHD error for {symbol}: {e}")
+                data = []  # Let yfinance fallback handle it below
+        else:
+            logger.info(f"Skipping EODHD for {symbol} (exchange {exchange_code} not supported)")
         eodhd_time = (time.time() - eodhd_start) * 1000
 
         # If EODHD data is missing or incomplete, try yfinance as fallback

@@ -1005,16 +1005,24 @@ class MainWindow(QMainWindow):
                             if p95 > 0:
                                 raw_prices["volume"] = raw_prices["volume"].clip(upper=p95)
 
-                        # Reindex to full trading day and forward-fill gaps
-                        # This ensures bars connect (open of bar N = close of bar N-1)
-                        prices = raw_prices.reindex(full_day_index)
+                        # For sparse data (OTC stocks with few trades), don't reindex
+                        # Just use raw data directly - chart will show actual trades only
+                        is_sparse = len(raw_prices) < 50  # Less than 50 actual data points
 
-                        # Forward-fill close price first
-                        prices["close"] = prices["close"].ffill()
-                        # For filled bars, set open=high=low=close (no movement)
-                        prices["open"] = prices["open"].fillna(prices["close"])
-                        prices["high"] = prices["high"].fillna(prices["close"])
-                        prices["low"] = prices["low"].fillna(prices["close"])
+                        if is_sparse:
+                            # Use raw data directly without reindexing
+                            prices = raw_prices
+                            logger.info(f"Sparse data for {ticker}: {len(raw_prices)} bars, skipping reindex")
+                        else:
+                            # Reindex to full trading day and forward-fill gaps
+                            prices = raw_prices.reindex(full_day_index)
+                            # Forward-fill close price first
+                            # This ensures bars connect (open of bar N = close of bar N-1)
+                            prices["close"] = prices["close"].ffill()
+                            # For filled bars, set open=high=low=close (no movement)
+                            prices["open"] = prices["open"].fillna(prices["close"])
+                            prices["high"] = prices["high"].fillna(prices["close"])
+                            prices["low"] = prices["low"].fillna(prices["close"])
 
                         if "volume" in prices.columns:
                             prices["volume"] = prices["volume"].fillna(0)
@@ -1451,7 +1459,7 @@ class MainWindow(QMainWindow):
 
     def _on_manage_categories(self) -> None:
         """Handle manage categories action."""
-        dialog = CategoryDialog(self)
+        dialog = CategoryDialog(self, data_manager=self.data_manager)
         dialog.categories_changed.connect(self._on_categories_changed)
         dialog.exec()
 

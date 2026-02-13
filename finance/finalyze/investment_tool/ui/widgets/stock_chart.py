@@ -236,30 +236,55 @@ class CandlestickItem(pg.GraphicsObject):
             close = row["close"]
 
             # Skip NaN values (future times in intraday view)
-            if pd.isna(open_price) or pd.isna(close):
+            if pd.isna(open_price) or pd.isna(close) or pd.isna(high) or pd.isna(low):
                 continue
+
+            # Skip invalid data (all values must be positive)
+            if open_price <= 0 or close <= 0 or high <= 0 or low <= 0:
+                continue
+
+            # Fix invalid OHLC relationships (sometimes data has low=0 or extreme values)
+            # Ensure: low <= min(open,close) and high >= max(open,close)
+            body_min = min(open_price, close)
+            body_max = max(open_price, close)
+            if low > body_min:
+                low = body_min
+            if high < body_max:
+                high = body_max
+
+            # Skip bars with extreme wick ratio (likely data errors for OTC/sparse stocks)
+            # If wick range is > 50% of price, cap it
+            wick_range = high - low
+            if close > 0 and wick_range / close > 0.5:
+                # Cap wicks to reasonable range around the body
+                margin = body_max * 0.05  # 5% margin
+                low = max(low, body_min - margin)
+                high = min(high, body_max + margin)
 
             is_bullish = close >= open_price
             color = green if is_bullish else red
             brush = green_brush if is_bullish else red_brush
 
-            # Draw wick (high-low line)
-            painter.setPen(pg.mkPen(color, width=1))
-            painter.drawLine(
-                pg.QtCore.QPointF(i, low),
-                pg.QtCore.QPointF(i, high)
-            )
+            # Calculate body bounds
+            body_top = max(open_price, close)
+            body_bottom = min(open_price, close)
+            body_height = body_top - body_bottom
+            wick_height = high - low
+
+            # Only draw wick if there's an actual range (high != low)
+            if wick_height > 0.0001:
+                painter.setPen(pg.mkPen(color, width=1))
+                painter.drawLine(
+                    pg.QtCore.QPointF(i, low),
+                    pg.QtCore.QPointF(i, high)
+                )
 
             # Draw body
             painter.setBrush(brush)
             painter.setPen(pg.mkPen(color, width=1))
 
-            body_top = max(open_price, close)
-            body_bottom = min(open_price, close)
-            body_height = body_top - body_bottom
-
-            if body_height < 0.001:
-                # Doji - just draw a line
+            if body_height < 0.0001:
+                # Doji - draw a small horizontal line
                 painter.drawLine(
                     pg.QtCore.QPointF(i - bar_width / 2, close),
                     pg.QtCore.QPointF(i + bar_width / 2, close)
@@ -292,11 +317,20 @@ class CandlestickItem(pg.GraphicsObject):
         if pd.isna(low_min) or pd.isna(high_max):
             return pg.QtCore.QRectF(0, 0, 1, 1)
 
+        # Ensure minimum height to prevent scaling issues when min == max
+        height = high_max - low_min
+        if height < 0.01:
+            # Add padding around the price when range is too small
+            padding = max(0.01, low_min * 0.005)  # 0.5% of price or 0.01 minimum
+            low_min -= padding
+            high_max += padding
+            height = high_max - low_min
+
         return pg.QtCore.QRectF(
             -1,
             low_min,
             len(self.data) + 1,
-            high_max - low_min
+            height
         )
 
     def set_data(self, data: pd.DataFrame) -> None:
@@ -340,19 +374,40 @@ class OHLCItem(pg.GraphicsObject):
             close = row["close"]
 
             # Skip NaN values (future times in intraday view)
-            if pd.isna(open_price) or pd.isna(close):
+            if pd.isna(open_price) or pd.isna(close) or pd.isna(high) or pd.isna(low):
                 continue
+
+            # Skip invalid data (all values must be positive)
+            if open_price <= 0 or close <= 0 or high <= 0 or low <= 0:
+                continue
+
+            # Fix invalid OHLC relationships
+            body_min = min(open_price, close)
+            body_max = max(open_price, close)
+            if low > body_min:
+                low = body_min
+            if high < body_max:
+                high = body_max
+
+            # Cap extreme wicks for sparse/OTC data
+            wick_range = high - low
+            if close > 0 and wick_range / close > 0.5:
+                margin = body_max * 0.05
+                low = max(low, body_min - margin)
+                high = min(high, body_max + margin)
 
             is_bullish = close >= open_price
             color = green if is_bullish else red
             pen = pg.mkPen(color, width=2)
             painter.setPen(pen)
 
-            # Draw vertical line (high to low)
-            painter.drawLine(
-                pg.QtCore.QPointF(i, low),
-                pg.QtCore.QPointF(i, high)
-            )
+            # Only draw vertical line (high to low) if there's an actual range
+            wick_height = high - low
+            if wick_height > 0.0001:
+                painter.drawLine(
+                    pg.QtCore.QPointF(i, low),
+                    pg.QtCore.QPointF(i, high)
+                )
 
             # Draw open tick (left side)
             painter.drawLine(
@@ -384,11 +439,19 @@ class OHLCItem(pg.GraphicsObject):
         if pd.isna(low_min) or pd.isna(high_max):
             return pg.QtCore.QRectF(0, 0, 1, 1)
 
+        # Ensure minimum height to prevent scaling issues when min == max
+        height = high_max - low_min
+        if height < 0.01:
+            padding = max(0.01, low_min * 0.005)
+            low_min -= padding
+            high_max += padding
+            height = high_max - low_min
+
         return pg.QtCore.QRectF(
             -1,
             low_min,
             len(self.data) + 1,
-            high_max - low_min
+            height
         )
 
     def set_data(self, data: pd.DataFrame) -> None:
@@ -672,7 +735,14 @@ class StockChart(QWidget):
         chart_type = self.chart_type_combo.currentText()
 
         # Determine if this is intraday data (has DatetimeIndex with time component)
-        is_intraday = isinstance(self._data.index, pd.DatetimeIndex) and len(self._data) > 100
+        # Check if timestamps have non-midnight times, not just count (for sparse OTC stocks)
+        is_intraday = False
+        if isinstance(self._data.index, pd.DatetimeIndex) and len(self._data) > 0:
+            # Check if first timestamp has a time component (not just 00:00:00)
+            first_ts = self._data.index[0]
+            if hasattr(first_ts, 'hour'):
+                is_intraday = first_ts.hour != 0 or first_ts.minute != 0
+
 
         # Check if data is already aggregated (e.g., 15-min bars from 1W period)
         # If the interval between points is >= 5 min, don't resample
