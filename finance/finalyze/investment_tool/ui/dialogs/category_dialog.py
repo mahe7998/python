@@ -28,6 +28,7 @@ from investment_tool.config.categories import (
     CategoryManager,
     get_category_manager,
 )
+from investment_tool.ui.dialogs.add_stock_dialog import AddStockDialog
 
 
 class CategoryDialog(QDialog):
@@ -35,9 +36,10 @@ class CategoryDialog(QDialog):
 
     categories_changed = Signal()
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: Optional[QWidget] = None, data_manager=None):
         super().__init__(parent)
         self.category_manager = get_category_manager()
+        self.data_manager = data_manager
         self._current_category: Optional[Category] = None
 
         self._setup_ui()
@@ -308,24 +310,27 @@ class CategoryDialog(QDialog):
             self.category_list.takeItem(row)
 
     def _on_add_stock(self) -> None:
-        """Add a stock to the current category."""
+        """Add a stock to the current category using the search dialog."""
         if not self._current_category:
             return
 
-        text, ok = QInputDialog.getText(
-            self, "Add Stock",
-            "Enter ticker (e.g., AAPL or AAPL.US):"
+        # Use AddStockDialog with search capabilities
+        dialog = AddStockDialog(
+            data_manager=self.data_manager,
+            parent=self,
+            require_category=False,  # We'll add to current category directly
         )
 
-        if ok and text:
-            text = text.strip().upper()
+        # Pre-select the current category in the dialog
+        for i in range(dialog.category_combo.count()):
+            if dialog.category_combo.itemData(i) == self._current_category.id:
+                dialog.category_combo.setCurrentIndex(i)
+                break
 
-            # Parse ticker and exchange
-            if "." in text:
-                ticker, exchange = text.rsplit(".", 1)
-            else:
-                ticker = text
-                exchange = "US"
+        if dialog.exec():
+            ticker, exchange, _, _ = dialog.get_result()
+            if not ticker:
+                return
 
             # Check if already in category
             for stock in self._current_category.stocks:
@@ -336,7 +341,7 @@ class CategoryDialog(QDialog):
                     )
                     return
 
-            # Add stock
+            # Add stock to current category
             stock_ref = StockReference(ticker=ticker, exchange=exchange)
             self._current_category.stocks.append(stock_ref)
 

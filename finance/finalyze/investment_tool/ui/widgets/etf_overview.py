@@ -24,6 +24,20 @@ from investment_tool.utils.helpers import format_large_number
 logger = logging.getLogger(__name__)
 
 
+class ScrollThroughPlotWidget(pg.PlotWidget):
+    """PlotWidget that forwards wheel events to the parent scroll area."""
+
+    def wheelEvent(self, event):
+        # Find parent QScrollArea and forward the event
+        parent = self.parent()
+        while parent is not None:
+            if isinstance(parent, QScrollArea):
+                parent.wheelEvent(event)
+                return
+            parent = parent.parent()
+        super().wheelEvent(event)
+
+
 class HoldingsPerformanceWorker(QThread):
     """Background thread to fetch performance data for all ETF holdings."""
 
@@ -253,11 +267,13 @@ class ETFOverviewWidget(QWidget):
         layout = QVBoxLayout()
         layout.setContentsMargins(8, 20, 8, 8)
 
-        plot = pg.PlotWidget()
+        plot = ScrollThroughPlotWidget()
         plot.setBackground("#2D3748")
         plot.setFixedHeight(220)
         plot.showGrid(x=True, y=False, alpha=0.2)
         plot.hideButtons()
+        plot.setMouseEnabled(x=False, y=False)
+        plot.getPlotItem().setMenuEnabled(False)
 
         bottom_axis = plot.getPlotItem().getAxis("bottom")
         bottom_axis.setPen(pg.mkPen("#6B7280"))

@@ -17,22 +17,31 @@ from PySide6.QtWidgets import (
 )
 
 
-def _format_value(v) -> str:
+# Currency symbol mapping
+CURRENCY_SYMBOLS = {
+    "USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥", "CNY": "¥",
+    "HKD": "HK$", "KRW": "₩", "INR": "₹", "CHF": "CHF ", "CAD": "C$",
+    "AUD": "A$", "TWD": "NT$", "SEK": "kr", "NOK": "kr", "DKK": "kr",
+}
+
+
+def _format_value(v, currency: str = "USD") -> str:
     """Format a financial value with appropriate suffix."""
     if v is None:
         return "N/A"
+    sym = CURRENCY_SYMBOLS.get(currency, currency + " ")
     negative = v < 0
     av = abs(v)
     if av >= 1e12:
-        s = f"${av/1e12:.2f}T"
+        s = f"{sym}{av/1e12:.2f}T"
     elif av >= 1e9:
-        s = f"${av/1e9:.2f}B"
+        s = f"{sym}{av/1e9:.2f}B"
     elif av >= 1e6:
-        s = f"${av/1e6:.2f}M"
+        s = f"{sym}{av/1e6:.2f}M"
     elif av >= 1e3:
-        s = f"${av/1e3:.2f}K"
+        s = f"{sym}{av/1e3:.2f}K"
     else:
-        s = f"${av:,.0f}"
+        s = f"{sym}{av:,.0f}"
     return f"-{s}" if negative else s
 
 
@@ -51,11 +60,13 @@ class DiscrepancyDialog(QDialog):
         self,
         ticker: str,
         discrepancies: List[Dict[str, Any]],
+        currency: str = "USD",
         parent: QWidget = None,
     ):
         super().__init__(parent)
         self._ticker = ticker
         self._discrepancies = discrepancies
+        self._currency = currency
         self._checkboxes: List[QCheckBox] = []
         self._selected_overrides: List[Dict[str, Any]] = []
 
@@ -132,8 +143,9 @@ class DiscrepancyDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
 
         # Header
+        currency_note = f" (values in {self._currency})" if self._currency != "USD" else ""
         header = QLabel(
-            f"EODHD vs yfinance data discrepancies found for {self._ticker}.\n"
+            f"EODHD vs yfinance data discrepancies found for {self._ticker}{currency_note}.\n"
             "Select quarters to override with yfinance values."
         )
         header.setWordWrap(True)
@@ -166,10 +178,10 @@ class DiscrepancyDialog(QDialog):
             table.setItem(i, 0, QTableWidgetItem(row["quarter"]))
             table.setItem(i, 1, QTableWidgetItem(FIELD_LABELS.get(row["field"], row["field"])))
 
-            eodhd_item = QTableWidgetItem(_format_value(row["eodhd_value"]))
+            eodhd_item = QTableWidgetItem(_format_value(row["eodhd_value"], self._currency))
             table.setItem(i, 2, eodhd_item)
 
-            yf_item = QTableWidgetItem(_format_value(row["yfinance_value"]))
+            yf_item = QTableWidgetItem(_format_value(row["yfinance_value"], self._currency))
             table.setItem(i, 3, yf_item)
 
             pct_item = QTableWidgetItem(f"{row['pct_diff']:.1f}%")

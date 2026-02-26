@@ -308,7 +308,7 @@ async def get_fundamentals(ticker: str, exchange: str = "US") -> Optional[dict]:
                     "Description": info.get("longBusinessSummary"),
                 },
                 "Highlights": {
-                    "MarketCapitalization": info.get("marketCap"),
+                    "MarketCapitalization": info.get("marketCap") or info.get("totalAssets"),
                     "PERatio": info.get("trailingPE"),
                     "ForwardPE": info.get("forwardPE"),
                     "EarningsShare": info.get("trailingEps"),

@@ -17,6 +17,20 @@ from PySide6.QtGui import QCursor
 import pyqtgraph as pg
 import numpy as np
 
+
+class ScrollThroughPlotWidget(pg.PlotWidget):
+    """PlotWidget that forwards wheel events to the parent scroll area."""
+
+    def wheelEvent(self, event):
+        parent = self.parent()
+        while parent is not None:
+            if isinstance(parent, QScrollArea):
+                parent.wheelEvent(event)
+                return
+            parent = parent.parent()
+        super().wheelEvent(event)
+
+
 class SharesAxisItem(pg.AxisItem):
     """Custom Y-axis formatting shares with K/M/B suffixes."""
 
@@ -243,7 +257,7 @@ class FundamentalsOverviewWidget(QWidget):
 
         # Chart with custom Y-axis
         y_axis = SharesAxisItem(orientation='left')
-        self._shares_plot = pg.PlotWidget(axisItems={'left': y_axis})
+        self._shares_plot = ScrollThroughPlotWidget(axisItems={'left': y_axis})
         self._shares_plot.setBackground("#2D3748")
         self._shares_plot.setFixedHeight(180)
         self._shares_plot.showGrid(x=False, y=True, alpha=0.2)
@@ -256,6 +270,8 @@ class FundamentalsOverviewWidget(QWidget):
         self._shares_plot.getPlotItem().getAxis("left").setPen(pg.mkPen("#6B7280"))
         self._shares_plot.getPlotItem().getAxis("left").setTextPen(pg.mkPen("#9CA3AF"))
         self._shares_plot.hideButtons()
+        self._shares_plot.setMouseEnabled(x=False, y=False)
+        self._shares_plot.getPlotItem().setMenuEnabled(False)
         layout.addWidget(self._shares_plot)
 
         # Connect mouse move for tooltip

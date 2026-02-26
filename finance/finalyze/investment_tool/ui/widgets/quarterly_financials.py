@@ -86,21 +86,30 @@ class QuarterlyFinancial:
 class FinancialAxisItem(pg.AxisItem):
     """Custom axis for formatting large financial numbers."""
 
+    def __init__(self, *args, currency_getter=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._currency_getter = currency_getter
+
     def tickStrings(self, values, scale, spacing):
+        # Get currency symbol dynamically
+        sym = "$"
+        if self._currency_getter:
+            sym = self._currency_getter()
+
         strings = []
         for v in values:
             if v is None or np.isnan(v):
                 strings.append("")
             elif abs(v) >= 1e12:
-                strings.append(f"${v/1e12:.1f}T")
+                strings.append(f"{sym}{v/1e12:.1f}T")
             elif abs(v) >= 1e9:
-                strings.append(f"${v/1e9:.1f}B")
+                strings.append(f"{sym}{v/1e9:.1f}B")
             elif abs(v) >= 1e6:
-                strings.append(f"${v/1e6:.1f}M")
+                strings.append(f"{sym}{v/1e6:.1f}M")
             elif abs(v) >= 1e3:
-                strings.append(f"${v/1e3:.1f}K")
+                strings.append(f"{sym}{v/1e3:.1f}K")
             else:
-                strings.append(f"${v:,.0f}")
+                strings.append(f"{sym}{v:,.0f}")
         return strings
 
 
@@ -119,14 +128,26 @@ YEAR_COLORS = [
 class QuarterlyFinancialsWidget(QWidget):
     """Widget displaying quarterly financial data as bar charts."""
 
+    # Currency symbol mapping
+    CURRENCY_SYMBOLS = {
+        "USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥", "CNY": "¥",
+        "HKD": "HK$", "KRW": "₩", "INR": "₹", "CHF": "CHF ", "CAD": "C$",
+        "AUD": "A$", "TWD": "NT$", "SEK": "kr", "NOK": "kr", "DKK": "kr",
+    }
+
+    # Reporting frequency types
+    FREQ_QUARTERLY = "quarterly"
+    FREQ_SEMI_ANNUAL = "semi_annual"
+    FREQ_ANNUAL = "annual"
+
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._data_manager = None
         self._ticker: Optional[str] = None
         self._exchange: Optional[str] = None
         self._current_period: str = "1Y"
-        self._fx_rate: Optional[float] = None
-        self._is_annual: bool = False
+        self._currency: str = "USD"
+        self._reporting_freq: str = self.FREQ_QUARTERLY
         self._quarterly_data: List[QuarterlyFinancial] = []
         self._bar_regions: List[Dict] = []
 
@@ -199,8 +220,8 @@ class QuarterlyFinancialsWidget(QWidget):
 
     def _create_chart(self) -> pg.PlotWidget:
         """Create the bar chart widget."""
-        # Custom Y axis for financial formatting
-        y_axis = FinancialAxisItem(orientation='left')
+        # Custom Y axis for financial formatting with dynamic currency
+        y_axis = FinancialAxisItem(orientation='left', currency_getter=self._get_currency_symbol)
 
         chart = pg.PlotWidget(axisItems={'left': y_axis})
         chart.setBackground("#1F2937")
@@ -246,26 +267,23 @@ class QuarterlyFinancialsWidget(QWidget):
                 self._ticker, self._exchange
             )
             if fundamentals:
-                # Get forex rate for non-USD currencies
+                # Get currency for display (keep values in original currency)
                 highlights = fundamentals.get("highlights", {})
-                currency = highlights.get("currency", "USD")
-                self._fx_rate = highlights.get("fx_rate_to_usd") if currency != "USD" else None
+                self._currency = highlights.get("currency", "USD")
 
                 self._quarterly_data = self._parse_quarterly_data(fundamentals)
-
-                # Convert all financial values to USD if needed
-                if self._fx_rate:
-                    self._convert_to_usd(self._fx_rate)
 
                 # Check for discrepancies and show dialog
                 discrepancies = fundamentals.get("discrepancies", [])
                 if discrepancies:
                     self._handle_discrepancies(discrepancies)
 
-                # Detect if data is annual (≤1 period per year)
-                self._is_annual = self._detect_annual_data()
-                if self._is_annual:
+                # Detect reporting frequency (quarterly, semi-annual, or annual)
+                self._reporting_freq = self._detect_reporting_frequency()
+                if self._reporting_freq == self.FREQ_ANNUAL:
                     self.ticker_label.setText(f"Annual Financials - {self._ticker}")
+                elif self._reporting_freq == self.FREQ_SEMI_ANNUAL:
+                    self.ticker_label.setText(f"Semi-Annual Financials - {self._ticker}")
                 else:
                     self.ticker_label.setText(f"Quarterly Financials - {self._ticker}")
 
@@ -283,7 +301,7 @@ class QuarterlyFinancialsWidget(QWidget):
         """Show discrepancy dialog and apply overrides if accepted."""
         from investment_tool.ui.dialogs.discrepancy_dialog import DiscrepancyDialog
 
-        dialog = DiscrepancyDialog(self._ticker, discrepancies, parent=self)
+        dialog = DiscrepancyDialog(self._ticker, discrepancies, currency=self._currency, parent=self)
         if dialog.exec() == DiscrepancyDialog.Accepted:
             overrides = dialog.get_selected_overrides()
             if overrides and self._data_manager:
@@ -303,24 +321,8 @@ class QuarterlyFinancialsWidget(QWidget):
                             self._quarterly_data = self._parse_quarterly_data(
                                 fake_fundamentals
                             )
-                            if self._fx_rate:
-                                self._convert_to_usd(self._fx_rate)
                 except Exception as e:
                     logger.error(f"Failed to apply overrides: {e}")
-
-    def _convert_to_usd(self, fx_rate: float) -> None:
-        """Convert all financial values from local currency to USD."""
-        currency_fields = [
-            'gross_revenue', 'gross_profit', 'after_tax_income', 'operating_income',
-            'ebit', 'cost_of_revenue', 'rd_expense', 'cash_reserve', 'total_cash',
-            'total_assets', 'total_liabilities', 'stockholders_equity', 'long_term_debt',
-            'operating_cash_flow', 'capital_expenditure', 'free_cash_flow', 'dividends_paid',
-        ]
-        for qf in self._quarterly_data:
-            for field in currency_fields:
-                val = getattr(qf, field, None)
-                if val is not None:
-                    setattr(qf, field, val * fx_rate)
 
     def _parse_quarterly_data(self, fundamentals: Dict[str, Any]) -> List[QuarterlyFinancial]:
         """Parse fundamentals into QuarterlyFinancial objects.
@@ -443,19 +445,46 @@ class QuarterlyFinancialsWidget(QWidget):
         else:
             return "Q4", report_date.year
 
-    def _detect_annual_data(self) -> bool:
-        """Detect if data is annual rather than quarterly.
+    def _detect_reporting_frequency(self) -> str:
+        """Detect reporting frequency: quarterly, semi-annual, or annual.
 
-        Returns True if most years have only 1 data point.
+        Returns FREQ_QUARTERLY, FREQ_SEMI_ANNUAL, or FREQ_ANNUAL.
         """
         if not self._quarterly_data:
-            return False
+            return self.FREQ_QUARTERLY
+
         from collections import Counter
+
+        # Count periods per year (use recent 3 years for detection)
         year_counts = Counter(q.year for q in self._quarterly_data)
-        if not year_counts:
-            return False
-        avg_per_year = sum(year_counts.values()) / len(year_counts)
-        return avg_per_year <= 1.5
+        recent_years = sorted(year_counts.keys(), reverse=True)[:3]
+
+        if not recent_years:
+            return self.FREQ_QUARTERLY
+
+        # Get average periods per year for recent years
+        recent_counts = [year_counts[y] for y in recent_years]
+        avg_per_year = sum(recent_counts) / len(recent_counts)
+
+        # Also check which quarters are present (for semi-annual detection)
+        recent_quarters = set()
+        for q in self._quarterly_data:
+            if q.year in recent_years:
+                recent_quarters.add(q.quarter)
+
+        # Semi-annual: typically only Q2 (H1) and Q4 (FY) are present, ~2 per year
+        is_semi_annual = (
+            avg_per_year <= 2.5 and
+            avg_per_year > 1.2 and
+            recent_quarters.issubset({"Q2", "Q4", "H1", "FY"})
+        )
+
+        if avg_per_year <= 1.2:
+            return self.FREQ_ANNUAL
+        elif is_semi_annual:
+            return self.FREQ_SEMI_ANNUAL
+        else:
+            return self.FREQ_QUARTERLY
 
     def _update_chart(self) -> None:
         """Update the chart based on current period and metric."""
@@ -470,8 +499,10 @@ class QuarterlyFinancialsWidget(QWidget):
             return
 
         metric = self.metric_combo.currentData()
-        if self._is_annual:
+        if self._reporting_freq == self.FREQ_ANNUAL:
             self._render_annual_view(metric)
+        elif self._reporting_freq == self.FREQ_SEMI_ANNUAL:
+            self._render_semi_annual_view(metric)
         else:
             self._render_grouped_view(metric)
 
@@ -588,6 +619,74 @@ class QuarterlyFinancialsWidget(QWidget):
 
         self._clear_legend()
 
+    def _render_semi_annual_view(self, metric: FinancialMetric) -> None:
+        """Render semi-annual data (H1 and FY) grouped by period across years."""
+        if not self._quarterly_data:
+            return
+
+        num_years = 5
+
+        # Get unique years (most recent first)
+        years = sorted(set(q.year for q in self._quarterly_data), reverse=True)[:num_years]
+        years = list(reversed(years))  # Oldest first for display
+
+        # Semi-annual periods: H1 (first half) and FY (full year)
+        # Q2 data typically represents H1, Q4 data represents FY
+        periods = [("H1", "Q2"), ("FY", "Q4")]
+
+        # Build data matrix: periods x years
+        bar_width = 0.8 / len(years) if years else 0.2
+
+        for p_idx, (period_label, quarter_key) in enumerate(periods):
+            for y_idx, year in enumerate(years):
+                # Find data point for this period/year
+                value = self._find_quarter_value(quarter_key, year, metric)
+                if value is None:
+                    value = 0
+
+                # Calculate bar position
+                x = p_idx + (y_idx - len(years) / 2 + 0.5) * bar_width
+                color = YEAR_COLORS[y_idx % len(YEAR_COLORS)]
+
+                actual_width = bar_width * 0.9
+                bar = pg.BarGraphItem(
+                    x=[x], height=[value], width=actual_width,
+                    brush=pg.mkBrush(color), pen=pg.mkPen(color, width=1)
+                )
+                self.chart.addItem(bar)
+                self._bar_regions.append({
+                    "x_min": x - actual_width / 2,
+                    "x_max": x + actual_width / 2,
+                    "quarter": period_label,  # Use H1/FY label
+                    "year": year,
+                    "value": float(value),
+                })
+
+        # Set x-axis ticks to period labels
+        x_axis = self.chart.getAxis("bottom")
+        x_axis.setTicks([[(i, p[0]) for i, p in enumerate(periods)]])
+
+        # Set y-axis label
+        self.chart.setLabel("left", metric.value)
+
+        # Auto-range, supporting negative values
+        self.chart.setXRange(-0.5, len(periods) - 0.5, padding=0.1)
+
+        all_values = []
+        for q in self._quarterly_data:
+            val = self._get_metric_value(q, metric)
+            if val is not None:
+                all_values.append(val)
+        if all_values:
+            min_val = min(0, min(all_values))
+            max_val = max(all_values)
+            if max_val > min_val:
+                padding = (max_val - min_val) * 0.1
+                self.chart.setYRange(min_val - padding, max_val + padding)
+
+        # Update legend
+        self._update_legend(years)
+
     def _render_grouped_view(self, metric: FinancialMetric) -> None:
         """Render quarters grouped by Q number across years."""
         if not self._quarterly_data:
@@ -684,20 +783,25 @@ class QuarterlyFinancialsWidget(QWidget):
         }
         return mapping.get(metric)
 
+    def _get_currency_symbol(self) -> str:
+        """Get the currency symbol for the current stock."""
+        return self.CURRENCY_SYMBOLS.get(self._currency, self._currency + " ")
+
     def _format_value(self, v: float) -> str:
         """Format a financial value with appropriate suffix."""
+        sym = self._get_currency_symbol()
         negative = v < 0
         av = abs(v)
         if av >= 1e12:
-            s = f"${av/1e12:.2f}T"
+            s = f"{sym}{av/1e12:.2f}T"
         elif av >= 1e9:
-            s = f"${av/1e9:.2f}B"
+            s = f"{sym}{av/1e9:.2f}B"
         elif av >= 1e6:
-            s = f"${av/1e6:.2f}M"
+            s = f"{sym}{av/1e6:.2f}M"
         elif av >= 1e3:
-            s = f"${av/1e3:.2f}K"
+            s = f"{sym}{av/1e3:.2f}K"
         else:
-            s = f"${av:,.0f}"
+            s = f"{sym}{av:,.0f}"
         return f"-{s}" if negative else s
 
     def _on_mouse_moved(self, pos) -> None:
@@ -728,64 +832,77 @@ class QuarterlyFinancialsWidget(QWidget):
 
     def _build_tooltip_html(self, region: Dict) -> str:
         """Build rich HTML tooltip for a hovered bar."""
-        quarter = region["quarter"]
+        period = region["quarter"]  # May be Q1-Q4, H1, or FY
         year = region["year"]
         value = region["value"]
         metric = self.metric_combo.currentData()
 
+        # Map display period to data quarter for lookups
+        period_to_quarter = {"H1": "Q2", "FY": "Q4"}
+        lookup_quarter = period_to_quarter.get(period, period)
+
         # Exact value
         formatted_value = self._format_value(value)
 
-        # Annual total: sum all quarters of this year for the current metric
-        annual_values = []
-        for qf in self._quarterly_data:
-            if qf.year == year:
-                v = self._get_metric_value(qf, metric)
-                if v is not None:
-                    annual_values.append(v)
-        annual_total = sum(annual_values) if annual_values else None
-        num_quarters = len(annual_values)
-
-        # % of annual
-        pct_of_annual = None
-        if annual_total and annual_total != 0 and value >= 0:
-            pct_of_annual = value / annual_total * 100
-
-        # YoY change
-        prev_value = self._find_quarter_value(quarter, year - 1, metric)
-        yoy_change = None
-        if prev_value is not None and prev_value != 0:
-            yoy_change = (value - prev_value) / abs(prev_value) * 100
-
-        # Build HTML
+        # Build HTML rows
         rows = f'<tr><td>Value:</td><td align="right"><b>{formatted_value}</b></td></tr>'
 
-        if annual_total is not None:
-            rows += (
-                f'<tr><td>Annual Total:&nbsp;&nbsp;</td>'
-                f'<td align="right">{self._format_value(annual_total)} ({num_quarters} quarter{"s" if num_quarters != 1 else ""})</td></tr>'
-            )
+        # For semi-annual: show H1 vs FY comparison instead of annual total
+        if self._reporting_freq == self.FREQ_SEMI_ANNUAL:
+            if period == "FY":
+                # Show H1 value for comparison
+                h1_value = self._find_quarter_value("Q2", year, metric)
+                if h1_value is not None:
+                    rows += (
+                        f'<tr><td>H1 {year}:&nbsp;&nbsp;</td>'
+                        f'<td align="right">{self._format_value(h1_value)}</td></tr>'
+                    )
+            elif period == "H1":
+                # Show what % of FY this H1 represents
+                fy_value = self._find_quarter_value("Q4", year, metric)
+                if fy_value and fy_value != 0:
+                    pct = value / fy_value * 100
+                    rows += f'<tr><td>% of FY:</td><td align="right">{pct:.1f}%</td></tr>'
+        else:
+            # Quarterly: show annual total
+            annual_values = []
+            for qf in self._quarterly_data:
+                if qf.year == year:
+                    v = self._get_metric_value(qf, metric)
+                    if v is not None:
+                        annual_values.append(v)
+            annual_total = sum(annual_values) if annual_values else None
+            num_quarters = len(annual_values)
 
-        if pct_of_annual is not None:
-            rows += f'<tr><td>% of Annual:</td><td align="right">{pct_of_annual:.1f}%</td></tr>'
+            if annual_total is not None:
+                rows += (
+                    f'<tr><td>Annual Total:&nbsp;&nbsp;</td>'
+                    f'<td align="right">{self._format_value(annual_total)} ({num_quarters} quarter{"s" if num_quarters != 1 else ""})</td></tr>'
+                )
 
-        if yoy_change is not None:
+            # % of annual
+            if annual_total and annual_total != 0 and value >= 0:
+                pct_of_annual = value / annual_total * 100
+                rows += f'<tr><td>% of Annual:</td><td align="right">{pct_of_annual:.1f}%</td></tr>'
+
+        # YoY change (works for both quarterly and semi-annual)
+        prev_value = self._find_quarter_value(lookup_quarter, year - 1, metric)
+        if prev_value is not None and prev_value != 0:
+            yoy_change = (value - prev_value) / abs(prev_value) * 100
             color = "#22C55E" if yoy_change >= 0 else "#EF4444"
             sign = "+" if yoy_change >= 0 else ""
             rows += (
                 f'<tr><td>YoY Change:</td>'
                 f'<td align="right" style="color: {color};">{sign}{yoy_change:.1f}%</td></tr>'
             )
-
-        if prev_value is not None:
             rows += (
-                f'<tr><td>{quarter} {year - 1}:</td>'
+                f'<tr><td>{period} {year - 1}:</td>'
                 f'<td align="right">{self._format_value(prev_value)}</td></tr>'
             )
 
         html = (
             f'<div style="font-family: monospace; font-size: 12px;">'
-            f'<b>{quarter} {year} &mdash; {metric.value}</b><br>'
+            f'<b>{period} {year} &mdash; {metric.value}</b><br>'
             f'<hr>'
             f'<table>{rows}</table>'
             f'</div>'
