@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, date, timedelta, timezone
 from typing import Optional, List, Dict
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -17,6 +17,9 @@ from PySide6.QtWidgets import (
     QStatusBar,
     QLabel,
     QPushButton,
+    QToolButton,
+    QMenu,
+    QProgressDialog,
     QMessageBox,
     QGroupBox,
     QFormLayout,
@@ -57,6 +60,7 @@ class MainWindow(QMainWindow):
     """Main application window."""
 
     status_updated = Signal(str)
+    db_update_progress = Signal(int, str)  # (index, symbol_name)
 
     def __init__(self, config: Optional[AppConfig] = None):
         super().__init__()
@@ -70,6 +74,9 @@ class MainWindow(QMainWindow):
         self._selected_exchange: Optional[str] = None
         self._chart_loading: bool = False  # Prevent concurrent chart loads
         self._selecting: bool = False  # Prevent circular selection
+        self._db_update_progress: Optional[QProgressDialog] = None
+        self._news_update_progress: Optional[QProgressDialog] = None
+        self._financials_update_progress: Optional[QProgressDialog] = None
 
         self._setup_window()
         self._create_menu_bar()
@@ -106,6 +113,18 @@ class MainWindow(QMainWindow):
         refresh_action.setShortcut(QKeySequence.Refresh)
         refresh_action.triggered.connect(self._on_refresh)
         file_menu.addAction(refresh_action)
+
+        update_db_action = QAction("&Update Database", self)
+        update_db_action.triggered.connect(self._on_update_database)
+        file_menu.addAction(update_db_action)
+
+        update_news_action = QAction("Update &News", self)
+        update_news_action.triggered.connect(self._on_update_news)
+        file_menu.addAction(update_news_action)
+
+        update_financials_action = QAction("Update &Financials", self)
+        update_financials_action.triggered.connect(self._on_update_financials)
+        file_menu.addAction(update_financials_action)
 
         file_menu.addSeparator()
 
@@ -199,8 +218,15 @@ class MainWindow(QMainWindow):
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
 
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.clicked.connect(self._on_refresh)
+        refresh_btn = QToolButton()
+        refresh_btn.setText("Refresh")
+        refresh_menu = QMenu(refresh_btn)
+        refresh_menu.addAction("Refresh Screen", self._on_refresh)
+        refresh_menu.addAction("Update Database", self._on_update_database)
+        refresh_menu.addAction("Update News", self._on_update_news)
+        refresh_menu.addAction("Update Financials", self._on_update_financials)
+        refresh_btn.setMenu(refresh_menu)
+        refresh_btn.setPopupMode(QToolButton.InstantPopup)
         toolbar.addWidget(refresh_btn)
 
         toolbar.addSeparator()
@@ -1437,6 +1463,390 @@ class MainWindow(QMainWindow):
 
         self._update_status()
         self.status_bar.showMessage("Data refreshed", 3000)
+
+    # ------------------------------------------------------------------
+    # Update Database
+    # ------------------------------------------------------------------
+
+    def _on_update_database(self) -> None:
+        """Bulk-update the database cache for all stocks across categories."""
+        if not self.data_manager or not self.data_manager.is_connected():
+            QMessageBox.warning(
+                self, "Update Database",
+                "Data server is not connected. Cannot update database.",
+            )
+            return
+
+        if self._db_update_progress is not None:
+            QMessageBox.information(
+                self, "Update Database",
+                "A database update is already running.",
+            )
+            return
+
+        # Collect all unique stocks
+        stocks: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for category in self.category_manager.get_all_categories():
+            for ref in category.stocks:
+                key = f"{ref.ticker}.{ref.exchange}"
+                if key not in seen:
+                    seen.add(key)
+                    stocks.append((ref.ticker, ref.exchange))
+
+        if not stocks:
+            QMessageBox.information(
+                self, "Update Database",
+                "No stocks found in any category.",
+            )
+            return
+
+        # Create progress dialog
+        progress = QProgressDialog(
+            "Preparing database update...", "Cancel", 0, len(stocks), self,
+        )
+        progress.setWindowTitle("Update Database")
+        progress.setMinimumDuration(0)
+        progress.setModal(True)
+        progress.setValue(0)
+        self._db_update_progress = progress
+
+        # Connect our cross-thread signal to update progress on the main thread
+        self.db_update_progress.connect(self._on_db_update_progress)
+
+        # Run in background thread via ThreadManager
+        from investment_tool.utils.threading import get_thread_manager
+        tm = get_thread_manager()
+        tm.submit(
+            self._update_database_worker,
+            stocks,
+            on_finished=self._on_update_database_finished,
+            worker_id="update_database",
+        )
+
+    def _update_database_worker(
+        self, stocks: list[tuple[str, str]],
+    ) -> dict:
+        """Background worker: fetch daily (5Y) and intraday (1 month) data for every stock.
+
+        First queries the data server for existing cache coverage, then only
+        requests the missing date ranges for each symbol.
+        """
+        import os
+        import requests as http_requests
+
+        today = date.today()
+        daily_target_start = today - timedelta(days=5 * 365)
+        intraday_target_start = datetime.combine(today - timedelta(days=30), datetime.min.time())
+        intraday_target_end = datetime.combine(today, datetime.max.time())
+
+        # --- Fetch existing coverage from data server in one batch call ---
+        symbols = [f"{t}.{e}" for t, e in stocks]
+        daily_coverage: dict = {}
+        intraday_coverage: dict = {}
+        data_server_url = os.getenv("DATA_SERVER_URL", "").rstrip("/")
+        if data_server_url:
+            try:
+                resp = http_requests.post(
+                    f"{data_server_url}/api/cache/coverage",
+                    json={"symbols": symbols},
+                    timeout=15,
+                )
+                if resp.status_code == 200:
+                    body = resp.json()
+                    daily_coverage = body.get("daily", {})
+                    intraday_coverage = body.get("intraday", {})
+                    logger.info(
+                        f"Cache coverage: {len(daily_coverage)} daily, "
+                        f"{len(intraday_coverage)} intraday symbols cached"
+                    )
+            except Exception as e:
+                logger.warning(f"Could not fetch cache coverage: {e}")
+
+        success = 0
+        failed = 0
+        skipped = 0
+
+        from investment_tool.utils.threading import get_thread_manager
+        tm = get_thread_manager()
+        worker = tm._active_workers.get("update_database")
+
+        for i, (ticker, exchange) in enumerate(stocks):
+            # Check cancellation
+            if worker and worker.is_cancelled:
+                skipped = len(stocks) - i
+                break
+
+            symbol = f"{ticker}.{exchange}"
+            self.db_update_progress.emit(i, symbol)
+
+            try:
+                # --- Daily prices (5 years) ---
+                need_daily = True
+                daily_start = daily_target_start
+                cov = daily_coverage.get(symbol)
+                if cov and cov.get("max_date") and cov.get("min_date"):
+                    cov_min = date.fromisoformat(cov["min_date"])
+                    cov_max = date.fromisoformat(cov["max_date"])
+                    start_ok = cov_min <= daily_target_start + timedelta(days=5)
+                    end_ok = (today - cov_max).days <= 1
+                    if start_ok and end_ok:
+                        need_daily = False
+                    elif start_ok:
+                        # Only fetch the gap at the end
+                        daily_start = cov_max
+                    # else: fetch full range
+
+                if need_daily:
+                    self.data_manager.get_daily_prices(
+                        ticker, exchange, daily_start, today,
+                    )
+
+                # --- Intraday prices (last month, 5-min bars) ---
+                need_intraday = True
+                intraday_start = intraday_target_start
+                icov = intraday_coverage.get(symbol)
+                if icov and icov.get("max_timestamp") and icov.get("min_timestamp"):
+                    icov_max = datetime.fromisoformat(icov["max_timestamp"])
+                    month_ago = datetime.combine(today - timedelta(days=30), datetime.min.time())
+                    start_ok = icov_max >= month_ago  # has data within the window
+                    # Compare by date to handle weekends/non-trading hours
+                    # (last trading day data may be >24h ago)
+                    end_ok = (today - icov_max.date()).days <= 1
+                    if start_ok and end_ok:
+                        need_intraday = False
+                    elif start_ok:
+                        intraday_start = icov_max
+
+                if need_intraday:
+                    self.data_manager.get_intraday_prices(
+                        ticker, exchange, "5m",
+                        intraday_start, intraday_target_end,
+                    )
+
+                if not need_daily and not need_intraday:
+                    skipped += 1
+                else:
+                    success += 1
+            except Exception as e:
+                logger.warning(f"Failed to update {symbol}: {e}")
+                failed += 1
+
+        return {"success": success, "failed": failed, "skipped": skipped, "total": len(stocks)}
+
+    @Slot(int, str)
+    def _on_db_update_progress(self, index: int, symbol: str) -> None:
+        """Update progress dialog from main thread."""
+        progress = self._db_update_progress
+        if progress is None:
+            return
+        if progress.wasCanceled():
+            # Request cancellation on the worker
+            from investment_tool.utils.threading import get_thread_manager
+            get_thread_manager().cancel("update_database")
+            return
+        total = progress.maximum()
+        progress.setValue(index)
+        progress.setLabelText(f"Updating {symbol}... ({index + 1}/{total})")
+
+    def _on_update_database_finished(self, result) -> None:
+        """Handle completion of the database update worker."""
+        # Disconnect signal and close dialog
+        try:
+            self.db_update_progress.disconnect(self._on_db_update_progress)
+        except RuntimeError:
+            pass
+
+        if self._db_update_progress is not None:
+            self._db_update_progress.close()
+            self._db_update_progress = None
+
+        if result.success:
+            data = result.data
+            QMessageBox.information(
+                self, "Update Database",
+                f"Database update complete.\n\n"
+                f"  Updated: {data['success']}\n"
+                f"  Failed:  {data['failed']}\n"
+                f"  Skipped: {data['skipped']}\n"
+                f"  Total:   {data['total']}",
+            )
+        else:
+            QMessageBox.warning(
+                self, "Update Database",
+                f"Database update failed:\n{result.error}",
+            )
+
+        # Refresh the display
+        self._on_refresh()
+
+    # ------------------------------------------------------------------
+    # Update News
+    # ------------------------------------------------------------------
+
+    def _on_update_news(self) -> None:
+        """Bulk-update news articles for all tracked stocks."""
+        if not self.data_manager or not self.data_manager.is_connected():
+            QMessageBox.warning(
+                self, "Update News",
+                "Data server is not connected. Cannot update news.",
+            )
+            return
+
+        if self._news_update_progress is not None:
+            QMessageBox.information(
+                self, "Update News",
+                "A news update is already running.",
+            )
+            return
+
+        progress = QProgressDialog(
+            "Updating news for all tracked stocks...", None, 0, 0, self,
+        )
+        progress.setWindowTitle("Update News")
+        progress.setMinimumDuration(0)
+        progress.setModal(True)
+        self._news_update_progress = progress
+
+        from investment_tool.utils.threading import get_thread_manager
+        tm = get_thread_manager()
+        tm.submit(
+            self._update_news_worker,
+            on_finished=self._on_update_news_finished,
+            worker_id="update_news",
+        )
+
+    def _update_news_worker(self) -> dict:
+        """Background worker: POST to data server to trigger bulk news update."""
+        import os
+        import requests as http_requests
+
+        data_server_url = os.getenv("DATA_SERVER_URL", "").rstrip("/")
+        if not data_server_url:
+            raise RuntimeError("DATA_SERVER_URL is not set")
+
+        resp = http_requests.post(
+            f"{data_server_url}/api/news/update",
+            timeout=300,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def _on_update_news_finished(self, result) -> None:
+        """Handle completion of the news update worker."""
+        if self._news_update_progress is not None:
+            self._news_update_progress.close()
+            self._news_update_progress = None
+
+        if result.success:
+            data = result.data
+            if data.get("timeout"):
+                QMessageBox.warning(
+                    self, "Update News",
+                    "News update timed out after 5 minutes.\n"
+                    f"Stocks checked: {data.get('tickers', 0)}",
+                )
+            else:
+                QMessageBox.information(
+                    self, "Update News",
+                    f"News update complete.\n\n"
+                    f"  Articles: {data.get('total_articles', 0)}\n"
+                    f"  Stocks:   {data.get('tickers', 0)}\n"
+                    f"  Errors:   {data.get('errors', 0)}",
+                )
+        else:
+            QMessageBox.warning(
+                self, "Update News",
+                f"News update failed:\n{result.error}",
+            )
+
+        # Refresh the display (reloads news feed for currently selected stock)
+        self._on_refresh()
+
+    # ------------------------------------------------------------------
+    # Update Financials
+    # ------------------------------------------------------------------
+
+    def _on_update_financials(self) -> None:
+        """Bulk-update quarterly financials for all tracked stocks."""
+        if not self.data_manager or not self.data_manager.is_connected():
+            QMessageBox.warning(
+                self, "Update Financials",
+                "Data server is not connected. Cannot update financials.",
+            )
+            return
+
+        if self._financials_update_progress is not None:
+            QMessageBox.information(
+                self, "Update Financials",
+                "A financials update is already running.",
+            )
+            return
+
+        progress = QProgressDialog(
+            "Updating financials for all tracked stocks...", None, 0, 0, self,
+        )
+        progress.setWindowTitle("Update Financials")
+        progress.setMinimumDuration(0)
+        progress.setModal(True)
+        self._financials_update_progress = progress
+
+        from investment_tool.utils.threading import get_thread_manager
+        tm = get_thread_manager()
+        tm.submit(
+            self._update_financials_worker,
+            on_finished=self._on_update_financials_finished,
+            worker_id="update_financials",
+        )
+
+    def _update_financials_worker(self) -> dict:
+        """Background worker: POST to data server to trigger bulk financials update."""
+        import os
+        import requests as http_requests
+
+        data_server_url = os.getenv("DATA_SERVER_URL", "").rstrip("/")
+        if not data_server_url:
+            raise RuntimeError("DATA_SERVER_URL is not set")
+
+        resp = http_requests.post(
+            f"{data_server_url}/api/fundamentals/update",
+            timeout=600,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def _on_update_financials_finished(self, result) -> None:
+        """Handle completion of the financials update worker."""
+        if self._financials_update_progress is not None:
+            self._financials_update_progress.close()
+            self._financials_update_progress = None
+
+        if result.success:
+            data = result.data
+            yf_filled = data.get('yf_missing_filled', 0)
+            yf_overrides = data.get('yf_overrides', 0)
+            msg = (
+                f"Financials update complete.\n\n"
+                f"  Updated:  {data.get('updated', 0)}\n"
+                f"  Quarters: {data.get('quarters', 0)}\n"
+                f"  Stocks:   {data.get('tickers', 0)}\n"
+                f"  Errors:   {data.get('errors', 0)}"
+            )
+            if yf_filled or yf_overrides:
+                msg += (
+                    f"\n\n  Yahoo Finance corrections:\n"
+                    f"    Missing quarters filled: {yf_filled}\n"
+                    f"    Discrepancies overridden: {yf_overrides}"
+                )
+            QMessageBox.information(self, "Update Financials", msg)
+        else:
+            QMessageBox.warning(
+                self, "Update Financials",
+                f"Financials update failed:\n{result.error}",
+            )
+
+        # Refresh the display
+        self._on_refresh()
 
     def _on_export(self) -> None:
         """Handle export action."""

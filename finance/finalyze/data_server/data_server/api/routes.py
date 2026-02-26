@@ -1013,6 +1013,195 @@ async def get_news(
     return cached_data
 
 
+@router.post("/news/update")
+async def update_news():
+    """Trigger a bulk news update for all tracked stocks."""
+    from data_server.workers.news_worker import update_news as run_news_update
+
+    result = await run_news_update()
+    return result or {"total_articles": 0, "tickers": 0, "errors": 0}
+
+
+@router.post("/fundamentals/update")
+async def update_all_fundamentals():
+    """Bulk-update quarterly financials for all tracked stocks.
+
+    Bypasses the cache TTL and fetches fresh data from EODHD + yfinance
+    for every tracked ticker.  After storing EODHD data it cross-validates
+    against yfinance:
+      - Quarters that yfinance has but EODHD doesn't → auto-stored from yfinance
+      - Quarters where EODHD and yfinance differ >5% → auto-overridden with yfinance
+    """
+    from data_server.api.tracking import get_tracked_tickers
+    from data_server.db.database import async_session_factory
+    from data_server.services.yfinance_client import (
+        get_fundamentals as yf_fundamentals,
+        get_quarterly_financials as yf_quarterly,
+    )
+
+    async with async_session_factory() as session:
+        symbols = await get_tracked_tickers(session)
+
+    if not symbols:
+        return {"updated": 0, "tickers": 0, "errors": 0, "quarters": 0,
+                "yf_missing_filled": 0, "yf_overrides": 0}
+
+    logger.info(f"Starting bulk fundamentals update for {len(symbols)} stocks")
+
+    updated = 0
+    errors = 0
+    total_quarters = 0
+    total_yf_missing = 0
+    total_yf_overrides = 0
+
+    client = await get_eodhd_client()
+
+    for symbol in symbols:
+        ticker = symbol.split(".")[0]
+        exchange_part = symbol.split(".")[-1] if "." in symbol else "US"
+
+        try:
+            # Fetch EODHD + yfinance in parallel
+            async def _fetch_eodhd(s=symbol):
+                try:
+                    return await client.get_fundamentals(s)
+                except Exception as e:
+                    logger.warning(f"EODHD fundamentals failed for {s}: {e}")
+                    return None
+
+            async def _fetch_yf(t=ticker, ex=exchange_part):
+                try:
+                    return await yf_quarterly(t, ex)
+                except Exception:
+                    return []
+
+            data, yf_quarters = await asyncio.gather(_fetch_eodhd(), _fetch_yf())
+
+            # Fallback to yfinance fundamentals if EODHD empty
+            if not data:
+                try:
+                    data = await yf_fundamentals(ticker, exchange_part)
+                except Exception:
+                    pass
+
+            if not data:
+                logger.debug(f"No fundamentals data for {symbol}")
+                continue
+
+            async with async_session_factory() as session:
+                # Store company + highlights
+                general = data.get("General", {})
+                highlights_raw = data.get("Highlights", {})
+                shares_stats = data.get("SharesStats", {})
+                company_data = {
+                    "ticker": ticker,
+                    "name": general.get("Name"),
+                    "exchange": general.get("Exchange"),
+                    "sector": general.get("Sector"),
+                    "industry": general.get("Industry"),
+                    "market_cap": highlights_raw.get("MarketCapitalization"),
+                    "shares_outstanding": shares_stats.get("SharesOutstanding"),
+                    "pe_ratio": highlights_raw.get("PERatio"),
+                    "eps": highlights_raw.get("EarningsShare"),
+                }
+                await cache.store_company(session, company_data)
+                await cache.store_company_highlights(session, ticker, data)
+
+                # Store quarterly financials from EODHD
+                q_count = await cache.store_quarterly_financials(session, ticker, data)
+
+                if yf_quarters:
+                    # Get the set of EODHD quarter dates we just stored
+                    financials = data.get("Financials", {})
+                    eodhd_dates = set()
+                    for section in ("Income_Statement", "Balance_Sheet", "Cash_Flow"):
+                        eodhd_dates |= set(
+                            financials.get(section, {}).get("quarterly", {}).keys()
+                        )
+
+                    yf_dates = {q["date"] for q in yf_quarters if q.get("date")}
+
+                    # --- Fill missing quarters from yfinance ---
+                    missing_dates = yf_dates - eodhd_dates
+                    if missing_dates:
+                        missing_qs = [q for q in yf_quarters if q.get("date") in missing_dates]
+                        income_q, balance_q, cashflow_q = {}, {}, {}
+                        for q in missing_qs:
+                            d = q["date"]
+                            income_q[d] = q.get("income", {})
+                            balance_q[d] = q.get("balance", {})
+                            cashflow_q[d] = q.get("cashflow", {})
+                        eodhd_compat = {
+                            "Financials": {
+                                "Income_Statement": {"quarterly": income_q},
+                                "Balance_Sheet": {"quarterly": balance_q},
+                                "Cash_Flow": {"quarterly": cashflow_q},
+                            }
+                        }
+                        filled = await cache.store_quarterly_financials(
+                            session, ticker, eodhd_compat, data_source="yfinance"
+                        )
+                        q_count += filled
+                        total_yf_missing += filled
+                        if filled:
+                            logger.info(
+                                f"{symbol}: filled {filled} missing quarter(s) from yfinance "
+                                f"({', '.join(sorted(missing_dates))})"
+                            )
+
+                    # --- Cross-validate and auto-override discrepancies ---
+                    stored_quarters = await cache.get_quarterly_financials(session, ticker)
+                    if stored_quarters:
+                        discrepancies = compare_quarterly_data(stored_quarters, yf_quarters)
+                        if discrepancies:
+                            overrides = [d["yfinance_record"] for d in discrepancies]
+                            override_count = await cache.override_quarterly_financials(
+                                session, ticker, overrides
+                            )
+                            total_yf_overrides += override_count
+                            if override_count:
+                                logger.info(
+                                    f"{symbol}: auto-overrode {override_count} quarter(s) "
+                                    f"with yfinance data (>5% discrepancy)"
+                                )
+
+                elif q_count == 0:
+                    # No yfinance quarterly and EODHD had nothing either
+                    logger.debug(f"No quarterly data from any source for {symbol}")
+
+                # Update cache metadata so GET endpoint knows it's fresh
+                cache_key = f"fundamentals:{symbol}"
+                await cache.update_cache_metadata(
+                    session, cache_key, "fundamentals", ticker,
+                    settings.cache_fundamentals, q_count,
+                )
+                await session.commit()
+
+            total_quarters += q_count
+            updated += 1
+
+            # Small delay to avoid overwhelming APIs
+            await asyncio.sleep(0.2)
+
+        except Exception as e:
+            logger.warning(f"Failed to update fundamentals for {symbol}: {e}")
+            errors += 1
+
+    logger.info(
+        f"Bulk fundamentals update complete: {updated}/{len(symbols)} stocks, "
+        f"{total_quarters} quarters, {errors} errors, "
+        f"{total_yf_missing} yf-filled, {total_yf_overrides} yf-overrides"
+    )
+    return {
+        "updated": updated,
+        "tickers": len(symbols),
+        "errors": errors,
+        "quarters": total_quarters,
+        "yf_missing_filled": total_yf_missing,
+        "yf_overrides": total_yf_overrides,
+    }
+
+
 @router.get("/search/{query}")
 async def search_symbols(
     query: str,
@@ -1297,6 +1486,25 @@ async def get_batch_daily_changes(
     logger.info(f"Batch daily changes completed: {len(results)}/{len(symbols)} symbols in {total_time:.1f}ms")
 
     return results
+
+
+@router.post("/cache/coverage")
+async def get_cache_coverage(
+    body: dict,
+    session: AsyncSession = Depends(get_session),
+):
+    """Return date-range coverage for daily and intraday data per symbol.
+
+    Request body: {"symbols": ["AAPL.US", "NVDA.US", ...]}
+    """
+    symbols = body.get("symbols", [])
+    if not symbols:
+        return {"daily": {}, "intraday": {}}
+
+    daily = await cache.get_daily_coverage(session, symbols)
+    intraday = await cache.get_intraday_coverage(session, symbols)
+
+    return {"daily": daily, "intraday": intraday}
 
 
 @router.get("/server-status")

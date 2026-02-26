@@ -8,6 +8,10 @@ from data_server.db.database import async_session_factory
 from data_server.db import cache
 from data_server.api.tracking import get_tracked_tickers_for_news, update_news_timestamp
 from data_server.services.eodhd_client import get_eodhd_client
+from data_server.services.yfinance_client import (
+    get_news as yf_get_news,
+    is_news_supported_by_eodhd,
+)
 from data_server.ws.manager import manager
 
 logger = logging.getLogger(__name__)
@@ -17,20 +21,31 @@ async def fetch_news_for_single_ticker(symbol: str, from_date: str, to_date: str
     """Fetch and store news for a single ticker asynchronously.
 
     Returns the number of articles stored.
+    Uses yfinance fallback for exchanges not supported by EODHD.
     """
     async with async_session_factory() as session:
-        client = await get_eodhd_client()
         ticker = symbol.split(".")[0]
+        exchange = symbol.split(".")[-1] if "." in symbol else "US"
 
         try:
-            # Fetch 100 news articles from EODHD
-            news_data = await client.get_news(
-                symbol=symbol,
-                from_date=from_date,
-                to_date=to_date,
-                limit=100,
-                offset=0
-            )
+            news_data = None
+
+            # Check if EODHD supports news for this exchange
+            if is_news_supported_by_eodhd(exchange):
+                client = await get_eodhd_client()
+                # Fetch 100 news articles from EODHD
+                news_data = await client.get_news(
+                    symbol=symbol,
+                    from_date=from_date,
+                    to_date=to_date,
+                    limit=100,
+                    offset=0
+                )
+
+            # Fallback to yfinance if EODHD returned no data or doesn't support exchange
+            if not news_data:
+                logger.info(f"Using yfinance news fallback for {symbol}")
+                news_data = await yf_get_news(ticker, exchange, limit=50)
 
             if not news_data:
                 logger.debug(f"No news found for {ticker} from {from_date} to {to_date}")
@@ -113,7 +128,7 @@ async def update_news():
 
         if not tickers:
             logger.debug("No tracked stocks for news updates")
-            return
+            return {"total_articles": 0, "tickers": 0, "errors": 0}
 
         logger.info(f"Starting news update for {len(tickers)} stocks")
 
@@ -163,25 +178,42 @@ async def update_news():
 
             logger.info(f"News update complete: {total_articles} articles from {len(tickers)} stocks, {errors} errors")
 
+            return {
+                "total_articles": total_articles,
+                "tickers": len(tickers),
+                "errors": errors,
+            }
+
         except asyncio.TimeoutError:
             logger.warning("News update timed out after 5 minutes")
+            return {"total_articles": 0, "tickers": len(tickers), "errors": 0, "timeout": True}
 
 
 async def fetch_news_for_ticker(symbol: str, limit: int = 50) -> list[dict]:
     """Fetch and store news for a specific ticker (on-demand).
 
     This is used for manual refresh requests.
+    Uses yfinance fallback for exchanges not supported by EODHD.
     """
     async with async_session_factory() as session:
-        client = await get_eodhd_client()
+        ticker = symbol.split(".")[0]
+        exchange = symbol.split(".")[-1] if "." in symbol else "US"
 
         try:
-            news_data = await client.get_news(symbol=symbol, limit=limit)
+            news_data = None
+
+            # Check if EODHD supports news for this exchange
+            if is_news_supported_by_eodhd(exchange):
+                client = await get_eodhd_client()
+                news_data = await client.get_news(symbol=symbol, limit=limit)
+
+            # Fallback to yfinance if EODHD returned no data or doesn't support exchange
+            if not news_data:
+                logger.info(f"Using yfinance news fallback for {symbol}")
+                news_data = await yf_get_news(ticker, exchange, limit=limit)
 
             if not news_data:
                 return []
-
-            ticker = symbol.split(".")[0]
             stored_news = []
 
             for article in news_data:
