@@ -57,6 +57,12 @@ async def init_db():
         await conn.execute(text(
             "ALTER TABLE quarterly_financials ADD COLUMN IF NOT EXISTS data_source VARCHAR(20) DEFAULT 'eodhd'"
         ))
+        await conn.execute(text(
+            "ALTER TABLE company_highlights ADD COLUMN IF NOT EXISTS asset_type VARCHAR(20)"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE company_highlights ADD COLUMN IF NOT EXISTS etf_data TEXT"
+        ))
     logger.info("Database initialized")
 
 

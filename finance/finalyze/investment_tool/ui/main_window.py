@@ -34,6 +34,7 @@ from investment_tool.ui.styles.theme import get_stylesheet
 from investment_tool.ui.dialogs.settings_dialog import SettingsDialog
 from investment_tool.ui.dialogs.category_dialog import CategoryDialog
 from investment_tool.ui.dialogs.add_stock_dialog import AddStockDialog
+from investment_tool.ui.widgets.etf_overview import ETFOverviewWidget
 from investment_tool.ui.widgets.fundamentals_overview import FundamentalsOverviewWidget
 from investment_tool.ui.widgets.market_treemap import MarketTreemap, TreemapItem
 from investment_tool.ui.widgets.news_feed import NewsFeedWidget
@@ -300,6 +301,10 @@ class MainWindow(QMainWindow):
         self.fundamentals_overview = FundamentalsOverviewWidget()
         self.chart_tabs.addTab(self.fundamentals_overview, "Fundamentals")
 
+        # ETF Overview tab (created but not added to tabs until needed)
+        self.etf_overview = ETFOverviewWidget()
+        self._current_asset_mode = "stock"  # "stock" or "etf"
+
         right_layout.addWidget(self.chart_tabs, stretch=2)
 
         # Key Metrics panel - 3 columns
@@ -530,6 +535,7 @@ class MainWindow(QMainWindow):
             self.news_feed.set_data_manager(self.data_manager)
             self.quarterly_financials.set_data_manager(self.data_manager)
             self.fundamentals_overview.set_data_manager(self.data_manager)
+            self.etf_overview.set_data_manager(self.data_manager)
 
             if self.data_manager.is_connected():
                 # Get server status for EODHD API call count
@@ -762,6 +768,35 @@ class MainWindow(QMainWindow):
         if items:
             self.treemap.set_items(items)
 
+    def _configure_tabs_for_asset_type(self, asset_type: str) -> None:
+        """Reconfigure chart_tabs based on whether this is an ETF or stock.
+
+        Stock mode (default): Chart | Financials | Fundamentals
+        ETF mode: Chart | ETF Overview
+        """
+        mode = "etf" if asset_type == "ETF" else "stock"
+        if mode == self._current_asset_mode:
+            return
+
+        # Remember current tab index to restore Chart tab if possible
+        current_idx = self.chart_tabs.currentIndex()
+
+        # Remove all tabs except Chart (index 0)
+        while self.chart_tabs.count() > 1:
+            self.chart_tabs.removeTab(1)
+
+        if mode == "etf":
+            self.chart_tabs.addTab(self.etf_overview, "ETF Overview")
+        else:
+            self.chart_tabs.addTab(self.quarterly_financials, "Financials")
+            self.chart_tabs.addTab(self.fundamentals_overview, "Fundamentals")
+
+        self._current_asset_mode = mode
+
+        # Restore tab position if valid
+        if current_idx < self.chart_tabs.count():
+            self.chart_tabs.setCurrentIndex(current_idx)
+
     def _on_stock_selected(self, ticker: str, exchange: str) -> None:
         """Handle stock selection."""
         # Prevent circular selection
@@ -833,15 +868,34 @@ class MainWindow(QMainWindow):
             self.news_feed.refresh(articles=articles)
             logger.info(f"[TIMING] News feed refresh: {(time.perf_counter() - t5)*1000:.0f}ms")
 
-            # Update quarterly financials
-            t6 = time.perf_counter()
-            self.quarterly_financials.set_ticker(ticker, exchange)
-            logger.info(f"[TIMING] Quarterly financials: {(time.perf_counter() - t6)*1000:.0f}ms")
+            # Determine asset type from fundamentals and configure tabs
+            asset_type = None
+            etf_data = None
+            if self.data_manager:
+                try:
+                    fundamentals = self.data_manager.get_fundamentals(ticker, exchange)
+                    asset_type = fundamentals.get("asset_type") if fundamentals else None
+                    etf_data = fundamentals.get("etf_data") if fundamentals else None
+                except Exception:
+                    pass
 
-            # Update fundamentals overview
-            t7 = time.perf_counter()
-            self.fundamentals_overview.set_ticker(ticker, exchange)
-            logger.info(f"[TIMING] Fundamentals overview: {(time.perf_counter() - t7)*1000:.0f}ms")
+            self._configure_tabs_for_asset_type(asset_type or "")
+
+            if asset_type == "ETF" and etf_data:
+                # ETF mode: show ETF overview
+                company = self.data_manager.get_company_info(ticker, exchange) if self.data_manager else None
+                name = company.name if company else ""
+                self.etf_overview.set_ticker_label(ticker, name)
+                self.etf_overview.update_data(etf_data)
+            else:
+                # Stock mode: load financials and fundamentals
+                t6 = time.perf_counter()
+                self.quarterly_financials.set_ticker(ticker, exchange)
+                logger.info(f"[TIMING] Quarterly financials: {(time.perf_counter() - t6)*1000:.0f}ms")
+
+                t7 = time.perf_counter()
+                self.fundamentals_overview.set_ticker(ticker, exchange)
+                logger.info(f"[TIMING] Fundamentals overview: {(time.perf_counter() - t7)*1000:.0f}ms")
 
             logger.info(f"[TIMING] TOTAL _on_stock_selected: {(time.perf_counter() - total_start)*1000:.0f}ms")
         finally:

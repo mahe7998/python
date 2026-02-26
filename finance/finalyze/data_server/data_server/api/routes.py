@@ -26,6 +26,16 @@ COMPARISON_FIELDS = ["total_revenue", "gross_profit", "net_income", "operating_i
 DISCREPANCY_THRESHOLD = 0.05  # 5%
 
 
+def _safe_int(value) -> Optional[int]:
+    """Safely convert a value to int (for BIGINT columns like market_cap)."""
+    if value is None or value == "" or value == "None":
+        return None
+    try:
+        return int(float(value))
+    except (ValueError, TypeError):
+        return None
+
+
 def compare_quarterly_data(
     eodhd_quarters: list[dict], yf_quarters: list[dict]
 ) -> list[dict]:
@@ -712,12 +722,17 @@ async def get_fundamentals(
         if highlights:
             # Enrich highlights with dynamic market cap
             highlights = await _enrich_highlights_market_cap(session, symbol, highlights)
+            # Extract ETF fields from highlights
+            asset_type = highlights.pop("asset_type", None)
+            etf_data = highlights.pop("etf_data", None)
             total_time = (time.time() - start_time) * 1000
             log_timing(endpoint, True, cache_time, 0, total_time)
             return {
                 "highlights": highlights,
                 "quarterly_financials": quarterly or [],
                 "discrepancies": [],
+                "asset_type": asset_type,
+                "etf_data": etf_data,
             }
 
     # Fetch from EODHD + yfinance quarterly in parallel (for cross-validation)
@@ -759,7 +774,7 @@ async def get_fundamentals(
     if not data:
         total_time = (time.time() - start_time) * 1000
         log_timing(endpoint, False, cache_time, eodhd_time, total_time)
-        return {"highlights": {}, "quarterly_financials": [], "discrepancies": []}
+        return {"highlights": {}, "quarterly_financials": [], "discrepancies": [], "asset_type": None, "etf_data": None}
 
     # Store into all tables
     general = data.get("General", {})
@@ -773,7 +788,7 @@ async def get_fundamentals(
         "exchange": general.get("Exchange"),
         "sector": general.get("Sector"),
         "industry": general.get("Industry"),
-        "market_cap": highlights_raw.get("MarketCapitalization"),
+        "market_cap": highlights_raw.get("MarketCapitalization") or _safe_int(data.get("ETF_Data", {}).get("TotalAssets")),
         "shares_outstanding": shares_stats.get("SharesOutstanding"),
         "pe_ratio": highlights_raw.get("PERatio"),
         "eps": highlights_raw.get("EarningsShare"),
@@ -855,6 +870,10 @@ async def get_fundamentals(
         except Exception as e:
             logger.warning(f"Quarterly comparison failed for {symbol}: {e}")
 
+    # Extract ETF fields from highlights
+    asset_type = highlights.pop("asset_type", None) if highlights else None
+    etf_data = highlights.pop("etf_data", None) if highlights else None
+
     total_time = (time.time() - start_time) * 1000
     log_timing(endpoint, False, cache_time, eodhd_time, total_time)
 
@@ -862,6 +881,8 @@ async def get_fundamentals(
         "highlights": highlights or {},
         "quarterly_financials": quarterly or [],
         "discrepancies": discrepancies,
+        "asset_type": asset_type,
+        "etf_data": etf_data,
     }
 
 
@@ -1099,7 +1120,7 @@ async def update_all_fundamentals():
                     "exchange": general.get("Exchange"),
                     "sector": general.get("Sector"),
                     "industry": general.get("Industry"),
-                    "market_cap": highlights_raw.get("MarketCapitalization"),
+                    "market_cap": highlights_raw.get("MarketCapitalization") or _safe_int(data.get("ETF_Data", {}).get("TotalAssets")),
                     "shares_outstanding": shares_stats.get("SharesOutstanding"),
                     "pe_ratio": highlights_raw.get("PERatio"),
                     "eps": highlights_raw.get("EarningsShare"),

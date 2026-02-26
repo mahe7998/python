@@ -1,6 +1,7 @@
 """Cache operations for reading and storing data."""
 
 import hashlib
+import json
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Optional
@@ -91,6 +92,59 @@ async def update_cache_metadata(
         },
     )
     await session.execute(stmt)
+
+
+# Cache coverage queries
+async def get_daily_coverage(
+    session: AsyncSession,
+    tickers: list[str],
+) -> dict[str, dict]:
+    """Return min_date, max_date, count for each ticker's daily price data."""
+    query = (
+        select(
+            DailyPrice.ticker,
+            func.min(DailyPrice.date).label("min_date"),
+            func.max(DailyPrice.date).label("max_date"),
+            func.count().label("count"),
+        )
+        .where(DailyPrice.ticker.in_(tickers))
+        .group_by(DailyPrice.ticker)
+    )
+    result = await session.execute(query)
+    return {
+        row.ticker: {
+            "min_date": row.min_date.isoformat() if row.min_date else None,
+            "max_date": row.max_date.isoformat() if row.max_date else None,
+            "count": row.count,
+        }
+        for row in result
+    }
+
+
+async def get_intraday_coverage(
+    session: AsyncSession,
+    tickers: list[str],
+) -> dict[str, dict]:
+    """Return min/max timestamp and count for each ticker's intraday data."""
+    query = (
+        select(
+            IntradayPrice.ticker,
+            func.min(IntradayPrice.timestamp).label("min_ts"),
+            func.max(IntradayPrice.timestamp).label("max_ts"),
+            func.count().label("count"),
+        )
+        .where(IntradayPrice.ticker.in_(tickers))
+        .group_by(IntradayPrice.ticker)
+    )
+    result = await session.execute(query)
+    return {
+        row.ticker: {
+            "min_timestamp": row.min_ts.isoformat() if row.min_ts else None,
+            "max_timestamp": row.max_ts.isoformat() if row.max_ts else None,
+            "count": row.count,
+        }
+        for row in result
+    }
 
 
 # Daily Prices
@@ -829,7 +883,12 @@ async def store_company_highlights(
         "week_52_low": _safe_num(technicals.get("52WeekLow")),
         "day_50_ma": _safe_num(technicals.get("50DayMA")),
         "day_200_ma": _safe_num(technicals.get("200DayMA")),
-        "market_cap": _safe_num(highlights.get("MarketCapitalization")),
+        "market_cap": _safe_num(
+            highlights.get("MarketCapitalization")
+            or eodhd_data.get("ETF_Data", {}).get("TotalAssets")
+        ),
+        "asset_type": general.get("Type"),
+        "etf_data": json.dumps(eodhd_data["ETF_Data"]) if eodhd_data.get("ETF_Data") else None,
         "updated_at": datetime.utcnow(),
     }
 
@@ -901,6 +960,8 @@ async def get_company_highlights(
         "day_50_ma": _f(h.day_50_ma),
         "day_200_ma": _f(h.day_200_ma),
         "market_cap": h.market_cap,
+        "asset_type": h.asset_type,
+        "etf_data": json.loads(h.etf_data) if h.etf_data else None,
     }
 
 

@@ -316,6 +316,9 @@ class CompanyHighlight(Base):
     day_200_ma: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
     # Market
     market_cap: Mapped[Optional[int]] = mapped_column(BigInteger)
+    # Asset type & ETF data
+    asset_type: Mapped[Optional[str]] = mapped_column(String(20))
+    etf_data: Mapped[Optional[str]] = mapped_column(Text)
     # Metadata
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
