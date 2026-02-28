@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, date, timedelta, timezone
 from typing import Optional, List, Dict
 
-from PySide6.QtCore import Qt, QTimer, Signal, Slot
+from PySide6.QtCore import Qt, QTimer, QEventLoop, Signal, Slot
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow,
@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QGroupBox,
     QFormLayout,
+    QApplication,
 )
 from loguru import logger
 import pandas as pd
@@ -909,28 +910,50 @@ class MainWindow(QMainWindow):
         self._load_treemap_data()
 
     def _on_treemap_period_changed(self, period: str) -> None:
-        """Handle treemap period change - updates all views."""
+        """Handle treemap period change - updates all views.
+
+        Sets loading state and returns immediately so the event loop can
+        repaint the combo box and loading indicators. Heavy data fetching
+        is deferred to the next event loop cycle via QTimer.
+        """
         logger.info(f"Period changed: {period}")
 
-        # Update stock chart period
+        # Lightweight state updates only
         self.stock_chart.set_period(period)
+        self.setCursor(Qt.WaitCursor)
+        self.status_bar.showMessage(f"Loading {period} data...")
+        if self._selected_ticker:
+            self._set_metrics_loading()
+        self.stock_chart.clear()
 
-        # Reload treemap data
-        self._load_treemap_data()
+        # Return immediately — let event loop repaint combo, loading dots, cursor.
+        # Heavy work runs on the NEXT event loop iteration.
+        QTimer.singleShot(200, lambda p=period: self._do_period_update(p))
 
-        # Reload stock chart if a stock is selected (skip metrics - they don't depend on period)
-        if self._selected_ticker and self._selected_exchange:
-            self._load_stock_chart(self._selected_ticker, self._selected_exchange)
+    def _do_period_update(self, period: str) -> None:
+        """Execute the heavy data reload (called after UI has repainted)."""
+        try:
+            # Reload treemap data
+            self._load_treemap_data()
 
-        # Update quarterly financials period
-        self.quarterly_financials.set_period(period)
+            # Reload stock chart and metrics if a stock is selected
+            if self._selected_ticker and self._selected_exchange:
+                self._load_stock_chart(self._selected_ticker, self._selected_exchange)
+                self._update_metrics(self._selected_ticker, self._selected_exchange)
 
-        # Update fundamentals overview period (no-op but keeps interface consistent)
-        self.fundamentals_overview.set_period(period)
+            # Update quarterly financials period
+            self.quarterly_financials.set_period(period)
 
-        # Set period and refresh watchlist data
-        self.watchlist_widget.set_period(period)
-        self.watchlist_widget.refresh_all()
+            # Update fundamentals overview period (no-op but keeps interface consistent)
+            self.fundamentals_overview.set_period(period)
+
+            # Set period and refresh watchlist data
+            self.watchlist_widget.set_period(period)
+            self.watchlist_widget.refresh_all()
+
+            self.status_bar.showMessage(f"{period} data loaded", 3000)
+        finally:
+            self.setCursor(Qt.ArrowCursor)
 
     def _on_stock_remove_requested(self, ticker: str, exchange: str, category_id: str) -> None:
         """Handle stock removal from category."""
@@ -1309,6 +1332,21 @@ class MainWindow(QMainWindow):
                 self.stock_chart.clear()
         finally:
             self._chart_loading = False
+
+    def _set_metrics_loading(self) -> None:
+        """Set metrics panel to loading state for immediate visual feedback."""
+        loading = "\u2022\u2022\u2022"
+        self.price_label.setText(loading)
+        self.change_label.setText(loading)
+        self.prev_close_label.setText(loading)
+        self.day_open_label.setText(loading)
+        self.day_high_label.setText(loading)
+        self.day_low_label.setText(loading)
+        self.week52_high_label.setText(loading)
+        self.week52_low_label.setText(loading)
+        self.avg_volume_label.setText(loading)
+        self.market_cap_label.setText(loading)
+        self.pe_label.setText(loading)
 
     def _update_metrics(self, ticker: str, exchange: str) -> None:
         """Update the metrics panel for a stock."""
