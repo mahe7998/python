@@ -326,8 +326,17 @@ class QuarterlyFinancialsWidget(QWidget):
             self._quarterly_data = []
             self._update_chart()
 
+    def _stop_earnings_worker(self) -> None:
+        """Wait for any running earnings worker to finish before replacing it."""
+        worker = getattr(self, "_earnings_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.wait(5000)  # wait up to 5s
+        self._earnings_worker = None
+
     def _fetch_earnings_date(self, ticker: str, exchange: str) -> None:
         """Fetch next earnings date in background thread."""
+        self._stop_earnings_worker()
+
         data_server_url = os.getenv("DATA_SERVER_URL", "").rstrip("/")
         if not data_server_url:
             return
@@ -374,7 +383,6 @@ class QuarterlyFinancialsWidget(QWidget):
                 if actual is not None and estimate is not None:
                     diff_pct = last_e.get("percent")
                     beat = actual > estimate
-                    color = "#22C55E" if beat else "#EF4444"
                     sign = "+" if beat else ""
                     pct_str = f" ({sign}{diff_pct:.1f}%)" if diff_pct is not None else ""
                     parts.append(f"Last: {actual:.2f} vs {estimate:.2f}{pct_str}")
@@ -1038,6 +1046,7 @@ class QuarterlyFinancialsWidget(QWidget):
 
     def clear(self) -> None:
         """Clear the display."""
+        self._stop_earnings_worker()
         self._ticker = None
         self._exchange = None
         self._quarterly_data = []

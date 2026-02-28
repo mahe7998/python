@@ -326,9 +326,11 @@ class MainWindow(QMainWindow):
         col3_layout.addRow("P/E Ratio:", self.pe_label)
         metrics_main_layout.addLayout(col3_layout)
 
-        # Column 4: Day's Data (Open, High, Low)
+        # Column 4: Day's Data (Prev Close, Open, High, Low)
         col4_layout = QFormLayout()
         col4_layout.setSpacing(4)
+        self.prev_close_label = QLabel("--")
+        col4_layout.addRow("Prev Close:", self.prev_close_label)
         self.day_open_label = QLabel("--")
         col4_layout.addRow("Day Open:", self.day_open_label)
         self.day_high_label = QLabel("--")
@@ -1397,6 +1399,8 @@ class MainWindow(QMainWindow):
                 if change is not None:
                     change = change * fx
                 if is_intraday_period(period):
+                    if prev_close is not None:
+                        prev_close = prev_close * fx
                     if day_open is not None:
                         day_open = day_open * fx
                     if day_high is not None:
@@ -1415,13 +1419,15 @@ class MainWindow(QMainWindow):
                 )
                 self.change_label.setTextFormat(Qt.RichText)
 
-            # Update day's data (Open, High, Low) - only for intraday periods
+            # Update day's data (Prev Close, Open, High, Low) - only for intraday periods
             if is_intraday_period(period):
+                self.prev_close_label.setText(f"${prev_close:.2f}" if prev_close is not None else "--")
                 self.day_open_label.setText(f"${day_open:.2f}" if day_open is not None else "--")
                 self.day_high_label.setText(f"${day_high:.2f}" if day_high is not None else "--")
                 self.day_low_label.setText(f"${day_low:.2f}" if day_low is not None else "--")
             else:
                 # Clear day data for non-intraday periods (52W High/Low is more relevant)
+                self.prev_close_label.setText("--")
                 self.day_open_label.setText("--")
                 self.day_high_label.setText("--")
                 self.day_low_label.setText("--")
