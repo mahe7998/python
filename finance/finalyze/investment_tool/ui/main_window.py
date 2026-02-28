@@ -101,7 +101,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1200, 800)
         self.resize(1600, 1000)
 
-        self.setStyleSheet(get_stylesheet(self.config.ui.theme))
+        self.setStyleSheet(get_stylesheet("dark"))
 
     def _create_menu_bar(self) -> None:
         """Create the menu bar."""
@@ -140,22 +140,6 @@ class MainWindow(QMainWindow):
         exit_action.setShortcut(QKeySequence.Quit)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
-
-        # View menu
-        view_menu = menubar.addMenu("&View")
-
-        theme_menu = view_menu.addMenu("&Theme")
-        dark_theme = QAction("&Dark", self)
-        dark_theme.setCheckable(True)
-        dark_theme.setChecked(self.config.ui.theme == "dark")
-        dark_theme.triggered.connect(lambda: self._set_theme("dark"))
-        theme_menu.addAction(dark_theme)
-
-        light_theme = QAction("&Light", self)
-        light_theme.setCheckable(True)
-        light_theme.setChecked(self.config.ui.theme == "light")
-        light_theme.triggered.connect(lambda: self._set_theme("light"))
-        theme_menu.addAction(light_theme)
 
         # Data menu
         data_menu = menubar.addMenu("&Data")
@@ -719,13 +703,23 @@ class MainWindow(QMainWindow):
                     stock_ref.ticker, stock_ref.exchange
                 )
 
-                market_cap = company.market_cap if company else 1e9
                 pe_ratio = company.pe_ratio if company else None
 
                 # Convert price to USD for non-USD stocks
                 price_usd = current
                 if company and company.fx_rate_to_usd and company.currency and company.currency != "USD":
                     price_usd = current * company.fx_rate_to_usd
+
+                # Compute market cap dynamically = shares × price_usd
+                market_cap = 1e9  # fallback
+                fundamentals = self.data_manager.get_fundamentals(
+                    stock_ref.ticker, stock_ref.exchange
+                )
+                if fundamentals:
+                    shares = fundamentals.get("highlights", {}).get("shares_outstanding")
+                    if shares and price_usd:
+                        market_cap = shares * price_usd
+                        pass
 
                 # Apply market cap filter
                 if selected_filter == "Large Cap (>$200B)" and (market_cap or 0) < 200e9:
@@ -1461,9 +1455,14 @@ class MainWindow(QMainWindow):
                 company_name = company.name if company.name else ticker
                 self.metrics_group.setTitle(f"Key Metrics - {company_name}")
 
-                self.market_cap_label.setText(
-                    format_large_number(company.market_cap, decimals=2) if company.market_cap else "--"
-                )
+                # Compute market cap dynamically = shares × current price (USD)
+                mcap_text = "--"
+                fundamentals = self.data_manager.get_fundamentals(ticker, exchange)
+                if fundamentals and current is not None:
+                    shares = fundamentals.get("highlights", {}).get("shares_outstanding")
+                    if shares:
+                        mcap_text = format_large_number(shares * current, decimals=2)
+                self.market_cap_label.setText(mcap_text)
                 # Display P/E ratio
                 if company.pe_ratio is not None:
                     self.pe_label.setText(f"{company.pe_ratio:.2f}")
@@ -1500,11 +1499,6 @@ class MainWindow(QMainWindow):
         """Perform automatic data refresh."""
         logger.debug("Auto-refresh triggered")
         self._load_treemap_data()
-
-    def _set_theme(self, theme: str) -> None:
-        """Change application theme."""
-        self.config.ui.theme = theme
-        self.setStyleSheet(get_stylesheet(theme))
 
     def _on_refresh(self) -> None:
         """Handle refresh action."""

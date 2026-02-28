@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QSizePolicy,
 )
-from PySide6.QtGui import QColor, QBrush, QPen
+from PySide6.QtGui import QColor, QBrush, QFont, QPen
 from PySide6.QtCore import QRectF
 
 import pyqtgraph as pg
@@ -587,6 +587,17 @@ class StockChart(QWidget):
 
         # Link X axes
         self.volume_widget.setXLink(self.price_widget)
+
+        # Volume hover label (fixed position in top-left of volume chart)
+        self.volume_hover_label = pg.TextItem(
+            anchor=(0, 0), color="#F9FAFB",
+            fill=pg.mkBrush("#374151CC")
+        )
+        self.volume_hover_label.setFont(QFont("monospace", 9))
+        self.volume_hover_label.hide()
+        self.volume_widget.addItem(self.volume_hover_label, ignoreBounds=True)
+        self.volume_widget.getViewBox().sigRangeChanged.connect(self._update_volume_label_position)
+        self.volume_widget.scene().sigMouseMoved.connect(self._on_volume_mouse_moved)
 
         splitter.addWidget(self.volume_widget)
 
@@ -1168,6 +1179,24 @@ class StockChart(QWidget):
             # Position label in top-left of visible area
             self._update_label_position()
 
+            # Show volume hover label on volume chart
+            if pd.notna(vol) and vol > 0:
+                if vol >= 1_000_000_000:
+                    fmt_vol = f"Vol: {vol / 1_000_000_000:.2f}B"
+                elif vol >= 1_000_000:
+                    fmt_vol = f"Vol: {vol / 1_000_000:.1f}M"
+                elif vol >= 1_000:
+                    fmt_vol = f"Vol: {vol / 1_000:.0f}K"
+                else:
+                    fmt_vol = f"Vol: {int(vol)}"
+                self.volume_hover_label.setText(fmt_vol)
+                self._update_volume_label_position()
+                self.volume_hover_label.show()
+            else:
+                self.volume_hover_label.hide()
+        else:
+            self.volume_hover_label.hide()
+
     def _update_label_position(self, *args) -> None:
         """Update crosshair label to stay in top-left of visible area."""
         view_range = self.price_widget.getViewBox().viewRange()
@@ -1178,6 +1207,83 @@ class StockChart(QWidget):
             # Position at top-left with offset from top (5% of visible range)
             y_offset = (y_max - y_min) * 0.02
             self.crosshair_label.setPos(x_min + 0.5, y_max - y_offset)
+
+    def _update_volume_label_position(self, *args) -> None:
+        """Update volume hover label to stay in top-left of volume chart."""
+        view_range = self.volume_widget.getViewBox().viewRange()
+        if view_range:
+            x_min = view_range[0][0]
+            y_max = view_range[1][1]
+            y_offset = (view_range[1][1] - view_range[1][0]) * 0.02
+            self.volume_hover_label.setPos(x_min + 0.5, y_max - y_offset)
+
+    def _on_volume_mouse_moved(self, pos) -> None:
+        """Handle mouse movement over volume chart — show same info as price chart."""
+        if self._data is None or self._data.empty:
+            return
+
+        vb = self.volume_widget.getViewBox()
+        if not self.volume_widget.sceneBoundingRect().contains(pos):
+            self.volume_hover_label.hide()
+            return
+
+        mouse_point = vb.mapSceneToView(pos)
+        x = int(round(mouse_point.x()))
+
+        display_data = getattr(self, '_display_data', self._data)
+        if display_data is None:
+            return
+
+        if 0 <= x < len(display_data):
+            # Update crosshair on price chart (x-axes are linked)
+            self.vline.setPos(x)
+
+            row = display_data.iloc[x]
+
+            # Build the same OHLCV label as _on_mouse_moved
+            time_str = ""
+            if hasattr(row, 'name'):
+                dt = row.name
+                if hasattr(dt, 'strftime'):
+                    has_time = hasattr(dt, 'hour') and (dt.hour != 0 or dt.minute != 0)
+                    if has_time:
+                        exchange = getattr(self, '_exchange', 'US') or 'US'
+                        local_offset = _get_exchange_offset(exchange)
+                        dt_local = dt + local_offset
+                        if self._current_period == "1D":
+                            time_str = dt_local.strftime("%H:%M") + "  "
+                        else:
+                            time_str = dt_local.strftime("%b %d %H:%M") + "  "
+                    else:
+                        time_str = dt.strftime("%b %d, %Y") + "  "
+
+            vol = row.get('volume', 0)
+            vol_str = f"{int(vol):,}" if pd.notna(vol) else "N/A"
+
+            self.crosshair_label.setText(
+                f"{time_str}O: {row['open']:.2f}  H: {row['high']:.2f}  "
+                f"L: {row['low']:.2f}  C: {row['close']:.2f}  "
+                f"V: {vol_str}"
+            )
+            self._update_label_position()
+
+            # Show volume hover label
+            if pd.notna(vol) and vol > 0:
+                if vol >= 1_000_000_000:
+                    fmt_vol = f"Vol: {vol / 1_000_000_000:.2f}B"
+                elif vol >= 1_000_000:
+                    fmt_vol = f"Vol: {vol / 1_000_000:.1f}M"
+                elif vol >= 1_000:
+                    fmt_vol = f"Vol: {vol / 1_000:.0f}K"
+                else:
+                    fmt_vol = f"Vol: {int(vol)}"
+                self.volume_hover_label.setText(fmt_vol)
+                self._update_volume_label_position()
+                self.volume_hover_label.show()
+            else:
+                self.volume_hover_label.hide()
+        else:
+            self.volume_hover_label.hide()
 
     def _on_measure_toggled(self, enabled: bool) -> None:
         """Handle measure mode toggle."""

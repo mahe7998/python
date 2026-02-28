@@ -1,24 +1,41 @@
 """Quarterly financials display widget with grouped bar charts."""
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Optional, List, Dict, Any
 from enum import Enum
 import logging
+import os
+import threading
 
-from PySide6.QtCore import Qt
+import requests
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
     QComboBox,
     QLabel,
+    QScrollArea,
 )
 from PySide6.QtGui import QCursor
 import pyqtgraph as pg
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+class ScrollThroughPlotWidget(pg.PlotWidget):
+    """PlotWidget that forwards wheel events to the parent scroll area."""
+
+    def wheelEvent(self, event):
+        parent = self.parent()
+        while parent is not None:
+            if isinstance(parent, QScrollArea):
+                parent.wheelEvent(event)
+                return
+            parent = parent.parent()
+        super().wheelEvent(event)
 
 
 class FinancialMetric(Enum):
@@ -187,6 +204,14 @@ class QuarterlyFinancialsWidget(QWidget):
         self.legend_layout.addStretch()
         layout.addWidget(self.legend_widget)
 
+        # Next earnings date (below legend)
+        self.earnings_label = QLabel("")
+        self.earnings_label.setStyleSheet(
+            "font-size: 12px; color: #F59E0B;"
+        )
+        self.earnings_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.earnings_label)
+
     def _create_header(self) -> QHBoxLayout:
         """Create header with ticker label and metric selector."""
         header = QHBoxLayout()
@@ -223,7 +248,7 @@ class QuarterlyFinancialsWidget(QWidget):
         # Custom Y axis for financial formatting with dynamic currency
         y_axis = FinancialAxisItem(orientation='left', currency_getter=self._get_currency_symbol)
 
-        chart = pg.PlotWidget(axisItems={'left': y_axis})
+        chart = ScrollThroughPlotWidget(axisItems={'left': y_axis})
         chart.setBackground("#1F2937")
         chart.showGrid(x=False, y=True, alpha=0.3)
         chart.getAxis("bottom").setStyle(tickTextOffset=10)
@@ -231,7 +256,9 @@ class QuarterlyFinancialsWidget(QWidget):
         chart.getAxis("bottom").setHeight(40)
         chart.getAxis("left").setTextPen(pg.mkPen("#9CA3AF"))
 
-        # Hide auto-range button
+        # Disable zoom/pan but allow scroll-through
+        chart.setMouseEnabled(x=False, y=False)
+        chart.getPlotItem().setMenuEnabled(False)
         chart.hideButtons()
 
         # Enable mouse tracking for tooltip hit-testing
@@ -250,7 +277,9 @@ class QuarterlyFinancialsWidget(QWidget):
         self._exchange = exchange
         self._is_annual = False
         self.ticker_label.setText(f"Quarterly Financials - {ticker}")
+        self.earnings_label.setText("")
         self._fetch_and_display()
+        self._fetch_earnings_date(ticker, exchange)
 
     def set_period(self, period: str) -> None:
         """Set the period for display mode."""
@@ -296,6 +325,73 @@ class QuarterlyFinancialsWidget(QWidget):
             logger.error(f"Failed to fetch fundamentals for {self._ticker}: {e}")
             self._quarterly_data = []
             self._update_chart()
+
+    def _fetch_earnings_date(self, ticker: str, exchange: str) -> None:
+        """Fetch next earnings date in background thread."""
+        data_server_url = os.getenv("DATA_SERVER_URL", "").rstrip("/")
+        if not data_server_url:
+            return
+
+        symbol = f"{ticker}.{exchange}"
+        url = f"{data_server_url}/api/calendar/earnings/{symbol}"
+
+        def _fetch():
+            try:
+                resp = requests.get(url, timeout=10)
+                if resp.status_code == 200:
+                    return resp.json()
+            except Exception as e:
+                logger.debug(f"Earnings calendar fetch failed for {symbol}: {e}")
+            return None
+
+        def _on_result(data):
+            if not data or self._ticker != ticker:
+                return
+            next_e = data.get("next_earnings")
+            last_e = data.get("last_reported")
+
+            parts = []
+            if next_e and next_e.get("report_date"):
+                rd = next_e["report_date"]
+                try:
+                    dt = datetime.strptime(rd, "%Y-%m-%d")
+                    rd_fmt = dt.strftime("%b %d, %Y")
+                except ValueError:
+                    rd_fmt = rd
+                timing = next_e.get("before_after_market", "")
+                timing_short = ""
+                if timing == "BeforeMarket":
+                    timing_short = " (BMO)"
+                elif timing == "AfterMarket":
+                    timing_short = " (AMC)"
+                est = next_e.get("estimate")
+                est_str = f"  EPS est: {est:.2f}" if est is not None else ""
+                parts.append(f"Next earnings: {rd_fmt}{timing_short}{est_str}")
+
+            if last_e and last_e.get("report_date"):
+                actual = last_e.get("actual")
+                estimate = last_e.get("estimate")
+                if actual is not None and estimate is not None:
+                    diff_pct = last_e.get("percent")
+                    beat = actual > estimate
+                    color = "#22C55E" if beat else "#EF4444"
+                    sign = "+" if beat else ""
+                    pct_str = f" ({sign}{diff_pct:.1f}%)" if diff_pct is not None else ""
+                    parts.append(f"Last: {actual:.2f} vs {estimate:.2f}{pct_str}")
+
+            if parts:
+                self.earnings_label.setText("  |  ".join(parts))
+
+        class _Worker(QThread):
+            result = Signal(object)
+
+            def run(self):
+                data = _fetch()
+                self.result.emit(data)
+
+        self._earnings_worker = _Worker()
+        self._earnings_worker.result.connect(_on_result)
+        self._earnings_worker.start()
 
     def _handle_discrepancies(self, discrepancies: list) -> None:
         """Show discrepancy dialog and apply overrides if accepted."""
@@ -946,5 +1042,6 @@ class QuarterlyFinancialsWidget(QWidget):
         self._exchange = None
         self._quarterly_data = []
         self.ticker_label.setText("Select a stock")
+        self.earnings_label.setText("")
         self.chart.clear()
         self._clear_legend()

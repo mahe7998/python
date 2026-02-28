@@ -22,7 +22,6 @@ class DataConfig(BaseModel):
     """Data storage configuration."""
     # Local user data directory (watchlists, settings - NOT market data cache)
     user_data_dir: Path = Field(default=Path.home() / ".investment_tool" / "data")
-    max_cache_age_days: int = Field(default=7)
     auto_refresh_interval_minutes: int = Field(default=15)
 
 
@@ -45,7 +44,6 @@ class TreemapColorConfig(BaseModel):
 
 class UIConfig(BaseModel):
     """UI configuration."""
-    theme: str = Field(default="dark")
     default_chart_type: str = Field(default="candlestick")
     default_timeframe: str = Field(default="1D")
     treemap_color_scale: TreemapColorConfig = Field(default_factory=TreemapColorConfig)

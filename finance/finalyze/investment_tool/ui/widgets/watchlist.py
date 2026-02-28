@@ -3,7 +3,7 @@
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone, date
 
-from PySide6.QtCore import Qt, Signal, QModelIndex, QSortFilterProxyModel, QItemSelectionModel
+from PySide6.QtCore import Qt, Signal, QModelIndex, QSortFilterProxyModel, QItemSelectionModel, QTimer
 from PySide6.QtGui import QColor, QBrush, QAction, QFont
 
 # Custom role for sorting with raw numeric values
@@ -235,20 +235,22 @@ class WatchlistWidget(QWidget):
         toolbar.addWidget(self.add_stock_btn)
 
         toolbar.addStretch()
-
-        self.refresh_btn = QPushButton("Refresh")
-        self.refresh_btn.clicked.connect(self._refresh_current)
-        toolbar.addWidget(self.refresh_btn)
-
         layout.addLayout(toolbar)
+
+        # Auto-refresh timer (60 seconds when market is open)
+        self._auto_refresh_timer = QTimer(self)
+        self._auto_refresh_timer.timeout.connect(self._auto_refresh)
+        self._auto_refresh_timer.start(60000)
 
         # Tab widget for multiple watchlists
         self.tab_widget = QTabWidget()
         self.tab_widget.setTabsClosable(True)
+        self.tab_widget.setMovable(True)
         self.tab_widget.tabCloseRequested.connect(self._on_close_tab)
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
-        self.tab_widget.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.tab_widget.customContextMenuRequested.connect(self._on_tab_context_menu)
+        self.tab_widget.tabBar().setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tab_widget.tabBar().customContextMenuRequested.connect(self._on_tab_context_menu)
+        self.tab_widget.tabBar().tabMoved.connect(self._on_tab_moved)
         layout.addWidget(self.tab_widget)
 
     def set_data_manager(self, data_manager) -> None:
@@ -422,8 +424,9 @@ class WatchlistWidget(QWidget):
                                 latest = valid_close_bars.iloc[-1]  # Last row is newest (market close)
                                 row["price"] = latest[close_col]
 
-                            # EODHD intraday volume is cumulative (running total), use last value
-                            row["volume"] = intraday["volume"].iloc[-1] if "volume" in intraday.columns else None
+                            # Intraday volume data is unreliable (mixes cumulative and per-bar)
+                            # Daily EOD volume will be used instead (set below when trading_day found)
+                            row["volume"] = None
 
                             # Get the trading day from intraday data (use timestamp column)
                             # Data is sorted ascending, so iloc[-1] is newest
@@ -465,6 +468,11 @@ class WatchlistWidget(QWidget):
                                         open_val = daily_prices.iloc[i].get("open") or daily_prices.iloc[i].get("Open")
                                         logger.info(f"{item.ticker}: FOUND trading_day at i={i}, open={open_val}, prev_day_close={prev_day_close}")
                                         row["open"] = open_val
+                                        # Use daily EOD volume (most reliable source)
+                                        day_vol = daily_prices.iloc[i].get("volume") or daily_prices.iloc[i].get("Volume")
+                                        if day_vol and day_vol > 0:
+                                            row["volume"] = day_vol
+                                            logger.info(f"{item.ticker}: Using daily EOD volume: {day_vol}")
                                         # Use prev_day_close from previous iteration
                                         if prev_day_close is not None:
                                             row["prev_close"] = prev_day_close
@@ -518,7 +526,7 @@ class WatchlistWidget(QWidget):
                                 row["change_percent"] = row["change"] / prev_close
 
                         # Final fallback to live prices if still missing data
-                        if row["price"] is None or row["open"] is None or row["prev_close"] is None:
+                        if row["price"] is None or row["open"] is None or row["prev_close"] is None or row["volume"] is None:
                             live = self.data_manager.get_live_price(item.ticker, exchange)
                             logger.debug(f"Final live price fallback for {item.ticker}: {live}")
                             if live:
@@ -542,27 +550,33 @@ class WatchlistWidget(QWidget):
                         )
                         logger.info(f"Got daily prices for {item.ticker}: {len(prices) if prices is not None else 'None'}")
 
-                        # Get live price for current value and prev_close
-                        live = self.data_manager.get_live_price(item.ticker, exchange)
+                        # Get current price from intraday data (same source as 1D)
+                        # so price and market cap are consistent across all periods
+                        from datetime import date, timedelta
+                        market_open, market_close = get_last_trading_day_hours(exchange)
+                        now_utc = datetime.now(timezone.utc)
+                        end_dt = now_utc if (market_open.date() == now_utc.date() and market_open <= now_utc <= market_close) else market_close
+                        intraday = self.data_manager.get_intraday_prices(
+                            item.ticker, exchange, "1m", market_open, end_dt,
+                            use_cache=True, force_refresh=False
+                        )
+                        if intraday is not None and len(intraday) >= 1:
+                            close_col = "close" if "close" in intraday.columns else "Close"
+                            valid_bars = intraday[intraday[close_col].notna()]
+                            if len(valid_bars) > 0:
+                                row["price"] = valid_bars.iloc[-1][close_col]
 
                         if prices is not None and len(prices) >= 1:
                             # Sort by date ascending to ensure correct first/last
                             prices_sorted = prices.sort_index(ascending=True)
                             first = prices_sorted.iloc[0]  # Oldest (period start)
-                            latest = prices_sorted.iloc[-1]  # Newest (period end)
 
                             row["open"] = first.get("open") or first.get("Open")  # Period start open
                             row["volume"] = prices_sorted["volume"].sum() if "volume" in prices_sorted.columns else (prices_sorted["Volume"].sum() if "Volume" in prices_sorted.columns else None)
 
-                            # Get prev_close from live price (previous trading day's close)
-                            if live:
-                                row["prev_close"] = live.get("previous_close")
-
-                            # Get current price from live data or latest close
-                            if live and live.get("price"):
-                                row["price"] = live.get("price")
-                            else:
-                                # Fallback to latest close if live price unavailable
+                            # Fallback price from daily data if intraday unavailable
+                            if row["price"] is None:
+                                latest = prices_sorted.iloc[-1]
                                 row["price"] = latest.get("close") or latest.get("Close")
 
                             # Change is from period's open to current price
@@ -570,31 +584,34 @@ class WatchlistWidget(QWidget):
                             if period_open and row["price"]:
                                 row["change"] = row["price"] - period_open
                                 row["change_percent"] = row["change"] / period_open
-                        elif live:
-                            # No historical data, use live price only
-                            row["price"] = live.get("price")
-                            row["open"] = live.get("open")
-                            row["prev_close"] = live.get("previous_close")
-                            row["volume"] = live.get("volume")
-                            if live.get("change") is not None:
-                                row["change"] = live.get("change")
-                            if live.get("change_percent") is not None:
-                                row["change_percent"] = live.get("change_percent") / 100  # Convert from percent to decimal
+                        elif row["price"] is None:
+                            # No data at all, try live price
+                            live = self.data_manager.get_live_price(item.ticker, exchange)
+                            if live:
+                                row["price"] = live.get("price")
+                                row["open"] = live.get("open")
+                                row["prev_close"] = live.get("previous_close")
+                                row["volume"] = live.get("volume")
 
                     # Get P/E ratio and market cap from company info
                     company = self.data_manager.get_company_info(item.ticker, exchange)
                     if company:
                         if company.pe_ratio:
                             row["pe_ratio"] = company.pe_ratio
-                        if company.market_cap:
-                            row["market_cap"] = company.market_cap
 
-                        # Convert non-USD prices to USD
+                        # Convert non-USD prices to USD for display
                         fx = company.fx_rate_to_usd
                         if fx and company.currency and company.currency != "USD":
                             for key in ("price", "open", "prev_close", "change"):
                                 if row.get(key) is not None:
                                     row[key] = row[key] * fx
+
+                        # Compute market cap = shares_outstanding × displayed price (USD)
+                        fundamentals = self.data_manager.get_fundamentals(item.ticker, exchange)
+                        if fundamentals and row.get("price"):
+                            shares = fundamentals.get("highlights", {}).get("shares_outstanding")
+                            if shares:
+                                row["market_cap"] = int(shares * row["price"])
 
                     # Log final row values for debugging
                     logger.info(f"{item.ticker} row: price={row.get('price')}, open={row.get('open')}, prev_close={row.get('prev_close')}, volume={row.get('volume')}, change={row.get('change')}")
@@ -624,6 +641,16 @@ class WatchlistWidget(QWidget):
             if table and table.property("watchlist_id") == watchlist_id:
                 return table
         return None
+
+    def _auto_refresh(self) -> None:
+        """Auto-refresh watchlist if market is open."""
+        try:
+            from investment_tool.utils.exchange_hours import is_market_open
+            if not is_market_open("US"):
+                return
+        except ImportError:
+            pass
+        self._refresh_current()
 
     def _refresh_current(self) -> None:
         """Refresh the current watchlist."""
@@ -771,6 +798,21 @@ class WatchlistWidget(QWidget):
         if table:
             self._current_watchlist_id = table.property("watchlist_id")
 
+    def _on_tab_moved(self, from_index: int, to_index: int) -> None:
+        """Save watchlist tab order after drag."""
+        if not self.data_manager:
+            return
+        order = []
+        for i in range(self.tab_widget.count()):
+            tab = self.tab_widget.widget(i)
+            table = tab.findChild(QTableView)
+            if table:
+                wl_id = table.property("watchlist_id")
+                if wl_id:
+                    order.append(wl_id)
+        if order:
+            self.data_manager.update_watchlist_order(order)
+
     def _on_tab_context_menu(self, pos) -> None:
         """Show context menu for tab."""
         index = self.tab_widget.tabBar().tabAt(pos)
@@ -808,7 +850,7 @@ class WatchlistWidget(QWidget):
         )
 
         if ok and name and self.data_manager:
-            # Update in local state (would need to add this method to data manager)
+            self.data_manager.rename_watchlist(watchlist_id, name.strip())
             self._watchlists[watchlist_id].name = name.strip()
             self.tab_widget.setTabText(index, name.strip())
 

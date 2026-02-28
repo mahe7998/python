@@ -373,8 +373,14 @@ class DataManager:
     def get_watchlists(self):
         return self.user_store.get_watchlists()
 
+    def rename_watchlist(self, watchlist_id: int, name: str):
+        return self.user_store.rename_watchlist(watchlist_id, name)
+
     def delete_watchlist(self, watchlist_id: int):
         return self.user_store.delete_watchlist(watchlist_id)
+
+    def update_watchlist_order(self, watchlist_ids):
+        return self.user_store.update_watchlist_order(watchlist_ids)
 
     def add_to_watchlist(self, watchlist_id: int, ticker: str, exchange: str = "US", notes: Optional[str] = None):
         return self.user_store.add_to_watchlist(watchlist_id, ticker, exchange, notes)

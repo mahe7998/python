@@ -85,8 +85,8 @@ class UserDataStore:
         return Watchlist(id=watchlist_id, name=name, created_at=now)
 
     def get_watchlists(self) -> List[Watchlist]:
-        """Get all watchlists."""
-        return [
+        """Get all watchlists, sorted by position."""
+        watchlists = [
             Watchlist(
                 id=w["id"],
                 name=w["name"],
@@ -94,6 +94,21 @@ class UserDataStore:
             )
             for w in self._watchlists.values()
         ]
+        watchlists.sort(key=lambda w: self._watchlists[w.id].get("position", w.id))
+        return watchlists
+
+    def update_watchlist_order(self, watchlist_ids: List[int]) -> None:
+        """Update the display order of watchlists."""
+        for position, wl_id in enumerate(watchlist_ids):
+            if wl_id in self._watchlists:
+                self._watchlists[wl_id]["position"] = position
+        self._save_watchlists()
+
+    def rename_watchlist(self, watchlist_id: int, name: str) -> None:
+        """Rename a watchlist."""
+        if watchlist_id in self._watchlists:
+            self._watchlists[watchlist_id]["name"] = name
+            self._save_watchlists()
 
     def delete_watchlist(self, watchlist_id: int) -> None:
         """Delete a watchlist and its items."""

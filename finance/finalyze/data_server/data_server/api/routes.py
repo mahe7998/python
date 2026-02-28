@@ -924,6 +924,82 @@ async def override_quarterly_financials(
     }
 
 
+@router.get("/calendar/earnings/{symbol}")
+async def get_earnings_calendar(
+    symbol: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Get upcoming and recent earnings dates for a symbol.
+
+    Returns the next earnings date/estimate and last reported earnings.
+    """
+    from datetime import date as date_type
+
+    client = await get_eodhd_client()
+
+    # Fetch earnings from 6 months ago to 1 year ahead
+    today = date_type.today()
+    from_date = (today - timedelta(days=180)).isoformat()
+    to_date = (today + timedelta(days=365)).isoformat()
+
+    try:
+        earnings = await client.get_earnings_calendar(
+            symbol, from_date=from_date, to_date=to_date
+        )
+    except Exception as e:
+        logger.error(f"Earnings calendar failed for {symbol}: {e}")
+        earnings = []
+
+    # Split into past (reported) and upcoming
+    last_reported = None
+    next_earnings = None
+
+    for e in earnings:
+        report_date = e.get("report_date")
+        if not report_date:
+            continue
+        try:
+            rd = date_type.fromisoformat(report_date)
+        except ValueError:
+            continue
+
+        actual = e.get("actual")
+        # EODHD uses actual=0 + percent=-100 as placeholder for unreported earnings
+        is_reported = (
+            actual is not None
+            and not (actual == 0 and e.get("percent") == -100)
+        )
+
+        if is_reported:
+            # Reported — keep the most recent
+            if last_reported is None or rd > date_type.fromisoformat(last_reported["report_date"]):
+                last_reported = e
+        else:
+            # Upcoming or very recent unreported (within 7 days)
+            if rd >= today - timedelta(days=7):
+                if next_earnings is None or rd < date_type.fromisoformat(next_earnings["report_date"]):
+                    next_earnings = e
+
+    # Fallback to yfinance if EODHD has no next earnings
+    if not next_earnings:
+        try:
+            from data_server.services.yfinance_client import get_next_earnings_date
+            ticker = symbol.split(".")[0]
+            exchange = symbol.split(".")[-1] if "." in symbol else "US"
+            yf_earnings = await get_next_earnings_date(ticker, exchange)
+            if yf_earnings:
+                next_earnings = yf_earnings
+                logger.info(f"Using yfinance earnings date for {symbol}: {yf_earnings.get('report_date')}")
+        except Exception as e:
+            logger.debug(f"yfinance earnings fallback failed for {symbol}: {e}")
+
+    return {
+        "symbol": symbol,
+        "next_earnings": next_earnings,
+        "last_reported": last_reported,
+    }
+
+
 @router.get("/shares-history/{symbol}")
 async def get_shares_history(
     symbol: str,

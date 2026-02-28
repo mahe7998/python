@@ -190,6 +190,25 @@ class EODHDClient:
         data = await self._request("news", params)
         return data if isinstance(data, list) else []
 
+    # Calendar / Earnings
+    async def get_earnings_calendar(
+        self,
+        symbol: str,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+    ) -> list[dict]:
+        """Get upcoming and historical earnings dates."""
+        params = {"symbols": symbol}
+        if from_date:
+            params["from"] = from_date
+        if to_date:
+            params["to"] = to_date
+
+        data = await self._request("calendar/earnings", params)
+        if isinstance(data, dict):
+            return data.get("earnings", [])
+        return []
+
     # Search
     async def search(
         self,

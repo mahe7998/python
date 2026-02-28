@@ -713,3 +713,49 @@ def _simple_sentiment(text: str) -> dict:
         "neg": round(neg_ratio * 0.5, 3),
         "neu": round(1.0 - pos_ratio * 0.5 - neg_ratio * 0.5, 3),
     }
+
+
+async def get_next_earnings_date(ticker: str, exchange: str = "US") -> Optional[dict]:
+    """Get next earnings date from yfinance as fallback.
+
+    Returns dict with report_date and estimate if available, or None.
+    """
+    def _fetch() -> Optional[dict]:
+        try:
+            import yfinance as yf
+
+            symbol = _to_yfinance_symbol(ticker, exchange)
+            t = yf.Ticker(symbol)
+            cal = t.calendar
+
+            if not cal:
+                return None
+
+            # yfinance calendar has 'Earnings Date' as a list of datetime objects
+            earnings_dates = cal.get("Earnings Date")
+            if not earnings_dates:
+                return None
+
+            today = date.today()
+            # Find the next future earnings date
+            for ed in earnings_dates:
+                if hasattr(ed, "date"):
+                    ed_date = ed.date()
+                else:
+                    ed_date = ed
+                if ed_date >= today:
+                    result = {
+                        "report_date": ed_date.isoformat(),
+                        "estimate": cal.get("Earnings Average"),
+                        "source": "yfinance",
+                    }
+                    _log_yfinance_request("earnings_date", symbol, {}, response_size=1)
+                    return result
+
+            return None
+        except Exception as e:
+            logger.debug(f"yfinance earnings date error for {ticker}.{exchange}: {e}")
+            _log_yfinance_request("earnings_date", f"{ticker}.{exchange}", {}, error=str(e))
+            return None
+
+    return await asyncio.to_thread(_fetch)
