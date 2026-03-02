@@ -644,6 +644,8 @@ class MainWindow(QMainWindow):
 
         # First pass: collect all symbols and their metadata
         stock_refs_by_symbol: Dict[str, tuple] = {}  # symbol -> (stock_ref, category)
+        # Track tickers seen across exchanges to deduplicate (prefer US listing)
+        ticker_to_symbol: Dict[str, str] = {}  # bare ticker -> best ticker_key
         for category in all_categories:
             if selected_filter not in market_cap_filters and category.name != selected_filter:
                 continue
@@ -656,6 +658,23 @@ class MainWindow(QMainWindow):
                     if ticker_key in seen_tickers:
                         continue
                     seen_tickers.add(ticker_key)
+                # Deduplicate same ticker across exchanges (prefer US listing)
+                bare_ticker = stock_ref.ticker
+                if bare_ticker in ticker_to_symbol:
+                    existing_key = ticker_to_symbol[bare_ticker]
+                    existing_exchange = existing_key.split(".")[-1]
+                    if stock_ref.exchange == "US" and existing_exchange != "US":
+                        # Replace non-US with US listing
+                        del stock_refs_by_symbol[existing_key]
+                        ticker_to_symbol[bare_ticker] = ticker_key
+                    elif existing_exchange == "US":
+                        # Already have US listing, skip this one
+                        continue
+                    else:
+                        # Both non-US, keep whichever came first
+                        continue
+                else:
+                    ticker_to_symbol[bare_ticker] = ticker_key
                 stock_refs_by_symbol[ticker_key] = (stock_ref, category)
 
         # Use live prices for 1D when market is open, batch API otherwise

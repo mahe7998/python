@@ -832,7 +832,7 @@ async def get_fundamentals(
             # Fix currency from exchange mapping if wrong (e.g., ADR data cached)
             exchange_part_cached = symbol.split(".")[-1] if "." in symbol else "US"
             expected_cur = _EXCHANGE_TO_CURRENCY.get(exchange_part_cached)
-            if expected_cur and exchange_part_cached != "US" and highlights.get("currency") != expected_cur:
+            if expected_cur and highlights.get("currency") != expected_cur:
                 highlights["currency"] = expected_cur
                 highlights["exchange"] = exchange_part_cached
             # Enrich highlights with dynamic market cap
@@ -891,11 +891,11 @@ async def get_fundamentals(
         log_timing(endpoint, False, cache_time, eodhd_time, total_time)
         return {"highlights": {}, "quarterly_financials": [], "discrepancies": [], "asset_type": None, "etf_data": None}
 
-    # Fix currency when EODHD/yfinance returns ADR data for non-US listings
-    # e.g., ASML.AS returns currency=USD (ADR) instead of EUR (Amsterdam)
+    # Fix currency when EODHD/yfinance returns wrong currency for the requested exchange
+    # e.g., ASML.AS returns currency=USD (ADR) instead of EUR, ASML.US returns EUR instead of USD
     general = data.get("General", {})
     expected_currency = _EXCHANGE_TO_CURRENCY.get(exchange_part)
-    if expected_currency and exchange_part != "US":
+    if expected_currency:
         returned_currency = general.get("CurrencyCode", "USD")
         if returned_currency != expected_currency:
             logger.info(
