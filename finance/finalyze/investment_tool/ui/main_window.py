@@ -38,6 +38,7 @@ from investment_tool.ui.dialogs.add_stock_dialog import AddStockDialog
 from investment_tool.ui.widgets.etf_overview import ETFOverviewWidget
 from investment_tool.ui.widgets.fundamentals_overview import FundamentalsOverviewWidget
 from investment_tool.ui.widgets.market_treemap import MarketTreemap, TreemapItem
+from investment_tool.ui.widgets.fx_converter import FXConverterWidget
 from investment_tool.ui.widgets.news_feed import NewsFeedWidget
 from investment_tool.ui.widgets.quarterly_financials import QuarterlyFinancialsWidget
 from investment_tool.ui.widgets.sentiment_gauge import SentimentGaugeWidget
@@ -370,6 +371,10 @@ class MainWindow(QMainWindow):
         self.news_feed.articles_changed.connect(self._on_news_articles_changed)
         self.bottom_tabs.addTab(self.news_feed, "News Feed")
 
+        # FX Converter tab
+        self.fx_converter = FXConverterWidget()
+        self.bottom_tabs.addTab(self.fx_converter, "FX Converter")
+
         # Screener tab (placeholder)
         screener_tab = QWidget()
         screener_layout = QVBoxLayout(screener_tab)
@@ -524,6 +529,7 @@ class MainWindow(QMainWindow):
             self.quarterly_financials.set_data_manager(self.data_manager)
             self.fundamentals_overview.set_data_manager(self.data_manager)
             self.etf_overview.set_data_manager(self.data_manager)
+            self.fx_converter.set_data_manager(self.data_manager)
 
             if self.data_manager.is_connected():
                 # Get server status for EODHD API call count

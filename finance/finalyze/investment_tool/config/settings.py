@@ -47,6 +47,8 @@ class UIConfig(BaseModel):
     default_chart_type: str = Field(default="candlestick")
     default_timeframe: str = Field(default="1D")
     treemap_color_scale: TreemapColorConfig = Field(default_factory=TreemapColorConfig)
+    fx_from_currency: str = Field(default="EUR")
+    fx_to_currency: str = Field(default="USD")
 
 
 class SentimentConfig(BaseModel):
