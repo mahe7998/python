@@ -485,33 +485,46 @@ class WatchlistWidget(QWidget):
                                         prev_day_close = daily_prices.iloc[i].get("close") or daily_prices.iloc[i].get("Close")
 
                                 # If trading_day wasn't found in daily data (e.g., non-US market
-                                # already closed today but daily data not yet updated), use the
-                                # last daily close as prev_close and intraday open as open.
-                                if row["prev_close"] is None and prev_day_close is not None:
-                                    row["prev_close"] = prev_day_close
-                                    if row["open"] is None:
-                                        # Use first bar's open from intraday data
-                                        open_col = "open" if "open" in intraday.columns else "Open"
-                                        first_valid = intraday[intraday[open_col].notna()]
-                                        if len(first_valid) > 0:
-                                            row["open"] = first_valid.iloc[0][open_col]
-                                    if row["price"] is not None:
-                                        row["change"] = row["price"] - prev_day_close
-                                        row["change_percent"] = row["change"] / prev_day_close
-
-                            # Fallback to live prices if daily data is missing open/prev_close
-                            if row["open"] is None or row["prev_close"] is None:
-                                live = self.data_manager.get_live_price(item.ticker, exchange)
-                                logger.debug(f"Live price fallback for {item.ticker}: {live}")
-                                if live:
-                                    if row["open"] is None:
-                                        row["open"] = live.get("open")
-                                    if row["prev_close"] is None:
-                                        # get_live_price returns "previous_close" (snake_case)
-                                        row["prev_close"] = live.get("previous_close")
+                                # already closed today but daily data not yet updated), prefer
+                                # LivePrice data for open/prev_close (most up-to-date source,
+                                # especially for non-US exchanges using yfinance real-time).
+                                if row["prev_close"] is None:
+                                    live = self.data_manager.get_live_price(item.ticker, exchange)
+                                    if live:
+                                        lp_open = live.get("open")
+                                        lp_prev = live.get("previous_close")
+                                        if lp_open is not None:
+                                            row["open"] = lp_open
+                                        if lp_prev is not None:
+                                            row["prev_close"] = lp_prev
                                         if row["prev_close"] and row["price"]:
                                             row["change"] = row["price"] - row["prev_close"]
                                             row["change_percent"] = row["change"] / row["prev_close"]
+                                    # Fallback to daily data if LivePrice didn't have the data
+                                    if row["prev_close"] is None and prev_day_close is not None:
+                                        row["prev_close"] = prev_day_close
+                                        if row["open"] is None:
+                                            open_col = "open" if "open" in intraday.columns else "Open"
+                                            first_valid = intraday[intraday[open_col].notna()]
+                                            if len(first_valid) > 0:
+                                                row["open"] = first_valid.iloc[0][open_col]
+                                        if row["price"] is not None:
+                                            row["change"] = row["price"] - prev_day_close
+                                            row["change_percent"] = row["change"] / prev_day_close
+
+                            # Use LivePrice previous_close when available — yfinance daily
+                            # data may be auto-adjusted (dividends/splits), so LivePrice
+                            # provides the actual unadjusted previous close for change calc
+                            live = self.data_manager.get_live_price(item.ticker, exchange)
+                            if live:
+                                if row["open"] is None:
+                                    row["open"] = live.get("open")
+                                lp_prev = live.get("previous_close")
+                                if lp_prev is not None:
+                                    row["prev_close"] = lp_prev
+                                    if row["price"] is not None:
+                                        row["change"] = row["price"] - lp_prev
+                                        row["change_percent"] = row["change"] / lp_prev
                         elif daily_prices is not None and len(daily_prices) >= 2:
                             # Fallback to daily data
                             latest = daily_prices.iloc[-1]

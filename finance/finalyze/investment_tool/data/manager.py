@@ -343,6 +343,33 @@ class DataManager:
                 logger.warning(f"Failed to get live prices: {e}")
         return {}
 
+    def get_forex_rates(
+        self, currency: str, from_date: str = None, to_date: str = None,
+    ) -> Dict[str, float]:
+        """Get historical forex rates for a currency.
+
+        Returns dict mapping date strings to rate_to_usd values.
+        """
+        eodhd = self.providers.get("eodhd")
+        if eodhd and isinstance(eodhd, EODHDProvider):
+            try:
+                import os
+                import requests as http_requests
+                url = os.getenv("DATA_SERVER_URL", "").rstrip("/")
+                if url:
+                    params = {"from_date": from_date, "to_date": to_date}
+                    params = {k: v for k, v in params.items() if v}
+                    resp = http_requests.get(
+                        f"{url}/api/forex/rates/{currency}",
+                        params=params,
+                        timeout=10,
+                    )
+                    if resp.status_code == 200:
+                        return resp.json().get("rates", {})
+            except Exception as e:
+                logger.warning(f"Failed to get forex rates for {currency}: {e}")
+        return {}
+
     def _fetch_from_providers(
         self,
         method: str,

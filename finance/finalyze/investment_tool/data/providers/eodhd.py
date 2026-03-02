@@ -4,6 +4,7 @@ This provider connects to the data server (caching proxy) instead of
 directly to EODHD. The data server handles all caching and rate limiting.
 """
 
+import calendar
 import hashlib
 import os
 import time
@@ -205,8 +206,8 @@ class EODHDProvider(DataProviderBase):
 
         params = {
             "interval": eodhd_interval,
-            "from": int(start.timestamp()),
-            "to": int(end.timestamp()),
+            "from": int(calendar.timegm(start.timetuple())),
+            "to": int(calendar.timegm(end.timetuple())),
         }
         if force_eodhd:
             params["force_eodhd"] = "true"

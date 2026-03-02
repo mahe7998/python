@@ -571,6 +571,93 @@ async def get_quarterly_financials(ticker: str, exchange: str = "US") -> list[di
     return await asyncio.to_thread(_fetch)
 
 
+# Exchanges where EODHD real-time prices are stale/unreliable
+# For these, we use yfinance as the live price source
+EODHD_REALTIME_UNSUPPORTED_EXCHANGES = {
+    "TSE",   # Tokyo Stock Exchange (Japan)
+    "KO",    # Korea Exchange
+    "SHG",   # Shanghai Stock Exchange
+    "SHE",   # Shenzhen Stock Exchange
+    "TW",    # Taiwan Stock Exchange
+}
+
+
+def is_realtime_supported_by_eodhd(exchange: str) -> bool:
+    """Check if EODHD provides reliable real-time prices for the given exchange."""
+    return exchange.upper() not in EODHD_REALTIME_UNSUPPORTED_EXCHANGES
+
+
+async def get_live_prices(tickers: list[str]) -> list[dict]:
+    """Get live prices from yfinance for a batch of tickers.
+
+    Args:
+        tickers: List of EODHD-format symbols (e.g., ["005930.KO", "7203.TSE"])
+
+    Returns:
+        List of dicts in EODHD real-time format (code, close, open, high, low, volume, etc.)
+    """
+    def _fetch() -> list[dict]:
+        try:
+            import yfinance as yf
+
+            results = []
+            for eodhd_symbol in tickers:
+                try:
+                    parts = eodhd_symbol.split(".")
+                    ticker = parts[0]
+                    exchange = parts[-1] if len(parts) > 1 else "US"
+                    yf_symbol = _to_yfinance_symbol(ticker, exchange)
+
+                    t = yf.Ticker(yf_symbol)
+                    info = t.fast_info
+
+                    price = getattr(info, "last_price", None)
+                    if price is None:
+                        continue
+
+                    # Get additional info for open/high/low/prev_close
+                    open_price = getattr(info, "open", None)
+                    day_high = getattr(info, "day_high", None)
+                    day_low = getattr(info, "day_low", None)
+                    prev_close = getattr(info, "previous_close", None)
+                    volume = getattr(info, "last_volume", None)
+
+                    change = None
+                    change_p = None
+                    if prev_close and prev_close > 0:
+                        change = price - prev_close
+                        change_p = (change / prev_close) * 100
+
+                    quote = {
+                        "code": eodhd_symbol,
+                        "timestamp": int(datetime.utcnow().timestamp()),
+                        "open": open_price,
+                        "high": day_high,
+                        "low": day_low,
+                        "close": price,
+                        "volume": int(volume) if volume else None,
+                        "previousClose": prev_close,
+                        "change": round(change, 4) if change is not None else None,
+                        "change_p": round(change_p, 4) if change_p is not None else None,
+                    }
+                    results.append(quote)
+                    logger.debug(f"yfinance live price for {eodhd_symbol}: {price}")
+
+                except Exception as e:
+                    logger.warning(f"yfinance live price error for {eodhd_symbol}: {e}")
+
+            if results:
+                _log_yfinance_request("live_prices", f"batch({len(tickers)})", response_size=len(results))
+            return results
+
+        except Exception as e:
+            logger.error(f"yfinance batch live price error: {e}")
+            _log_yfinance_request("live_prices", "batch", error=str(e))
+            return []
+
+    return await asyncio.to_thread(_fetch)
+
+
 # Exchanges not fully supported by EODHD (will use yfinance fallback)
 # These exchanges return 404 for most/all API calls
 EODHD_UNSUPPORTED_EXCHANGES = {

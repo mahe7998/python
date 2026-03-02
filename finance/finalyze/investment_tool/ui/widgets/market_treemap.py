@@ -4,6 +4,46 @@ from dataclasses import dataclass
 from typing import Optional, List, Dict, Callable, Any
 import math
 
+# Exchange code → display name mapping
+EXCHANGE_DISPLAY_NAMES = {
+    "US": "US",
+    "PA": "France",
+    "XETRA": "Germany",
+    "LSE": "UK",
+    "AS": "Netherlands",
+    "MI": "Italy",
+    "MC": "Spain",
+    "SW": "Switzerland",
+    "BR": "Belgium",
+    "VIE": "Austria",
+    "HE": "Finland",
+    "IR": "Ireland",
+    "LU": "Luxembourg",
+    "OL": "Norway",
+    "ST": "Sweden",
+    "CO": "Denmark",
+    "WAR": "Poland",
+    "TSE": "Japan",
+    "HK": "Hong Kong",
+    "SHG": "China (Shanghai)",
+    "SHE": "China (Shenzhen)",
+    "KO": "South Korea",
+    "TW": "Taiwan",
+    "BSE": "India (BSE)",
+    "NSE": "India (NSE)",
+    "AU": "Australia",
+    "SG": "Singapore",
+    "KL": "Malaysia",
+    "BK": "Thailand",
+    "JK": "Indonesia",
+    "TO": "Canada (TSX)",
+    "V": "Canada (TSXV)",
+    "SA": "Brazil",
+    "MX": "Mexico",
+    "TA": "Israel",
+    "JSE": "South Africa",
+}
+
 from PySide6.QtCore import Qt, Signal, QRectF, QPointF, QTimer
 from PySide6.QtGui import (
     QPainter,
@@ -71,6 +111,7 @@ class MarketTreemap(QWidget):
     stock_remove_requested = Signal(str, str, str)  # ticker, exchange, category_id (empty for all)
     stock_add_to_watchlist = Signal(str, str)  # ticker, exchange
     filter_changed = Signal(str)  # category name or "All Stocks"
+    exchange_filter_changed = Signal(str)  # exchange code or "All Markets"
     period_changed = Signal(str)  # period like "1D", "1W", etc.
 
     PERIODS = ["1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "2Y", "5Y"]
@@ -136,6 +177,15 @@ class MarketTreemap(QWidget):
         self.filter_combo.addItem("Tiny Stocks (<$2B)")
         self.filter_combo.currentTextChanged.connect(self._on_filter_changed)
         toolbar.addWidget(self.filter_combo)
+
+        # Exchange/market filter
+        market_label = QLabel("Market:")
+        toolbar.addWidget(market_label)
+
+        self.exchange_combo = QComboBox()
+        self.exchange_combo.addItem("All Markets")
+        self.exchange_combo.currentTextChanged.connect(self._on_exchange_filter_changed)
+        toolbar.addWidget(self.exchange_combo)
 
         toolbar.addStretch()
 
@@ -272,6 +322,39 @@ class MarketTreemap(QWidget):
     def _on_filter_changed(self, filter_text: str) -> None:
         """Handle filter selection change."""
         self.filter_changed.emit(filter_text)
+
+    def _on_exchange_filter_changed(self, exchange: str) -> None:
+        """Handle exchange/market filter change."""
+        self.exchange_filter_changed.emit(exchange)
+
+    def get_selected_exchange_filter(self) -> str:
+        """Get the currently selected exchange code (or 'All Markets')."""
+        text = self.exchange_combo.currentText()
+        if text == "All Markets":
+            return text
+        # Map display name back to exchange code
+        return self._exchange_name_to_code.get(text, text)
+
+    def set_exchanges(self, exchanges: List[str]) -> None:
+        """Set available exchange filters from discovered exchanges."""
+        current = self.exchange_combo.currentText()
+        self.exchange_combo.blockSignals(True)
+        self.exchange_combo.clear()
+        self.exchange_combo.addItem("All Markets")
+        # Build display name → code mapping
+        self._exchange_name_to_code = {}
+        display_items = []
+        for ex in exchanges:
+            name = EXCHANGE_DISPLAY_NAMES.get(ex, ex)
+            display_name = f"{name} ({ex})" if name != ex else ex
+            self._exchange_name_to_code[display_name] = ex
+            display_items.append(display_name)
+        for item in sorted(display_items):
+            self.exchange_combo.addItem(item)
+        idx = self.exchange_combo.findText(current)
+        if idx >= 0:
+            self.exchange_combo.setCurrentIndex(idx)
+        self.exchange_combo.blockSignals(False)
 
     def _on_item_clicked(self, index: int) -> None:
         """Handle item click."""

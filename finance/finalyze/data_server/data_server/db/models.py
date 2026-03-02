@@ -1,6 +1,6 @@
 """SQLAlchemy ORM models for the data cache."""
 
-from datetime import datetime
+from datetime import date as date_type, datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -188,7 +188,7 @@ class TrackedStock(Base):
     __tablename__ = "tracked_stocks"
 
     ticker: Mapped[str] = mapped_column(String(20), primary_key=True)
-    exchange: Mapped[Optional[str]] = mapped_column(String(20))
+    exchange: Mapped[str] = mapped_column(String(20), primary_key=True)
     track_prices: Mapped[bool] = mapped_column(Boolean, default=True)
     track_news: Mapped[bool] = mapped_column(Boolean, default=True)
     added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -341,6 +341,17 @@ class SharesHistory(Base):
     __table_args__ = (
         Index("idx_shares_history_ticker_date", "ticker", "report_date"),
     )
+
+
+class ForexRate(Base):
+    """Cached daily forex rates (currency → USD)."""
+
+    __tablename__ = "forex_rates"
+
+    currency: Mapped[str] = mapped_column(String(10), primary_key=True)
+    date: Mapped[date_type] = mapped_column(Date, primary_key=True)
+    rate_to_usd: Mapped[Decimal] = mapped_column(Numeric(20, 10))
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
 class CacheMetadata(Base):

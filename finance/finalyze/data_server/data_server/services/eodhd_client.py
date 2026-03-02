@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 import httpx
+from sqlalchemy import select
 
 from data_server.config import get_settings
 
@@ -262,56 +263,177 @@ _FOREX_CACHE_TTL = 3600  # 1 hour
 
 
 async def get_forex_rate_to_usd(currency: str) -> Optional[float]:
-    """Get exchange rate from currency to USD (e.g., HKD -> 0.128).
+    """Get the latest exchange rate from currency to USD (e.g., HKD -> 0.128).
 
-    Returns 1.0 for USD. Caches rates for 1 hour.
-    Uses EOD inverse pair (USD/{currency}) for best precision, with real-time fallback.
-    Falls back to previous cached value on fetch failure.
+    Returns 1.0 for USD. Uses three-tier caching:
+    1. In-memory cache (1 hour TTL) — fastest
+    2. Database cache (latest row, 1 day TTL) — persists across restarts
+    3. EODHD API fetch — refreshes both caches
     """
     if currency == "USD":
         return 1.0
 
     now = time.monotonic()
+
+    # Tier 1: In-memory cache
     if currency in _forex_cache:
         rate, ts = _forex_cache[currency]
         if now - ts < _FOREX_CACHE_TTL:
             return rate
 
-    client = await get_eodhd_client()
-
-    # Strategy 1: EOD inverse pair USD{currency}.FOREX → compute 1/rate
-    # Best precision, especially for currencies like KRW where direct pair rounds badly
+    # Tier 2: Database cache (latest row, 1 day TTL)
     try:
-        from datetime import datetime as dt
-        today = dt.utcnow().strftime("%Y-%m-%d")
-        eod_data = await client.get_eod(
-            f"USD{currency}.FOREX",
-            from_date=(dt.utcnow().replace(day=max(1, dt.utcnow().day - 10))).strftime("%Y-%m-%d"),
-            to_date=today,
-        )
-        if eod_data:
-            inverse_rate = float(eod_data[-1].get("close", 0))
-            if inverse_rate > 0:
-                rate = 1.0 / inverse_rate
-                _forex_cache[currency] = (rate, now)
-                logger.info(f"Forex rate {currency}/USD = {rate:.8f} (EOD inverse, USD/{currency} = {inverse_rate})")
-                return rate
-    except Exception as e:
-        logger.warning(f"EOD forex USD{currency}.FOREX failed: {e}")
+        from data_server.db.database import async_session_factory
+        from data_server.db.models import ForexRate
+        from datetime import datetime as dt, timedelta
 
-    # Strategy 2: Real-time {currency}USD.FOREX (e.g., HKDUSD.FOREX)
-    try:
-        data = await client.get_real_time(f"{currency}USD.FOREX")
-        rate = float(data.get("close", 0))
-        if rate > 0:
-            _forex_cache[currency] = (rate, now)
-            logger.info(f"Forex rate {currency}/USD = {rate} (real-time)")
-            return rate
+        async with async_session_factory() as session:
+            result = await session.execute(
+                select(ForexRate)
+                .where(ForexRate.currency == currency)
+                .order_by(ForexRate.date.desc())
+                .limit(1)
+            )
+            cached = result.scalar_one_or_none()
+            if cached and cached.updated_at:
+                age = dt.utcnow() - cached.updated_at
+                if age < timedelta(days=1):
+                    rate = float(cached.rate_to_usd)
+                    _forex_cache[currency] = (rate, now)
+                    logger.debug(f"Forex rate {currency}/USD = {rate:.8f} (from DB date={cached.date}, age={age})")
+                    return rate
     except Exception as e:
-        logger.warning(f"Real-time forex {currency}USD.FOREX failed: {e}")
+        logger.debug(f"DB forex cache lookup failed for {currency}: {e}")
 
-    # Fallback to stale cached value
+    # Tier 3: Fetch latest from EODHD API (last 10 days)
+    from datetime import datetime as dt
+    today = dt.utcnow().date()
+    from_date = today - timedelta(days=10)
+    rates = await _fetch_forex_history_from_eodhd(currency, from_date.isoformat(), today.isoformat())
+
+    if rates:
+        # Store all fetched rates in DB
+        await _store_forex_rates_in_db(currency, rates)
+        # Use the latest rate
+        latest_date = max(rates.keys())
+        rate = rates[latest_date]
+        _forex_cache[currency] = (rate, now)
+        return rate
+
+    # Fallback to stale in-memory or DB value
     if currency in _forex_cache:
         return _forex_cache[currency][0]
 
     return None
+
+
+async def _fetch_forex_history_from_eodhd(
+    currency: str, from_date: str, to_date: str,
+) -> dict[str, float]:
+    """Fetch forex rate history from EODHD API.
+
+    Returns dict of {date_str: rate_to_usd} using the inverse pair USD/{currency}.
+    """
+    client = await get_eodhd_client()
+    rates: dict[str, float] = {}
+
+    # Handle GBp (pence) → use GBP pair and divide by 100
+    forex_currency = currency
+    pence_divisor = 1.0
+    if currency == "GBp":
+        forex_currency = "GBP"
+        pence_divisor = 100.0
+
+    # Strategy 1: EOD inverse pair USD{currency}.FOREX → compute 1/rate per day
+    try:
+        eod_data = await client.get_eod(
+            f"USD{forex_currency}.FOREX",
+            from_date=from_date,
+            to_date=to_date,
+        )
+        if eod_data:
+            for bar in eod_data:
+                inverse_rate = float(bar.get("close", 0))
+                bar_date = bar.get("date", "")
+                if inverse_rate > 0 and bar_date:
+                    rates[bar_date] = (1.0 / inverse_rate) / pence_divisor
+            if rates:
+                logger.info(
+                    f"Forex history {currency}/USD: {len(rates)} days "
+                    f"({from_date} to {to_date})"
+                )
+                return rates
+    except Exception as e:
+        logger.warning(f"EOD forex history USD{forex_currency}.FOREX failed: {e}")
+
+    # Strategy 2: Real-time for today only
+    try:
+        data = await client.get_real_time(f"{forex_currency}USD.FOREX")
+        rate = float(data.get("close", 0))
+        if rate > 0:
+            from datetime import datetime as dt
+            rate = rate / pence_divisor
+            rates[dt.utcnow().strftime("%Y-%m-%d")] = rate
+            logger.info(f"Forex rate {currency}/USD = {rate} (real-time fallback)")
+            return rates
+    except Exception as e:
+        logger.warning(f"Real-time forex {currency}USD.FOREX failed: {e}")
+
+    return rates
+
+
+async def _store_forex_rates_in_db(currency: str, rates: dict[str, float]) -> int:
+    """Store forex rate history in the database. Returns number of rows stored."""
+    from data_server.db.database import async_session_factory
+    from data_server.db.models import ForexRate
+    from sqlalchemy.dialects.postgresql import insert
+    from datetime import datetime as dt, date as date_type
+
+    stored = 0
+    try:
+        async with async_session_factory() as session:
+            now = dt.utcnow()
+            for date_str, rate in rates.items():
+                d = date_type.fromisoformat(date_str)
+                stmt = insert(ForexRate).values(
+                    currency=currency,
+                    date=d,
+                    rate_to_usd=rate,
+                    updated_at=now,
+                )
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["currency", "date"],
+                    set_={"rate_to_usd": rate, "updated_at": now},
+                )
+                await session.execute(stmt)
+                stored += 1
+            await session.commit()
+            logger.info(f"Stored {stored} forex rates for {currency}")
+    except Exception as e:
+        logger.warning(f"Failed to store forex rates in DB for {currency}: {e}")
+    return stored
+
+
+async def fetch_and_store_forex_history(
+    currency: str, from_date: str, to_date: str,
+) -> int:
+    """Public API: fetch full forex rate history and store in DB.
+
+    Called during "Update Database" to populate historical FX rates.
+    Returns number of rates stored.
+    """
+    if currency == "USD":
+        return 0
+
+    rates = await _fetch_forex_history_from_eodhd(currency, from_date, to_date)
+    if not rates:
+        return 0
+
+    stored = await _store_forex_rates_in_db(currency, rates)
+
+    # Update in-memory cache with latest rate
+    if rates:
+        latest_date = max(rates.keys())
+        _forex_cache[currency] = (rates[latest_date], time.monotonic())
+
+    return stored

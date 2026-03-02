@@ -284,7 +284,7 @@ def parse_timestamp(ts) -> datetime:
     if isinstance(ts, datetime):
         return ts
     if isinstance(ts, (int, float)):
-        return datetime.fromtimestamp(ts)
+        return datetime.utcfromtimestamp(ts)
     if isinstance(ts, str):
         return datetime.fromisoformat(ts.replace("Z", "+00:00"))
     return ts

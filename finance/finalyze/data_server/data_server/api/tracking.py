@@ -126,7 +126,7 @@ async def add_tracked_stock(
     """Add a stock to tracking and prefetch 5 years of historical data."""
     # Extract exchange from ticker if present (e.g., "9988.HK" -> ticker="9988", exchange="HK")
     ticker = request.ticker
-    exchange = request.exchange
+    exchange = request.exchange or "US"
     if "." in ticker:
         parts = ticker.split(".")
         ticker = parts[0]
@@ -140,9 +140,8 @@ async def add_tracked_stock(
         added_at=datetime.utcnow(),
     )
     stmt = stmt.on_conflict_do_update(
-        index_elements=["ticker"],
+        index_elements=["ticker", "exchange"],
         set_={
-            "exchange": exchange,
             "track_prices": request.track_prices,
             "track_news": request.track_news,
         },
@@ -152,11 +151,14 @@ async def add_tracked_stock(
 
     # Fetch the updated/inserted record
     result = await session.execute(
-        select(TrackedStock).where(TrackedStock.ticker == ticker)
+        select(TrackedStock).where(
+            TrackedStock.ticker == ticker,
+            TrackedStock.exchange == exchange,
+        )
     )
     stock = result.scalar_one()
 
-    logger.info(f"Added/updated tracked stock: {ticker}")
+    logger.info(f"Added/updated tracked stock: {ticker}.{exchange}")
 
     # Prefetch historical data in background
     symbol = f"{ticker}.{exchange}"
@@ -176,20 +178,30 @@ async def add_tracked_stock(
 @router.delete("/stocks/{ticker}")
 async def remove_tracked_stock(
     ticker: str,
+    exchange: str = "US",
     session: AsyncSession = Depends(get_session),
 ):
     """Remove a stock from tracking."""
+    # Extract exchange from ticker if present
+    if "." in ticker:
+        parts = ticker.split(".")
+        ticker = parts[0]
+        exchange = parts[1]
+
     result = await session.execute(
-        delete(TrackedStock).where(TrackedStock.ticker == ticker)
+        delete(TrackedStock).where(
+            TrackedStock.ticker == ticker,
+            TrackedStock.exchange == exchange,
+        )
     )
     await session.commit()
 
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="Stock not found in tracking")
 
-    logger.info(f"Removed tracked stock: {ticker}")
+    logger.info(f"Removed tracked stock: {ticker}.{exchange}")
 
-    return {"message": f"Removed {ticker} from tracking"}
+    return {"message": f"Removed {ticker}.{exchange} from tracking"}
 
 
 @router.get("/status", response_model=TrackingStatusResponse)
@@ -209,7 +221,7 @@ async def get_tracking_status(
     )
 
     return TrackingStatusResponse(
-        tracked_stocks=[s.ticker for s in stocks],
+        tracked_stocks=[f"{s.ticker}.{s.exchange}" for s in stocks],
         total_count=len(stocks),
         last_price_worker_run=last_price,
         last_news_worker_run=last_news,
@@ -224,8 +236,7 @@ async def get_tracked_tickers(session: AsyncSession) -> list[str]:
         )
     )
     # Build symbol as ticker.exchange, defaulting to US if exchange is NULL
-    # Strip any existing exchange suffix from ticker (defensive)
-    return [f"{row.ticker.split('.')[0]}.{row.exchange or 'US'}" for row in result.all()]
+    return [f"{row.ticker}.{row.exchange or 'US'}" for row in result.all()]
 
 
 async def get_tracked_tickers_for_news(session: AsyncSession) -> list[str]:
@@ -235,22 +246,20 @@ async def get_tracked_tickers_for_news(session: AsyncSession) -> list[str]:
             TrackedStock.track_news == True
         )
     )
-    # Build symbol as ticker.exchange, defaulting to US if exchange is NULL
-    # Strip any existing exchange suffix from ticker (defensive)
-    return [f"{row.ticker.split('.')[0]}.{row.exchange or 'US'}" for row in result.all()]
+    return [f"{row.ticker}.{row.exchange or 'US'}" for row in result.all()]
 
 
 async def update_price_timestamp(session: AsyncSession, ticker: str):
     """Update last price update timestamp for a ticker.
 
-    Only updates existing tracked stocks - does not create new entries.
-    Ticker param may include exchange suffix (e.g., AAPL.US) - we strip it.
+    Ticker param includes exchange suffix (e.g., AAPL.US).
     """
-    # Strip exchange suffix to match stored ticker format
     clean_ticker = ticker.split(".")[0] if "." in ticker else ticker
+    exchange = ticker.split(".")[-1] if "." in ticker else "US"
 
     stmt = update(TrackedStock).where(
-        TrackedStock.ticker == clean_ticker
+        TrackedStock.ticker == clean_ticker,
+        TrackedStock.exchange == exchange,
     ).values(last_price_update=datetime.utcnow())
     await session.execute(stmt)
 
@@ -258,14 +267,14 @@ async def update_price_timestamp(session: AsyncSession, ticker: str):
 async def update_news_timestamp(session: AsyncSession, ticker: str):
     """Update last news update timestamp for a ticker.
 
-    Only updates existing tracked stocks - does not create new entries.
-    Ticker param may include exchange suffix (e.g., AAPL.US) - we strip it.
+    Ticker param includes exchange suffix (e.g., AAPL.US).
     """
-    # Strip exchange suffix to match stored ticker format
     clean_ticker = ticker.split(".")[0] if "." in ticker else ticker
+    exchange = ticker.split(".")[-1] if "." in ticker else "US"
 
     stmt = update(TrackedStock).where(
-        TrackedStock.ticker == clean_ticker
+        TrackedStock.ticker == clean_ticker,
+        TrackedStock.exchange == exchange,
     ).values(last_news_update=datetime.utcnow())
     await session.execute(stmt)
 
@@ -305,7 +314,7 @@ async def sync_tracked_stocks(
             track_news=True,
             added_at=datetime.utcnow(),
         )
-        stmt = stmt.on_conflict_do_nothing(index_elements=["ticker"])
+        stmt = stmt.on_conflict_do_nothing(index_elements=["ticker", "exchange"])
         result = await session.execute(stmt)
         if result.rowcount > 0:
             added_count += 1

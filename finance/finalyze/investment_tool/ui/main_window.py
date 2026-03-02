@@ -257,6 +257,7 @@ class MainWindow(QMainWindow):
         self.treemap.stock_selected.connect(self._on_stock_selected)
         self.treemap.stock_double_clicked.connect(self._on_stock_double_clicked)
         self.treemap.filter_changed.connect(self._on_treemap_filter_changed)
+        self.treemap.exchange_filter_changed.connect(self._on_treemap_exchange_filter_changed)
         self.treemap.period_changed.connect(self._on_treemap_period_changed)
         self.treemap.stock_remove_requested.connect(self._on_stock_remove_requested)
         self.treemap.stock_add_to_watchlist.connect(self._on_stock_add_to_watchlist)
@@ -554,6 +555,13 @@ class MainWindow(QMainWindow):
             categories = [c.name for c in self.category_manager.get_all_categories()]
             self.treemap.set_categories(categories)
 
+            # Populate exchange filter from all stocks in categories
+            all_exchanges = set()
+            for cat in self.category_manager.get_all_categories():
+                for stock_ref in cat.stocks:
+                    all_exchanges.add(stock_ref.exchange)
+            self.treemap.set_exchanges(list(all_exchanges))
+
         except Exception as e:
             logger.error(f"Failed to initialize data: {e}")
             self.connection_label.setText("EODHD: Error")
@@ -631,12 +639,18 @@ class MainWindow(QMainWindow):
         all_categories = self.category_manager.get_all_categories()
         logger.info(f"Found {len(all_categories)} categories")
 
+        # Get exchange filter
+        selected_exchange = self.treemap.get_selected_exchange_filter()
+
         # First pass: collect all symbols and their metadata
         stock_refs_by_symbol: Dict[str, tuple] = {}  # symbol -> (stock_ref, category)
         for category in all_categories:
             if selected_filter not in market_cap_filters and category.name != selected_filter:
                 continue
             for stock_ref in category.stocks[:30]:
+                # Apply exchange filter
+                if selected_exchange != "All Markets" and stock_ref.exchange != selected_exchange:
+                    continue
                 ticker_key = f"{stock_ref.ticker}.{stock_ref.exchange}"
                 if selected_filter in market_cap_filters:
                     if ticker_key in seen_tickers:
@@ -649,8 +663,9 @@ class MainWindow(QMainWindow):
         if stock_refs_by_symbol:
             symbols = list(stock_refs_by_symbol.keys())
 
-            # For 1D when market is open, use live prices for real-time data
-            if selected_period == "1D" and is_market_open("US"):
+            # For 1D, use live prices which have today's price vs previous close
+            # Works for any exchange (US, PA, KO, etc.) — not limited to US market hours
+            if selected_period == "1D":
                 live_prices = self.data_manager.get_all_live_prices()
                 if live_prices:
                     for symbol in symbols:
@@ -664,7 +679,7 @@ class MainWindow(QMainWindow):
                                     "end_price": price,
                                     "change": change,
                                 }
-                    logger.info(f"Live prices returned {len(batch_changes)}/{len(symbols)} for period=1D (market open)")
+                    logger.info(f"Live prices returned {len(batch_changes)}/{len(symbols)} for period=1D")
 
             # Fallback to batch API if no live prices or market closed or not 1D
             if not batch_changes:
@@ -907,6 +922,11 @@ class MainWindow(QMainWindow):
     def _on_treemap_filter_changed(self, filter_text: str) -> None:
         """Handle treemap category filter change."""
         logger.info(f"Treemap filter changed: {filter_text}")
+        self._load_treemap_data()
+
+    def _on_treemap_exchange_filter_changed(self, exchange: str) -> None:
+        """Handle treemap exchange/market filter change."""
+        logger.info(f"Exchange filter changed: {exchange}")
         self._load_treemap_data()
 
     def _on_treemap_period_changed(self, period: str) -> None:
@@ -1303,16 +1323,52 @@ class MainWindow(QMainWindow):
                 logger.debug(f"Selection changed during load, discarding data for {ticker}")
                 return
 
-            # Convert chart prices to USD for non-USD stocks
+            # Convert chart prices to USD for non-USD stocks using date-specific FX rates
             if prices is not None and not prices.empty and exchange != "US":
                 try:
                     company = self.data_manager.get_company_info(ticker, exchange)
-                    if company and company.fx_rate_to_usd and company.currency and company.currency != "USD":
-                        fx = company.fx_rate_to_usd
-                        for col in ("open", "high", "low", "close"):
-                            if col in prices.columns:
-                                prices[col] = prices[col] * fx
-                        logger.info(f"Converted {ticker} chart prices to USD (fx={fx:.6f})")
+                    if company and company.currency and company.currency != "USD":
+                        # Try to get historical daily FX rates for date-accurate conversion
+                        dates = prices.index
+                        min_date = (dates.min().date() if hasattr(dates.min(), 'date') else dates.min()).isoformat()
+                        max_date = (dates.max().date() if hasattr(dates.max(), 'date') else dates.max()).isoformat()
+                        fx_rates = self.data_manager.get_forex_rates(
+                            company.currency, from_date=min_date, to_date=max_date,
+                        )
+
+                        if fx_rates:
+                            # Build a Series of FX rates indexed by date string
+                            price_dates = pd.Series(
+                                [d.date().isoformat() if hasattr(d, 'date') else str(d)[:10] for d in dates],
+                                index=dates,
+                            )
+                            fx_series = price_dates.map(fx_rates)
+                            # Forward-fill missing dates (weekends/holidays use previous rate)
+                            fx_series = fx_series.ffill().bfill()
+
+                            if fx_series.notna().any():
+                                for col in ("open", "high", "low", "close"):
+                                    if col in prices.columns:
+                                        prices[col] = prices[col] * fx_series
+                                logger.info(
+                                    f"Converted {ticker} chart prices to USD using "
+                                    f"{fx_series.nunique()} historical FX rates"
+                                )
+                            else:
+                                # No historical rates available, use today's rate
+                                fx = company.fx_rate_to_usd
+                                if fx:
+                                    for col in ("open", "high", "low", "close"):
+                                        if col in prices.columns:
+                                            prices[col] = prices[col] * fx
+                                    logger.info(f"Converted {ticker} chart prices to USD (single fx={fx:.6f})")
+                        elif company.fx_rate_to_usd:
+                            # No historical rates in DB, fall back to today's rate
+                            fx = company.fx_rate_to_usd
+                            for col in ("open", "high", "low", "close"):
+                                if col in prices.columns:
+                                    prices[col] = prices[col] * fx
+                            logger.info(f"Converted {ticker} chart prices to USD (fallback fx={fx:.6f})")
                 except Exception as e:
                     logger.warning(f"Failed to convert chart prices to USD: {e}")
 
@@ -1378,23 +1434,32 @@ class MainWindow(QMainWindow):
                 if period_prices is not None and len(period_prices) >= 2:
                     prev_close = period_prices["close"].iloc[-2]
 
-                if market_open and live_data and live_data.get("price"):
-                    # Market is open - use live data for current price and day stats
+                # Also try to get live price data (for non-US exchanges where
+                # EODHD daily data may not include today yet)
+                if not live_data:
+                    live_data = self.data_manager.get_live_price(ticker, exchange)
+
+                if live_data and live_data.get("price"):
+                    # Use live data for current price and day stats
                     current = live_data.get("price")
                     total_volume = live_data.get("volume", 0)
                     day_open = live_data.get("open")
                     day_high = live_data.get("high")
                     day_low = live_data.get("low")
-                    # Calculate change from EODHD prev day close to live price
+                    # Prefer LivePrice previousClose — yfinance daily data may be
+                    # auto-adjusted (dividends/splits) causing prev close != actual close
+                    live_prev = live_data.get("previous_close")
+                    if live_prev is not None:
+                        prev_close = live_prev
                     if prev_close is not None:
                         change = current - prev_close
                         change_pct = change / prev_close if prev_close != 0 else 0
                     else:
                         change = 0
                         change_pct = 0
-                    logger.debug(f"Using live price for {ticker}: ${current:.2f} ({change_pct*100:.2f}%)")
+                    logger.debug(f"Using live price for {ticker}: {current} (change={change})")
                 else:
-                    # Market is closed - use EODHD daily prices entirely
+                    # No live data - use EODHD daily prices entirely
                     if period_prices is not None and len(period_prices) >= 1:
                         last_day = period_prices.iloc[-1]
                         current = last_day["close"]
@@ -1724,6 +1789,36 @@ class MainWindow(QMainWindow):
                 logger.warning(f"Failed to update {symbol}: {e}")
                 failed += 1
 
+        # --- Update FX rates for ALL supported non-USD currencies ---
+        if not (worker and worker.is_cancelled):
+            self.db_update_progress.emit(len(stocks) - 1, "FX rates...")
+            try:
+                # All non-USD currencies from the exchange mapping
+                all_currencies = sorted({
+                    "EUR", "GBp", "HKD", "CAD", "KRW", "INR",
+                    "CNY", "JPY", "CHF", "AUD", "BRL", "CLP",
+                    "TWD", "SGD", "IDR", "ILS", "PLN", "SEK",
+                    "DKK", "NOK",
+                })
+
+                if data_server_url:
+                    resp = http_requests.post(
+                        f"{data_server_url}/api/forex/update",
+                        json={"currencies": all_currencies},
+                        timeout=300,
+                    )
+                    if resp.status_code == 200:
+                        fx_results = resp.json().get("results", {})
+                        for cur, info in fx_results.items():
+                            if info.get("stored"):
+                                logger.info(f"FX {cur}: {info['stored']} new daily rates")
+                            elif info.get("status") == "up_to_date":
+                                logger.debug(f"FX {cur}: up to date")
+                            elif "error" in info:
+                                logger.warning(f"FX {cur}: {info['error']}")
+            except Exception as e:
+                logger.warning(f"FX rate update failed: {e}")
+
         return {"success": success, "failed": failed, "skipped": skipped, "total": len(stocks)}
 
     @Slot(int, str)
@@ -1967,9 +2062,16 @@ class MainWindow(QMainWindow):
 
     def _on_categories_changed(self) -> None:
         """Handle categories changed event."""
-        # Update category filter
-        categories = [c.name for c in self.category_manager.get_all_categories()]
+        # Update category and exchange filters
+        all_cats = self.category_manager.get_all_categories()
+        categories = [c.name for c in all_cats]
         self.treemap.set_categories(categories)
+
+        all_exchanges = set()
+        for cat in all_cats:
+            for stock_ref in cat.stocks:
+                all_exchanges.add(stock_ref.exchange)
+        self.treemap.set_exchanges(list(all_exchanges))
 
         # Reload treemap
         self._load_treemap_data()

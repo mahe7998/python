@@ -1,7 +1,7 @@
 """Background worker for price updates."""
 
 import logging
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -11,6 +11,8 @@ from data_server.db.models import LivePrice, IntradayPrice
 from data_server.api.tracking import get_tracked_tickers, update_price_timestamp
 from data_server.services.eodhd_client import get_eodhd_client
 from data_server.ws.manager import manager
+from data_server.utils.exchange_hours import is_market_open as is_exchange_open
+from data_server.services.yfinance_client import is_realtime_supported_by_eodhd
 
 logger = logging.getLogger(__name__)
 
@@ -27,28 +29,18 @@ _minute_bars: dict[str, dict] = {}
 _prev_cumulative_volume: dict[str, int] = {}
 
 
-def is_market_open() -> bool:
-    """Check if US stock market is currently open (9:30 AM - 4:00 PM ET).
+def is_any_market_open(tickers: set[str]) -> bool:
+    """Check if any tracked exchange is currently open.
 
-    Note: This is a simplified check. Does not account for holidays.
-    Uses EST (UTC-5) - no DST handling for simplicity.
+    Extracts exchange codes from ticker symbols and returns True
+    if at least one exchange is within trading hours.
     """
-    now_utc = datetime.utcnow()
+    exchanges = set()
+    for ticker in tickers:
+        exchange = ticker.split(".")[-1] if "." in ticker else "US"
+        exchanges.add(exchange)
 
-    # Convert UTC to Eastern Time (EST = UTC-5)
-    now_et = now_utc - timedelta(hours=5)
-
-    # Market hours in ET: 9:30 AM - 4:00 PM
-    market_open = time(9, 30)
-    market_close = time(16, 0)
-
-    current_time_et = now_et.time()
-
-    # Check if it's a weekday in ET (Monday=0, Sunday=6)
-    if now_et.weekday() >= 5:  # Saturday or Sunday
-        return False
-
-    return market_open <= current_time_et <= market_close
+    return any(is_exchange_open(ex) for ex in exchanges)
 
 
 def to_decimal(val):
@@ -151,11 +143,6 @@ async def _update_minute_bar(session, ticker: str, price: float, cumulative_volu
 
 async def update_prices():
     """Update prices for all tracked stocks using batch API."""
-    # Skip updates when market is closed
-    if not is_market_open():
-        logger.debug("Market closed, skipping price updates")
-        return
-
     async with async_session_factory() as session:
         # Get tracked tickers
         tickers = await get_tracked_tickers(session)
@@ -164,16 +151,56 @@ async def update_prices():
             logger.debug("No tracked stocks for price updates")
             return
 
-        logger.info(f"Updating live prices for {len(tickers)} stocks (batch)")
+        # Skip updates when no tracked exchange is open
+        if not is_any_market_open(tickers):
+            logger.debug("All markets closed, skipping price updates")
+            return
 
-        client = await get_eodhd_client()
+        # Filter to only tickers whose exchange is currently open
+        open_tickers = set()
+        for ticker in tickers:
+            exchange = ticker.split(".")[-1] if "." in ticker else "US"
+            if is_exchange_open(exchange):
+                open_tickers.add(ticker)
 
-        try:
-            # Fetch all quotes in one batch request
-            quotes = await client.get_real_time_batch(list(tickers))
-            logger.info(f"Batch response: {len(quotes)} quotes received")
-        except Exception as e:
-            logger.error(f"Batch price fetch failed: {e}")
+        if not open_tickers:
+            return
+
+        # Split tickers: EODHD-supported vs yfinance-needed (unreliable EODHD real-time)
+        eodhd_tickers = set()
+        yf_tickers = set()
+        for ticker in open_tickers:
+            exchange = ticker.split(".")[-1] if "." in ticker else "US"
+            if is_realtime_supported_by_eodhd(exchange):
+                eodhd_tickers.add(ticker)
+            else:
+                yf_tickers.add(ticker)
+
+        logger.info(f"Updating live prices for {len(open_tickers)}/{len(tickers)} stocks "
+                     f"(EODHD: {len(eodhd_tickers)}, yfinance: {len(yf_tickers)})")
+
+        # Fetch from EODHD for supported exchanges
+        quotes = []
+        if eodhd_tickers:
+            client = await get_eodhd_client()
+            try:
+                quotes = await client.get_real_time_batch(list(eodhd_tickers))
+                logger.info(f"EODHD batch response: {len(quotes)} quotes received")
+            except Exception as e:
+                logger.error(f"EODHD batch price fetch failed: {e}")
+
+        # Fetch from yfinance for unsupported exchanges
+        if yf_tickers:
+            try:
+                from data_server.services.yfinance_client import get_live_prices
+                yf_quotes = await get_live_prices(list(yf_tickers))
+                if yf_quotes:
+                    quotes.extend(yf_quotes)
+                    logger.info(f"yfinance live prices: {len(yf_quotes)} quotes received")
+            except Exception as e:
+                logger.error(f"yfinance batch price fetch failed: {e}")
+
+        if not quotes:
             return
 
         for quote in quotes:
@@ -194,7 +221,7 @@ async def update_prices():
                 ts = quote.get("timestamp")
                 if ts and ts != 'NA':
                     try:
-                        market_ts = datetime.fromtimestamp(int(ts))
+                        market_ts = datetime.utcfromtimestamp(int(ts))
                     except (ValueError, TypeError):
                         pass
 
@@ -258,7 +285,7 @@ async def update_prices():
                 logger.error(f"Error updating price for {ticker_name}: {e}")
 
         await session.commit()
-        logger.info(f"Live price update complete for {len(tickers)} stocks")
+        logger.info(f"Live price update complete for {len(open_tickers)} stocks")
 
 
 async def update_intraday_delayed():
@@ -268,14 +295,21 @@ async def update_intraday_delayed():
     exactly 1 minute of data that just became available (16 min ago to avoid edge cases).
     Runs every minute, fetching 1 minute of data each time - no overlap.
     """
-    if not is_market_open():
-        logger.debug("Market closed, skipping delayed intraday fetch")
-        return
-
     async with async_session_factory() as session:
         tickers = await get_tracked_tickers(session)
 
         if not tickers:
+            return
+
+        # Filter to tickers with open exchanges
+        open_tickers = set()
+        for ticker in tickers:
+            exchange = ticker.split(".")[-1] if "." in ticker else "US"
+            if is_exchange_open(exchange):
+                open_tickers.add(ticker)
+
+        if not open_tickers:
+            logger.debug("All markets closed, skipping delayed intraday fetch")
             return
 
         client = await get_eodhd_client()
@@ -290,10 +324,10 @@ async def update_intraday_delayed():
         from_ts = int(target_minute.timestamp())
         to_ts = from_ts + 60  # 1 minute window
 
-        logger.info(f"Fetching delayed intraday for {target_minute.strftime('%H:%M')} UTC ({len(tickers)} stocks)")
+        logger.info(f"Fetching delayed intraday for {target_minute.strftime('%H:%M')} UTC ({len(open_tickers)} stocks)")
 
         fetched_count = 0
-        for ticker in tickers:
+        for ticker in open_tickers:
             try:
                 # Fetch 1-minute intraday data for the delayed window
                 data = await client.get_intraday(ticker, interval="1m", from_timestamp=from_ts, to_timestamp=to_ts)
@@ -308,7 +342,7 @@ async def update_intraday_delayed():
                         continue
 
                     try:
-                        bar_datetime = datetime.fromtimestamp(int(bar_ts))
+                        bar_datetime = datetime.utcfromtimestamp(int(bar_ts))
                     except (ValueError, TypeError):
                         continue
 

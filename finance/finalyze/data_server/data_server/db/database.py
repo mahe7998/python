@@ -52,7 +52,48 @@ async def init_db():
 
     logger.info("Initializing database...")
     async with engine.begin() as conn:
+        # Migrate forex_rates: old schema had (currency) PK, new has (currency, date)
+        result = await conn.execute(text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'forex_rates' AND column_name = 'date'"
+        ))
+        if result.rowcount == 0:
+            # Old table exists without date column — drop and let create_all recreate
+            await conn.execute(text("DROP TABLE IF EXISTS forex_rates"))
+            logger.info("Migrated forex_rates table to (currency, date) schema")
+
+        # Migrate tracked_stocks: old schema had (ticker) PK, new has (ticker, exchange)
+        result = await conn.execute(text(
+            "SELECT column_name FROM information_schema.key_column_usage "
+            "WHERE table_name = 'tracked_stocks' AND constraint_name LIKE '%pkey%'"
+        ))
+        pk_cols = [row[0] for row in result.fetchall()]
+        if pk_cols and 'exchange' not in pk_cols:
+            # Backup existing data, drop table, let create_all rebuild with composite PK
+            await conn.execute(text(
+                "CREATE TABLE _tracked_stocks_backup AS SELECT * FROM tracked_stocks"
+            ))
+            await conn.execute(text("DROP TABLE tracked_stocks"))
+            logger.info("Migrating tracked_stocks to (ticker, exchange) composite PK")
+
         await conn.run_sync(Base.metadata.create_all)
+
+        # Restore tracked_stocks data from backup if migration happened
+        result = await conn.execute(text(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+            "WHERE table_name = '_tracked_stocks_backup')"
+        ))
+        if result.scalar():
+            await conn.execute(text("""
+                INSERT INTO tracked_stocks (ticker, exchange, track_prices, track_news,
+                                            added_at, last_price_update, last_news_update)
+                SELECT ticker, COALESCE(exchange, 'US'), track_prices, track_news,
+                       added_at, last_price_update, last_news_update
+                FROM _tracked_stocks_backup
+                ON CONFLICT (ticker, exchange) DO NOTHING
+            """))
+            await conn.execute(text("DROP TABLE _tracked_stocks_backup"))
+            logger.info("Restored tracked_stocks data with composite PK")
         # Migrations for columns added after initial create_all
         await conn.execute(text(
             "ALTER TABLE quarterly_financials ADD COLUMN IF NOT EXISTS data_source VARCHAR(20) DEFAULT 'eodhd'"

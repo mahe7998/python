@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from data_server.config import get_settings
@@ -19,7 +19,52 @@ from data_server.utils.exchange_hours import is_market_open as is_exchange_marke
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# In-memory cache for earnings calendar (changes rarely, no need to hit API every time)
+# Maps symbol -> (result_dict, timestamp)
+_earnings_cache: Dict[str, tuple] = {}
+_EARNINGS_CACHE_TTL = 3600  # 1 hour
+
 router = APIRouter()
+
+# EODHD exchange code → native currency mapping
+# Used to fix cases where EODHD/yfinance returns ADR data (USD) for non-US listings
+_EXCHANGE_TO_CURRENCY = {
+    "US": "USD",
+    "AS": "EUR",   # Euronext Amsterdam
+    "PA": "EUR",   # Euronext Paris
+    "BR": "EUR",   # Euronext Brussels
+    "LI": "EUR",   # Euronext Lisbon
+    "MI": "EUR",   # Borsa Italiana (Milan)
+    "MC": "EUR",   # Madrid
+    "HE": "EUR",   # Helsinki
+    "IR": "EUR",   # Ireland
+    "AT": "EUR",   # Athens
+    "F": "EUR",    # Frankfurt
+    "XETRA": "EUR",  # Xetra
+    "LSE": "GBp",  # London (pence)
+    "HK": "HKD",   # Hong Kong
+    "TO": "CAD",   # Toronto
+    "V": "CAD",    # TSX Venture
+    "KO": "KRW",   # Korea (KOSPI)
+    "KQ": "KRW",   # Korea (KOSDAQ)
+    "NSE": "INR",  # India NSE
+    "BSE": "INR",  # India BSE
+    "SHE": "CNY",  # Shenzhen
+    "SHG": "CNY",  # Shanghai
+    "TSE": "JPY",  # Tokyo
+    "SW": "CHF",   # SIX Swiss
+    "AU": "AUD",   # Australia
+    "SA": "BRL",   # Sao Paulo
+    "SN": "CLP",   # Santiago
+    "TW": "TWD",   # Taiwan
+    "SG": "SGD",   # Singapore
+    "JK": "IDR",   # Jakarta
+    "TA": "ILS",   # Tel Aviv
+    "WAR": "PLN",  # Warsaw
+    "ST": "SEK",   # Stockholm
+    "CO": "DKK",   # Copenhagen
+    "OL": "NOK",   # Oslo
+}
 
 # Fields to compare between EODHD and yfinance quarterly data
 COMPARISON_FIELDS = ["total_revenue", "gross_profit", "net_income", "operating_income"]
@@ -162,6 +207,39 @@ def log_timing(endpoint: str, cache_hit: bool, cache_time_ms: float, eodhd_time_
         logger.info(f"[{status}] {endpoint} | cache lookup: {cache_time_ms:.1f}ms | EODHD fetch: {eodhd_time_ms:.1f}ms | total: {total_time_ms:.1f}ms")
 
 
+async def _append_live_price_bar(session, symbol: str, data: list, to_date) -> list:
+    """Append today's bar from LivePrice if daily data doesn't include it yet.
+
+    After market close (e.g., KRX), yfinance/EODHD may not have published today's
+    daily bar yet, but LivePrice (from fast_info) has the OHLCV data.
+    """
+    from data_server.db.models import LivePrice
+
+    today = datetime.utcnow().date()
+    to_date_obj = to_date.date() if to_date else today
+    if to_date_obj >= today and data:
+        newest = data[-1].get("date", "")
+        if newest:
+            newest_date = datetime.fromisoformat(newest).date() if isinstance(newest, str) else newest
+            if newest_date < today:
+                live = await session.get(LivePrice, symbol)
+                if live and live.price is not None and live.open is not None:
+                    today_bar = {
+                        "date": today.isoformat(),
+                        "open": float(live.open),
+                        "high": float(live.high) if live.high else float(live.price),
+                        "low": float(live.low) if live.low else float(live.price),
+                        "close": float(live.price),
+                        "adjusted_close": float(live.price),
+                        "volume": int(live.volume) if live.volume else 0,
+                    }
+                    data.append(today_bar)
+                    logger.info(f"Appended today's bar for {symbol} from LivePrice: "
+                                f"O={today_bar['open']} H={today_bar['high']} "
+                                f"L={today_bar['low']} C={today_bar['close']}")
+    return data
+
+
 @router.get("/eod/{symbol}")
 async def get_eod_prices(
     symbol: str,
@@ -216,9 +294,11 @@ async def get_eod_prices(
                 if oldest_date_obj > from_date_obj + timedelta(days=5):
                     start_covered = False
 
-            # Cache hit if we're at most 1 trading day behind (weekends don't count)
+            # Cache hit if we're at most ~1 trading day behind
+            # Allow 4 days to cover weekends (Fri→Mon=3) and holidays (Fri→Tue=4)
             # Or if the to_date is in the past (historical data won't change)
-            if start_covered and (days_behind <= 1 or to_date_obj < today):
+            if start_covered and (days_behind <= 4 or to_date_obj < today):
+                cached_data = await _append_live_price_bar(session, symbol, cached_data, to_date)
                 total_time = (time.time() - start_time) * 1000
                 log_timing(endpoint, True, cache_time, 0, total_time)
                 return cached_data
@@ -247,6 +327,7 @@ async def get_eod_prices(
                     if oldest_date_obj > from_date_obj + timedelta(days=5):
                         start_covered = False
                 if start_covered and (days_behind <= 1 or to_date_obj < today):
+                    cached_data = await _append_live_price_bar(session, symbol, cached_data, to_date)
                     total_time = (time.time() - start_time) * 1000
                     logger.info(f"[CACHE HIT after lock] {endpoint}")
                     return cached_data
@@ -293,6 +374,8 @@ async def get_eod_prices(
         )
         await session.commit()
 
+        data = await _append_live_price_bar(session, symbol, data, to_date)
+
         total_time = (time.time() - start_time) * 1000
         log_timing(endpoint, False, cache_time, eodhd_time, total_time)
 
@@ -325,8 +408,8 @@ async def get_intraday_prices(
     # Use full symbol (e.g., LULU.US) for consistency with daily prices
     cache_key = f"intraday:{symbol}:{interval}:{from_}:{to}"
     endpoint = f"GET /intraday/{symbol}?interval={interval}"
-    from_ts = datetime.fromtimestamp(from_) if from_ else None
-    to_ts = datetime.fromtimestamp(to) if to else None
+    from_ts = datetime.utcfromtimestamp(from_) if from_ else None
+    to_ts = datetime.utcfromtimestamp(to) if to else None
 
     # Check if requesting today's data
     today = datetime.utcnow().date()
@@ -370,14 +453,14 @@ async def get_intraday_prices(
             except (ValueError, TypeError):
                 pass
 
-    # Determine if we should try EODHD:
-    # 1. force_eodhd=true explicitly requested (but NOT for today's data during market hours - EODHD won't have it)
-    # 2. Market is closed AND data is from 'live' source (not yet replaced with EODHD)
+    # Determine if we should try to fetch better data:
+    # 1. force_eodhd=true explicitly requested (but NOT for today's data during market hours)
+    # 2. Market is closed AND data is from 'live' source (price worker bars, not real OHLC)
     # Note: EODHD doesn't provide intraday data during market hours, only after market close
     force_eodhd_effective = force_eodhd and not (is_today and market_open)
-    should_try_eodhd = force_eodhd_effective or (not market_open and cached_source == "live" and not is_today)
+    should_try_better = force_eodhd_effective or (not market_open and cached_source == "live")
 
-    if not should_try_eodhd and not cache_is_stale:
+    if not should_try_better and not cache_is_stale:
         # Return cached data if available and fresh
         if cached_data:
             total_time = (time.time() - start_time) * 1000
@@ -449,9 +532,12 @@ async def get_intraday_prices(
 
                 # Determine target date from the request timestamps
                 target_date = from_ts.date() if from_ts else today
+                ticker_part = symbol.split(".")[0]
+                exchange_part = symbol.split(".")[-1] if "." in symbol else "US"
+
                 yf_data = await yf_intraday(
-                    ticker=symbol.split(".")[0],
-                    exchange=symbol.split(".")[-1] if "." in symbol else "US",
+                    ticker=ticker_part,
+                    exchange=exchange_part,
                     interval=interval,
                     target_date=target_date,
                 )
@@ -467,6 +553,28 @@ async def get_intraday_prices(
         if not data:
             logger.info(f"No intraday data from any source for {symbol}, falling back to cached")
             if cached_data:
+                # If cached bars are flat (price worker snapshots with identical OHLC),
+                # replace with a single summary bar from LivePrice for a meaningful chart
+                prices = set(b.get("close") for b in cached_data if b.get("close") is not None)
+                if len(prices) <= 1 and is_today:
+                    from data_server.db.models import LivePrice
+                    live = await session.get(LivePrice, symbol)
+                    if live and live.open is not None and live.price is not None:
+                        # Use first and last cached timestamps for the summary bar range
+                        first_ts = cached_data[0].get("timestamp", "")
+                        last_ts = cached_data[-1].get("timestamp", "")
+                        summary_bar = {
+                            "timestamp": first_ts,
+                            "open": float(live.open),
+                            "high": float(live.high) if live.high else float(live.price),
+                            "low": float(live.low) if live.low else float(live.price),
+                            "close": float(live.price),
+                            "volume": int(live.volume) if live.volume else 0,
+                        }
+                        logger.info(f"Replacing {len(cached_data)} flat bars with LivePrice summary for {symbol}: "
+                                    f"O={summary_bar['open']} H={summary_bar['high']} "
+                                    f"L={summary_bar['low']} C={summary_bar['close']}")
+                        return [summary_bar]
                 return cached_data
             return []
 
@@ -513,8 +621,9 @@ async def get_real_time_quote(
     from sqlalchemy import select
     from data_server.db.models import LivePrice
 
-    # Use full symbol for consistency
-    market_open = is_us_market_open()
+    # Determine exchange from symbol (e.g., "005930.KO" -> "KO", "AAPL.US" -> "US")
+    exchange_code = symbol.split(".")[-1] if "." in symbol else "US"
+    market_open = is_exchange_market_open(exchange_code)
 
     # Check if we have a cached live price in the database
     result = await session.execute(
@@ -720,6 +829,12 @@ async def get_fundamentals(
         highlights = await cache.get_company_highlights(session, ticker)
         quarterly = await cache.get_quarterly_financials(session, ticker)
         if highlights:
+            # Fix currency from exchange mapping if wrong (e.g., ADR data cached)
+            exchange_part_cached = symbol.split(".")[-1] if "." in symbol else "US"
+            expected_cur = _EXCHANGE_TO_CURRENCY.get(exchange_part_cached)
+            if expected_cur and exchange_part_cached != "US" and highlights.get("currency") != expected_cur:
+                highlights["currency"] = expected_cur
+                highlights["exchange"] = exchange_part_cached
             # Enrich highlights with dynamic market cap
             highlights = await _enrich_highlights_market_cap(session, symbol, highlights)
             # Extract ETF fields from highlights
@@ -776,8 +891,22 @@ async def get_fundamentals(
         log_timing(endpoint, False, cache_time, eodhd_time, total_time)
         return {"highlights": {}, "quarterly_financials": [], "discrepancies": [], "asset_type": None, "etf_data": None}
 
-    # Store into all tables
+    # Fix currency when EODHD/yfinance returns ADR data for non-US listings
+    # e.g., ASML.AS returns currency=USD (ADR) instead of EUR (Amsterdam)
     general = data.get("General", {})
+    expected_currency = _EXCHANGE_TO_CURRENCY.get(exchange_part)
+    if expected_currency and exchange_part != "US":
+        returned_currency = general.get("CurrencyCode", "USD")
+        if returned_currency != expected_currency:
+            logger.info(
+                f"Fixing currency for {symbol}: {returned_currency} → {expected_currency} "
+                f"(exchange {exchange_part})"
+            )
+            general["CurrencyCode"] = expected_currency
+            # Also fix the exchange if it was wrong (e.g., NASDAQ for an AS listing)
+            general["Exchange"] = exchange_part
+
+    # Store into all tables
     highlights_raw = data.get("Highlights", {})
     shares_stats = data.get("SharesStats", {})
 
@@ -932,7 +1061,15 @@ async def get_earnings_calendar(
     """Get upcoming and recent earnings dates for a symbol.
 
     Returns the next earnings date/estimate and last reported earnings.
+    Cached in memory for 1 hour since earnings dates change rarely.
     """
+    # Check in-memory cache
+    cached = _earnings_cache.get(symbol)
+    if cached:
+        result, cached_at = cached
+        if time.time() - cached_at < _EARNINGS_CACHE_TTL:
+            return result
+
     from datetime import date as date_type
 
     client = await get_eodhd_client()
@@ -993,11 +1130,16 @@ async def get_earnings_calendar(
         except Exception as e:
             logger.debug(f"yfinance earnings fallback failed for {symbol}: {e}")
 
-    return {
+    result = {
         "symbol": symbol,
         "next_earnings": next_earnings,
         "last_reported": last_reported,
     }
+
+    # Store in cache
+    _earnings_cache[symbol] = (result, time.time())
+
+    return result
 
 
 @router.get("/shares-history/{symbol}")
@@ -1602,6 +1744,138 @@ async def get_cache_coverage(
     intraday = await cache.get_intraday_coverage(session, symbols)
 
     return {"daily": daily, "intraday": intraday}
+
+
+@router.get("/forex/rates/{currency}")
+async def get_forex_rates(
+    currency: str,
+    from_date: str = Query(None),
+    to_date: str = Query(None),
+    session: AsyncSession = Depends(get_session),
+):
+    """Get stored FX rates for a currency within a date range.
+
+    Extends from_date back 7 days so the client can forward-fill
+    when stock trading days don't align with FX trading days
+    (different holidays, weekends, etc.).
+
+    Returns {date: rate_to_usd} dict for use in historical price conversion.
+    """
+    from data_server.db.models import ForexRate
+    from datetime import date as date_type
+
+    if currency == "USD":
+        return {"currency": "USD", "rates": {}}
+
+    query = select(ForexRate).where(ForexRate.currency == currency)
+    if from_date:
+        # Extend back 7 days to cover weekends + holidays gap
+        extended = date_type.fromisoformat(from_date) - timedelta(days=7)
+        query = query.where(ForexRate.date >= extended)
+    if to_date:
+        query = query.where(ForexRate.date <= date_type.fromisoformat(to_date))
+    query = query.order_by(ForexRate.date)
+
+    result = await session.execute(query)
+    rows = result.scalars().all()
+
+    rates = {row.date.isoformat(): float(row.rate_to_usd) for row in rows}
+    return {"currency": currency, "rates": rates}
+
+
+@router.post("/forex/update")
+async def update_forex_rates(
+    body: dict,
+    session: AsyncSession = Depends(get_session),
+):
+    """Fetch and store historical FX rates for given currencies.
+
+    Request body: {"currencies": ["EUR", "KRW", ...]}
+    Automatically determines date range from daily_prices table.
+    Only fetches the missing gap per currency (incremental update).
+    """
+    from datetime import date as date_type
+    from data_server.db.models import DailyPrice, ForexRate
+    from data_server.services.eodhd_client import fetch_and_store_forex_history
+
+    currencies = body.get("currencies", [])
+    currencies = [c for c in currencies if c and c != "USD"]
+
+    if not currencies:
+        return {"status": "ok", "message": "No non-USD currencies to update", "results": {}}
+
+    # Find global date range from daily_prices
+    result = await session.execute(
+        select(
+            func.min(DailyPrice.date),
+            func.max(DailyPrice.date),
+        )
+    )
+    row = result.one_or_none()
+    if not row or not row[0] or not row[1]:
+        return {"status": "ok", "message": "No daily price data in database", "results": {}}
+
+    global_from = row[0]
+    global_to = row[1]
+    today = date_type.today()
+    # Extend to today in case daily prices haven't been fetched yet today
+    target_to = max(global_to, today)
+
+    logger.info(f"Updating forex rates for {currencies} (price range {global_from} to {global_to})")
+
+    results = {}
+    for currency in currencies:
+        try:
+            # Check existing coverage for this currency
+            cov = await session.execute(
+                select(
+                    func.min(ForexRate.date),
+                    func.max(ForexRate.date),
+                ).where(ForexRate.currency == currency)
+            )
+            cov_row = cov.one_or_none()
+            existing_min = cov_row[0] if cov_row else None
+            existing_max = cov_row[1] if cov_row else None
+
+            if existing_min and existing_max:
+                # Only fetch gaps: before existing_min and after existing_max
+                total_stored = 0
+
+                # Gap at the start (older data we don't have yet)
+                # Allow 7-day tolerance for holidays/weekends at the boundary
+                if (existing_min - global_from).days > 7:
+                    gap_to = existing_min - timedelta(days=1)
+                    count = await fetch_and_store_forex_history(
+                        currency, global_from.isoformat(), gap_to.isoformat(),
+                    )
+                    total_stored += count
+                    logger.info(f"FX {currency}: filled start gap {global_from} to {gap_to} ({count} rates)")
+
+                # Gap at the end (newer data)
+                if existing_max < target_to:
+                    gap_from = existing_max + timedelta(days=1)
+                    count = await fetch_and_store_forex_history(
+                        currency, gap_from.isoformat(), target_to.isoformat(),
+                    )
+                    total_stored += count
+                    if count:
+                        logger.info(f"FX {currency}: filled end gap {gap_from} to {target_to} ({count} rates)")
+
+                if total_stored == 0:
+                    results[currency] = {"status": "up_to_date", "range": f"{existing_min} to {existing_max}"}
+                else:
+                    results[currency] = {"stored": total_stored, "range": f"{global_from} to {target_to}"}
+            else:
+                # No existing data — full fetch
+                count = await fetch_and_store_forex_history(
+                    currency, global_from.isoformat(), target_to.isoformat(),
+                )
+                results[currency] = {"stored": count, "range": f"{global_from} to {target_to}"}
+        except Exception as e:
+            logger.warning(f"Forex update failed for {currency}: {e}")
+            results[currency] = {"error": str(e)}
+
+    return {"status": "ok", "results": results}
 
 
 @router.get("/server-status")

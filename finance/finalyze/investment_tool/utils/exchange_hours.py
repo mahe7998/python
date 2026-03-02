@@ -16,6 +16,7 @@ EXCHANGE_MARKET_HOURS = {
     "AS": (1, 9, 0, 17, 30),       # CET (Amsterdam/Euronext)
     "PA": (1, 9, 0, 17, 30),       # CET (Paris/Euronext)
     "F": (1, 9, 0, 17, 30),        # CET (Frankfurt)
+    "XETRA": (1, 9, 0, 17, 30),   # CET (Frankfurt/XETRA)
     "SW": (1, 9, 0, 17, 30),       # CET (Swiss)
     "LSE": (0, 8, 0, 16, 30),      # GMT (London)
     "HK": (8, 9, 30, 16, 0),       # HKT (Hong Kong)
