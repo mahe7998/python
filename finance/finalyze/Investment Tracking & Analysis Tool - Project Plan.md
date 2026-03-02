@@ -1272,22 +1272,22 @@ For the RL backtesting, start with simple strategies before jumping to neural ne
 
 ---
 
-## Implementation Progress (Updated Feb 3, 2026)
+## Implementation Progress (Updated Feb 28, 2026)
 
 ### Completed Features
 
 #### Phase 1: Foundation ✅
 - Project structure created with all directories
-- DuckDB database schema implemented
-- EODHD provider fully functional
+- PostgreSQL database via data server (replaced DuckDB)
+- EODHD provider fully functional with yfinance + SEC EDGAR fallbacks
 - DataManager with caching and provider fallback
 - Basic UI shell with menu bar and status bar
 - Settings dialog for API key configuration
 
 #### Phase 2: Core Visualizations ✅
 - **Market Treemap**: Fully interactive with:
-  - Color-coded performance (red/green)
-  - Box size by market cap
+  - Color-coded performance (red/green gradient)
+  - Box size by dynamic market cap (shares × live price)
   - Click to select, right-click context menu
   - Period selector: 1D, 1W, 1M, 3M, 6M, YTD, 1Y, 2Y, 5Y
   - Filter by category or market cap tier
@@ -1295,158 +1295,107 @@ For the RL backtesting, start with simple strategies before jumping to neural ne
 
 - **Stock Chart**: Candlestick chart with:
   - Chart type selector (Candlestick/Line)
-  - **Measure Tool**: Drag to draw rectangle showing:
-    - Price range (high/low)
-    - Price difference ($) and percentage
-    - Time span (days or hours)
-    - 30% alpha fill with color matching change direction
+  - **Measure Tool**: Drag to draw rectangle showing price range, difference, time span
+  - **Volume hover label**: Shows formatted volume (M/B/K) on both price and volume charts
+  - **Crosshair**: OHLCV data display when hovering over price or volume chart
   - Period synced with treemap selector
-  - Indicators button (placeholder)
+  - Exchange-aware market hours
 
 - **Watchlist Widget**: Fully functional with:
-  - Multiple watchlists (tabs)
-  - Columns: Ticker | Open | Price | Change | Change % | P/E | Volume
+  - Multiple watchlists (tabs), drag-to-reorder tabs, rename via context menu
+  - Columns: Ticker | Open | Price | Change | Change % | P/E | Mkt Cap | Volume
+  - **Auto-refresh**: 60-second timer when market is open
   - **Period-aware data fetching**:
-    - 1D: Intraday data for current price, prev day close for change
-    - 1W+: Daily data with live price, change from period open to current
+    - 1D: Intraday data for current price, daily EOD volume, prev day close for change
+    - 1W+: Daily data, intraday price (consistent across periods), change from period open
+  - **Dynamic market cap**: Always computed as shares_outstanding × current_price (USD)
   - Add stocks via search dialog or treemap context menu
-  - Remove via context menu
-  - Sortable columns
+  - Remove via context menu, sortable columns
 
-- **Category Management**: Working with 10 default categories
+- **Category Management**: Working with user-defined categories, color-coded
 
 #### Key Metrics Panel ✅
-Reorganized into **3-column layout**:
+**4-column layout**:
 
-| Column 1 | Column 2 | Column 3 |
-|----------|----------|----------|
-| Price | 52W High | Market Cap |
-| Change | 52W Low | P/E Ratio |
-| | Avg Volume | |
+| Column 1 | Column 2 | Column 3 | Column 4 |
+|----------|----------|----------|----------|
+| Price | 52W High | Market Cap | Prev Close |
+| Change | 52W Low | P/E Ratio | Day Open |
+| | Avg Volume | | Day High |
+| | | | Day Low |
 
-- **Avg Volume**: Calculated based on selected period (not fixed 52W)
+- **Market Cap**: Dynamically computed (shares × price), never stale fundamentals
+- **Avg Volume**: Calculated based on selected period
 - **52W High/Low**: Always uses 52-week data
-- Updates when stock selected and when period changes
+- **Prev Close / Day OHLC**: Shown for intraday (1D) periods only
+- **Loading feedback**: Shows "•••" dots with wait cursor during period switch (200ms deferred)
+- Updates on stock selection and period changes
 
 #### Phase 3: News & Sentiment ✅
 - **News Feed Widget**:
   - Scrollable list with sentiment color coding
-  - Shows title, source, date, and sentiment polarity
-  - Loads news from data server cache (cache-only, no direct API calls)
-  - Refreshes when stock selection changes
+  - Search and date filters, floating summary popup
+  - Loads news from data server cache (no direct API calls)
 
 - **Sentiment Analysis Widget**:
-  - Shows positive/negative/neutral percentages
-  - Visual sentiment gauge with polarity score
+  - Visual dial gauge with polarity score
+  - Daily sentiment trend chart
   - Aggregates from news articles for selected stock
+
+#### Phase 4: Advanced Features (Partially Complete)
+
+- **Quarterly Financials** ✅:
+  - Grouped bar charts with metric selector (Revenue, Net Income, Operating Income, EBIT, etc.)
+  - Combined view (≤1Y) and year-grouped view (>1Y)
+  - **yfinance cross-validation**: Compares EODHD vs yfinance, shows discrepancy dialog (>5% diff)
+  - **Data source tracking**: Records tagged as eodhd/yfinance, overrides protected
+  - **Earnings calendar**: Next earnings date + last reported EPS (EODHD + yfinance fallback)
+  - Annual and semi-annual aggregation, currency-aware axis formatting
+  - Scroll-through (no zoom/pan interference)
+
+- **Fundamentals Overview** ✅:
+  - Balance sheet, income statement, cash flow grids
+  - Sectioned display with key metrics
+
+- **ETF Detection & Overview** ✅:
+  - Auto-detects ETFs from EODHD `General.Type` field
+  - Switches tabs: Stock → Chart | Financials | Fundamentals, ETF → Chart | ETF Overview
+  - **ETF Overview widget**: Fund info, performance, ALL portfolio holdings with tickers and live performance,
+    sector/industry allocation bars, geographic/country allocation bars
+  - Holdings synced to data server for tracking
+
+- **Intraday Data** ✅:
+  - 1-minute interval (EODHD 5m has NULL gaps)
+  - Dynamic cache TTL (24h historical, 60s today)
+  - Exchange-aware market hours
+
+- **Comparison Chart**: Not started
+- **Stock Screener**: Not started
+
+#### Phase 5-7: Not Started
+- Backtesting Framework
+- RL Integration
+- Additional Providers (Polygon.io, AKShare, Finnhub)
+- Export Features
 
 ### Data Server Architecture ✅
 
-A separate caching proxy server sits between the app and EODHD API:
-
 ```
 investment_tool → data_server (FastAPI) → EODHD API
-                     ↓
-              PostgreSQL cache
+                     ↓                  → yfinance (fallback)
+              PostgreSQL cache          → SEC EDGAR (shares)
+              Background Workers
 ```
 
 #### Data Server Features
-- **Transparent caching**: All EODHD calls cached in PostgreSQL
-- **Background workers**: Proactive updates for tracked stocks
-- **WebSocket push**: Real-time notifications (price/news updates)
-- **Server status endpoint**: Tracks EODHD API call statistics
-
-#### News Caching System (Feb 3, 2026)
-- **Background worker** fetches news for all tracked stocks:
-  - Runs on startup and every 15 minutes
-  - For each stock, fetches from newest date in DB to today
-  - Fetches 100 articles per stock, processes asynchronously
-- **App reads from cache only**: No direct EODHD calls for news
-- Efficient incremental updates (only fetches new articles)
-
-#### Intraday Caching (Feb 3, 2026)
-- **Dynamic TTL** based on data age:
-  - Historical intraday: 24-hour cache (won't change)
-  - Today's intraday: 60-second cache (may still update)
-- **is_cache_valid()** now checks both `expires_at` and `last_fetched` against `max_age_seconds`
-- No duplicate EODHD calls when switching stocks in 1D mode
-
-### Key Implementation Details
-
-#### Period Synchronization
-All views sync to treemap's period selector:
-```
-treemap.period_changed → main_window._on_treemap_period_changed()
-  → stock_chart.set_period(period)
-  → watchlist_widget.set_period(period)
-  → Refresh all data
-```
-
-#### Initialization Order (Important!)
-In `_initialize_data()`:
-1. `set_data_manager()` FIRST
-2. `set_cache()` SECOND (triggers refresh which needs data_manager)
-3. `set_period()` then `refresh_all()`
-
-#### Watchlist Data Modes
-- **1D mode**: Uses intraday data, change = current price - prev day close
-- **1W+ modes**:
-  - Fetches period's daily data
-  - Open = period's first day open price
-  - Price = today's live price (real-time)
-  - Change = current price - period open (true period performance)
-
-#### Server Status Bar
-Status bar shows: `Data Server: Connected | EODHD Calls: X`
-- EODHD call count comes from data server (not local counting)
-- Tracks actual external API usage, not local data server requests
-
-#### Percentage Formatting (Important!)
-- `format_percent(value)` expects decimal (0.05 = 5%)
-- Do NOT multiply by 100 before calling - it does this internally
-
-### Files Modified (Session Feb 3, 2026)
-
-1. **data_server/data_server/api/routes.py**
-   - Added `/server-status` endpoint with EODHD call stats
-   - News endpoint returns cache-only data
-   - Dynamic TTL for intraday caching (24h historical, 60s today)
-
-2. **data_server/data_server/services/eodhd_client.py**
-   - Added `_eodhd_call_count` counter
-   - Added `get_eodhd_stats()` function
-
-3. **data_server/data_server/workers/news_worker.py**
-   - Rewritten for async news fetching
-   - Fetches from newest date in DB to today (not oldest)
-   - Uses `asyncio.gather` for parallel processing
-
-4. **data_server/data_server/db/cache.py**
-   - Added `get_newest_news_date_for_ticker()` using `func.max()`
-   - Fixed `is_cache_valid()` to check `last_fetched` vs `max_age_seconds`
-
-5. **investment_tool/ui/widgets/watchlist.py**
-   - Fixed 1W+ periods: uses live price, change from period open
-   - Added `get_live_price()` call for current value
-
-6. **investment_tool/ui/main_window.py**
-   - Status bar fetches EODHD stats from data server
-   - Updated status format: "Data Server: Connected | EODHD Calls: X"
-
-7. **investment_tool/data/providers/eodhd.py**
-   - Added `get_server_status()` method
-
-8. **investment_tool/data/manager.py**
-   - Added `get_server_status()` to expose server status
-
-### Remaining Phases
-
-#### Phase 4-7: Not Started
-- Comparison Chart
-- Stock Screener
-- Fundamentals Display
-- Backtesting Framework
-- RL Integration
+- **Transparent caching**: All API calls cached in PostgreSQL with dynamic TTL
+- **Background workers**: Price updates (15s), news updates (15min) via APScheduler
+- **Multi-source data**: EODHD primary, yfinance fallback for financials/earnings/search, SEC EDGAR for shares
+- **Earnings calendar**: `/calendar/earnings/{symbol}` with EODHD + yfinance fallback
+- **Data quality**: yfinance cross-validation for quarterly financials, override endpoint
+- **Server status**: `/server-status` with EODHD API call statistics
+- **Stock tracking**: Auto-prefetches 5Y daily data when stock added
+- **DB migrations**: Auto ALTER TABLE at startup for new columns
 
 ### Running the Application
 
@@ -1455,18 +1404,12 @@ Status bar shows: `Data Server: Connected | EODHD Calls: X`
 cd /Users/jmahe/projects/python/finance/finalyze/data_server
 docker compose up -d
 ```
-Verify it's running:
-```bash
-docker compose ps                      # Should show data-server as "running"
-docker compose logs -f data-server     # Should show "Uvicorn running on http://0.0.0.0:8000"
-```
 
 #### Step 2: Start the Investment Tool App
-**IMPORTANT**: Must run from `finalyze/` directory, NOT from `investment_tool/`
 ```bash
-cd /Users/jmahe/projects/python/finance/finalyze
-source investment_tool/.venv/bin/activate
-python -m investment_tool.main
+cd /Users/jmahe/projects/python/finance/finalyze/investment_tool
+source .venv/bin/activate
+python main.py
 ```
 
 #### Stop Data Server
@@ -1475,10 +1418,52 @@ cd /Users/jmahe/projects/python/finance/finalyze/data_server
 docker compose down
 ```
 
-### Database Locations
+### Key Implementation Details
+
+#### Watchlist Data Modes
+- **1D mode**: Uses intraday data, change = current price - prev day close
+- **1W+ modes**:
+  - Fetches period's daily data
+  - Open = period's first day open price
+  - Price = today's intraday price (consistent across all periods)
+  - Change = current price - period open (true period performance)
+  - Volume = daily EOD volume (EODHD intraday volume is unreliable)
+
+#### Market Cap (Critical)
+- **NEVER use `company.market_cap`** — stale value from fundamentals
+- Always compute dynamically: `shares_outstanding × current_price_usd`
+- Applied everywhere: watchlist, treemap, info panel
+
+#### ETF Holdings
+- ETF Overview shows **ALL** stocks in the portfolio with tickers (not just top 10)
+- Holdings are synced to data server for tracking
+- Per-holding performance fetched in background (1D, 1M, YTD, 1Y returns)
+- Industry and country allocation computed from individual holdings when available
+
+#### Server Status Bar
+Status bar shows: `Data Server: Connected | EODHD Calls: X`
+- EODHD call count comes from data server (not local counting)
+- Tracks actual external API usage, not local data server requests
+
+#### Percentage Formatting (Important!)
+- `format_percent(value)` expects decimal (0.05 = 5%)
+- Do NOT multiply by 100 before calling — it does this internally
+
+#### QThread Safety (macOS)
+- Always wait for previous QThread worker before starting a new one
+- QThread destroyed while running causes SIGABRT crash
+- Pattern: `_stop_worker()` checks `isRunning()` and `wait(5000)` before replacing
+
+#### Period Change UI Feedback
+- Uses `QTimer.singleShot(200ms)` to defer heavy work
+- macOS Cocoa combo box needs ~200ms to fully render before blocking the UI thread
+- Metrics show "•••" loading dots, chart clears, wait cursor during switch
+
+### File Locations
 - Config: `~/.investment_tool/settings.yaml`
-- Database: `~/.investment_tool/data.duckdb`
 - Logs: `~/.investment_tool/logs/app.log`
+- Data server logs: `docker compose logs data-server`
+- PostgreSQL data: Docker volume `data_server_postgres_data`
 
 ### GitHub Repository
 https://github.com/mahe7998/python.git
