@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from data_server.config import get_settings
@@ -223,20 +223,41 @@ async def _append_live_price_bar(session, symbol: str, data: list, to_date) -> l
             newest_date = datetime.fromisoformat(newest).date() if isinstance(newest, str) else newest
             if newest_date < today:
                 live = await session.get(LivePrice, symbol)
+                # Skip stale LivePrice data (>2 days old) to avoid injecting wrong bars
+                if live and live.market_timestamp:
+                    age_days = (today - live.market_timestamp.date()).days
+                    if age_days > 2:
+                        logger.info(f"Skipping stale LivePrice bar for {symbol} "
+                                    f"(age={age_days} days)")
+                        return data
                 if live and live.price is not None and live.open is not None:
-                    today_bar = {
-                        "date": today.isoformat(),
-                        "open": float(live.open),
-                        "high": float(live.high) if live.high else float(live.price),
-                        "low": float(live.low) if live.low else float(live.price),
-                        "close": float(live.price),
-                        "adjusted_close": float(live.price),
-                        "volume": int(live.volume) if live.volume else 0,
-                    }
-                    data.append(today_bar)
-                    logger.info(f"Appended today's bar for {symbol} from LivePrice: "
-                                f"O={today_bar['open']} H={today_bar['high']} "
-                                f"L={today_bar['low']} C={today_bar['close']}")
+                    live_close = float(live.price)
+                    # Data-driven stale check: if live price close duplicates
+                    # any of the last 5 days' close, it's stale pre-market data
+                    is_duplicate = False
+                    for prev_bar in data[-5:]:
+                        prev_close = prev_bar.get("close")
+                        if prev_close is not None and abs(live_close - prev_close) < 0.01:
+                            is_duplicate = True
+                            logger.info(
+                                f"Skipping duplicate LivePrice bar for {symbol}: "
+                                f"close={live_close} matches {prev_bar.get('date')} close={prev_close}"
+                            )
+                            break
+                    if not is_duplicate:
+                        today_bar = {
+                            "date": today.isoformat(),
+                            "open": float(live.open),
+                            "high": float(live.high) if live.high else float(live.price),
+                            "low": float(live.low) if live.low else float(live.price),
+                            "close": live_close,
+                            "adjusted_close": live_close,
+                            "volume": int(live.volume) if live.volume else 0,
+                        }
+                        data.append(today_bar)
+                        logger.info(f"Appended today's bar for {symbol} from LivePrice: "
+                                    f"O={today_bar['open']} H={today_bar['high']} "
+                                    f"L={today_bar['low']} C={today_bar['close']}")
     return data
 
 
@@ -294,10 +315,25 @@ async def get_eod_prices(
                 if oldest_date_obj > from_date_obj + timedelta(days=5):
                     start_covered = False
 
-            # Cache hit if we're at most ~1 trading day behind
-            # Allow 4 days to cover weekends (Fri→Mon=3) and holidays (Fri→Tue=4)
-            # Or if the to_date is in the past (historical data won't change)
-            if start_covered and (days_behind <= 4 or to_date_obj < today):
+            # Cache hit if data is fresh enough.
+            # For historical ranges (to_date in the past), always use cache.
+            # For current ranges: check if a US trading day has closed since
+            # the newest cached date. If so, re-fetch to get latest EOD data.
+            max_staleness = 4  # covers weekends + holidays
+            if days_behind >= 1:
+                # Check if there's been a market close between newest_date and now
+                now_utc = datetime.utcnow()
+                # Walk from newest_date+1 to today and check for weekday market closes
+                check = newest_date_obj + timedelta(days=1)
+                while check <= today:
+                    if check.weekday() < 5:  # Mon-Fri
+                        # Market close for this date is 21:30 UTC
+                        close_time = datetime(check.year, check.month, check.day, 21, 30)
+                        if now_utc > close_time:
+                            max_staleness = 0  # Force re-fetch
+                            break
+                    check += timedelta(days=1)
+            if start_covered and (days_behind <= max_staleness or to_date_obj < today):
                 cached_data = await _append_live_price_bar(session, symbol, cached_data, to_date)
                 total_time = (time.time() - start_time) * 1000
                 log_timing(endpoint, True, cache_time, 0, total_time)
@@ -647,15 +683,78 @@ async def get_real_time_quote(
             "change_p": float(lp.change_percent) if lp.change_percent else None,
         }
 
-    # If market is closed, return cached data (no EODHD call needed)
+    # Helper to validate price freshness (EODHD real-time can be weeks stale)
+    def _is_stale(data: dict, max_age_days: int = 2) -> bool:
+        ts = data.get("timestamp")
+        if not ts:
+            return False
+        try:
+            from datetime import date as date_type
+            live_date = datetime.utcfromtimestamp(ts).date()
+            return (date_type.today() - live_date).days > max_age_days
+        except (ValueError, OSError):
+            return False
+
+    async def _yfinance_fallback():
+        from data_server.services.yfinance_client import get_live_prices as yf_live
+        yf_results = await yf_live([symbol])
+        if yf_results:
+            logger.info(f"Using yfinance live price for {symbol}")
+            return yf_results[0]
+        return None
+
+    # Helper to get last EOD daily close (reliable when market is closed)
+    async def _eod_fallback():
+        from data_server.db.models import DailyPrice
+        result = await session.execute(
+            select(DailyPrice)
+            .where(DailyPrice.ticker == symbol)
+            .order_by(DailyPrice.date.desc())
+            .limit(2)
+        )
+        rows = result.scalars().all()
+        if rows:
+            last = rows[0]
+            prev_close = float(rows[1].close) if len(rows) > 1 and rows[1].close else None
+            price = float(last.close) if last.close else None
+            change_val = (price - prev_close) if price and prev_close else None
+            change_pct = (change_val / prev_close * 100) if change_val and prev_close else None
+            return {
+                "code": symbol,
+                "timestamp": int(datetime.combine(last.date, datetime.min.time()).timestamp()),
+                "open": float(last.open) if last.open else None,
+                "high": float(last.high) if last.high else None,
+                "low": float(last.low) if last.low else None,
+                "close": price,
+                "volume": int(last.volume) if last.volume else None,
+                "previousClose": prev_close,
+                "change": round(change_val, 4) if change_val else None,
+                "change_p": round(change_pct, 4) if change_pct else None,
+            }
+        return None
+
+    # If market is closed, return cached data — but validate freshness
     if not market_open:
         if live_price:
-            logger.info(f"[MARKET CLOSED] Returning cached price for {symbol}")
+            cached = format_live_price(live_price)
+            if not _is_stale(cached):
+                logger.info(f"[MARKET CLOSED] Returning cached price for {symbol}")
+                return cached
+        # Cached price is stale or missing — use yfinance regular session price
+        # (regular_session_only=True excludes pre-market/after-hours)
+        logger.info(f"[MARKET CLOSED] Fetching regular session price for {symbol}")
+        from data_server.services.yfinance_client import get_live_prices as yf_live
+        yf_results = await yf_live([symbol], regular_session_only=True)
+        if yf_results:
+            return yf_results[0]
+        # Fallback to last EOD daily close from DB
+        eod_data = await _eod_fallback()
+        if eod_data:
+            return eod_data
+        # Last resort: return stale cached data if available
+        if live_price:
             return format_live_price(live_price)
-        else:
-            # No cached data and market closed - return empty response
-            logger.info(f"[MARKET CLOSED] No cached price for {symbol}")
-            return {"code": symbol, "close": None, "change": None, "change_p": None}
+        return {"code": symbol, "close": None, "change": None, "change_p": None}
 
     # Market is open - check if cached price is fresh enough (less than 30 seconds old)
     if live_price and live_price.updated_at:
@@ -669,8 +768,19 @@ async def get_real_time_quote(
     try:
         data = await client.get_real_time(symbol)
     except Exception as e:
-        logger.error(f"EODHD error: {e}")
-        raise HTTPException(status_code=502, detail="Error fetching from EODHD API")
+        logger.error(f"EODHD real-time error: {e}")
+        data = None
+
+    # Validate EODHD timestamp — fall back to yfinance if stale
+    if data and _is_stale(data):
+        logger.warning(f"EODHD real-time for {symbol} is stale, trying yfinance")
+        data = None
+
+    if not data:
+        yf_data = await _yfinance_fallback()
+        if yf_data:
+            return yf_data
+        raise HTTPException(status_code=502, detail="No live price available from EODHD or yfinance")
 
     return data
 
@@ -680,30 +790,35 @@ async def get_all_live_prices(
     api_token: str = Query(None),
     session: AsyncSession = Depends(get_session),
 ):
-    """Get all cached live prices for tracked stocks."""
+    """Get all cached live prices for tracked stocks.
+
+    Stale data is refreshed at server startup (see main.py _refresh_stale_live_prices).
+    This endpoint returns whatever is in the LivePrice table.
+    """
     from sqlalchemy import select
     from data_server.db.models import LivePrice
 
     result = await session.execute(select(LivePrice))
     prices = result.scalars().all()
+    output = []
+    for p in prices:
+        output.append({
+                "ticker": p.ticker,
+                "exchange": p.exchange,
+                "price": float(p.price) if p.price else None,
+                "open": float(p.open) if p.open else None,
+                "high": float(p.high) if p.high else None,
+                "low": float(p.low) if p.low else None,
+                "previous_close": float(p.previous_close) if p.previous_close else None,
+                "change": float(p.change) if p.change else None,
+                "change_percent": float(p.change_percent) if p.change_percent else None,
+                "volume": p.volume,
+                "market_timestamp": p.market_timestamp.isoformat() if p.market_timestamp else None,
+                "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+                "data_source": p.data_source,
+            })
 
-    return [
-        {
-            "ticker": p.ticker,
-            "exchange": p.exchange,
-            "price": float(p.price) if p.price else None,
-            "open": float(p.open) if p.open else None,
-            "high": float(p.high) if p.high else None,
-            "low": float(p.low) if p.low else None,
-            "previous_close": float(p.previous_close) if p.previous_close else None,
-            "change": float(p.change) if p.change else None,
-            "change_percent": float(p.change_percent) if p.change_percent else None,
-            "volume": p.volume,
-            "market_timestamp": p.market_timestamp.isoformat() if p.market_timestamp else None,
-            "updated_at": p.updated_at.isoformat() if p.updated_at else None,
-        }
-        for p in prices
-    ]
+    return output
 
 
 async def _enrich_with_live_market_cap(session: AsyncSession, symbol: str, company: dict) -> dict:
@@ -894,6 +1009,8 @@ async def get_fundamentals(
     # Fix currency when EODHD/yfinance returns wrong currency for the requested exchange
     # e.g., ASML.AS returns currency=USD (ADR) instead of EUR, ASML.US returns EUR instead of USD
     general = data.get("General", {})
+    # Preserve original reporting currency before any exchange-based override
+    original_currency = general.get("CurrencyCode", "USD")
     expected_currency = _EXCHANGE_TO_CURRENCY.get(exchange_part)
     if expected_currency:
         returned_currency = general.get("CurrencyCode", "USD")
@@ -905,6 +1022,8 @@ async def get_fundamentals(
             general["CurrencyCode"] = expected_currency
             # Also fix the exchange if it was wrong (e.g., NASDAQ for an AS listing)
             general["Exchange"] = exchange_part
+    # Inject original reporting currency so cache stores it as earnings_currency
+    general["_OriginalCurrencyCode"] = original_currency
 
     # Store into all tables
     highlights_raw = data.get("Highlights", {})
@@ -1641,6 +1760,20 @@ async def get_batch_daily_changes(
             prices = await cache.get_daily_prices(session, symbol, from_date, to_date)
 
             if prices and len(prices) >= 2:
+                # Strip phantom today entry: if the last entry is today and
+                # its close duplicates a recent entry, it's stale pre-market data
+                from datetime import date as _date_type
+                today_iso = _date_type.today().isoformat()
+                last_date = prices[-1].get("date", "")
+                if str(last_date)[:10] == today_iso and len(prices) >= 3:
+                    last_close = prices[-1].get("close")
+                    if last_close is not None:
+                        for prev in prices[-6:-1]:
+                            prev_close = prev.get("close")
+                            if prev_close is not None and abs(last_close - prev_close) < 0.01:
+                                prices = prices[:-1]
+                                break
+
                 if daily_change:
                     # Compare last 2 trading days (1D change)
                     start_price = prices[-2].get("adjusted_close") or prices[-2].get("close")
@@ -1725,6 +1858,30 @@ async def get_batch_daily_changes(
     logger.info(f"Batch daily changes completed: {len(results)}/{len(symbols)} symbols in {total_time:.1f}ms")
 
     return results
+
+
+@router.post("/cache/invalidate")
+async def invalidate_cache(
+    body: dict,
+    session: AsyncSession = Depends(get_session),
+):
+    """Invalidate cache entries by key prefix.
+
+    Request body: {"prefix": "fundamentals:"}
+    Deletes all cache_metadata rows whose cache_key starts with the prefix,
+    forcing a re-fetch on next access.
+    """
+    prefix = body.get("prefix", "")
+    if not prefix:
+        return {"deleted": 0}
+
+    from data_server.db.models import CacheMetadata
+    result = await session.execute(
+        delete(CacheMetadata).where(CacheMetadata.cache_key.startswith(prefix))
+    )
+    deleted = result.rowcount
+    logger.info(f"Invalidated {deleted} cache entries with prefix '{prefix}'")
+    return {"deleted": deleted}
 
 
 @router.post("/cache/coverage")

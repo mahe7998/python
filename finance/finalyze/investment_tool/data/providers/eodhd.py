@@ -544,6 +544,14 @@ class EODHDProvider(DataProviderBase):
                     symbol = ticker
                 else:
                     symbol = f"{ticker}.{exchange}"
+                # Skip stale live prices: if market_timestamp is not from
+                # today, data is outdated and would show wrong values
+                ts = str(item.get("market_timestamp", ""))
+                from datetime import date as _date_type
+                today_str = _date_type.today().isoformat()
+                if ts and not ts.startswith(today_str):
+                    continue
+
                 result[symbol] = {
                     "price": item.get("price"),
                     "change": item.get("change"),
@@ -553,6 +561,7 @@ class EODHDProvider(DataProviderBase):
                     "open": item.get("open"),
                     "high": item.get("high"),
                     "low": item.get("low"),
+                    "market_timestamp": ts,
                 }
             return result
 

@@ -59,6 +59,38 @@ from investment_tool.utils.exchange_hours import (
 )
 
 
+def _strip_phantom_today(prices):
+    """Remove today's EOD entry if its OHLC duplicates a recent day (stale data).
+
+    Data providers sometimes include today's entry using a stale live-price
+    snapshot (e.g. pre-market) which duplicates a previous day's OHLC.
+    Detect this by checking if today's close matches any of the last 5 real
+    entries within float tolerance — real closes virtually never repeat exactly.
+    """
+    if prices is None or len(prices) < 2:
+        return prices
+    import pandas as pd
+    today = date.today()
+    last_idx = prices.index[-1]
+    last_date = last_idx.date() if isinstance(last_idx, (datetime, pd.Timestamp)) else None
+    if last_date is None:
+        try:
+            last_date = date.fromisoformat(str(last_idx)[:10])
+        except (ValueError, TypeError):
+            return prices
+    if last_date != today:
+        return prices
+    # Today's entry exists — check if its close duplicates a recent entry
+    last_close = prices["close"].iloc[-1]
+    lookback = min(5, len(prices) - 1)
+    for i in range(2, lookback + 2):
+        prev_close = prices["close"].iloc[-i]
+        if abs(last_close - prev_close) < 0.01:
+            # Duplicate found — drop today's phantom entry
+            return prices.iloc[:-1]
+    return prices
+
+
 class MainWindow(QMainWindow):
     """Main application window."""
 
@@ -327,6 +359,8 @@ class MainWindow(QMainWindow):
         col3_layout.addRow("Market Cap:", self.market_cap_label)
         self.pe_label = QLabel("--")
         col3_layout.addRow("P/E Ratio:", self.pe_label)
+        self.forward_pe_label = QLabel("--")
+        col3_layout.addRow("Forward P/E:", self.forward_pe_label)
         metrics_main_layout.addLayout(col3_layout)
 
         # Column 4: Day's Data (Prev Close, Open, High, Low)
@@ -689,7 +723,7 @@ class MainWindow(QMainWindow):
             symbols = list(stock_refs_by_symbol.keys())
 
             # For 1D, use live prices which have today's price vs previous close
-            # Works for any exchange (US, PA, KO, etc.) — not limited to US market hours
+            # Provider already filters stale live prices (market_timestamp not today)
             if selected_period == "1D":
                 live_prices = self.data_manager.get_all_live_prices()
                 if live_prices:
@@ -706,17 +740,19 @@ class MainWindow(QMainWindow):
                                 }
                     logger.info(f"Live prices returned {len(batch_changes)}/{len(symbols)} for period=1D")
 
-            # Fallback to batch API if no live prices or market closed or not 1D
-            if not batch_changes:
+            # Fallback to batch API for symbols missing from live prices
+            missing_symbols = [s for s in symbols if s not in batch_changes]
+            if missing_symbols:
                 # For 1D, compare last 2 trading days (EODHD daily prices)
                 use_daily_change = (selected_period == "1D")
-                batch_changes = self.data_manager.get_batch_daily_changes(
-                    symbols,
+                fallback = self.data_manager.get_batch_daily_changes(
+                    missing_symbols,
                     start.date() if hasattr(start, 'date') else start,
                     end.date() if hasattr(end, 'date') else end,
                     daily_change=use_daily_change,
                 )
-                logger.info(f"Batch API returned {len(batch_changes)}/{len(symbols)} price changes for period={selected_period}")
+                batch_changes.update(fallback)
+                logger.info(f"Batch API returned {len(fallback)}/{len(missing_symbols)} price changes for period={selected_period}")
 
         # Second pass: build treemap items using batch results
         for ticker_key, (stock_ref, category) in stock_refs_by_symbol.items():
@@ -746,8 +782,6 @@ class MainWindow(QMainWindow):
                     stock_ref.ticker, stock_ref.exchange
                 )
 
-                pe_ratio = company.pe_ratio if company else None
-
                 # Convert price to USD for non-USD stocks
                 price_usd = current
                 if company and company.fx_rate_to_usd and company.currency and company.currency != "USD":
@@ -762,7 +796,22 @@ class MainWindow(QMainWindow):
                     shares = fundamentals.get("highlights", {}).get("shares_outstanding")
                     if shares and price_usd:
                         market_cap = shares * price_usd
-                        pass
+
+                # Recompute P/E with FX conversion (price_usd is in USD, EPS may not be)
+                pe_ratio = company.pe_ratio if company else None
+                if fundamentals and price_usd:
+                    highlights = fundamentals.get("highlights", {})
+                    eps = highlights.get("eps")
+                    earnings_ccy = highlights.get("earnings_currency")
+                    if eps and eps != 0:
+                        eps_usd_rate = 1.0
+                        if earnings_ccy and earnings_ccy != "USD":
+                            rates = self.data_manager.get_forex_rates(earnings_ccy)
+                            if rates:
+                                eps_usd_rate = rates[max(rates.keys())]
+                        computed_pe = price_usd / (eps * eps_usd_rate)
+                        if computed_pe > 0:
+                            pe_ratio = computed_pe
 
                 # Apply market cap filter
                 if selected_filter == "Large Cap (>$200B)" and (market_cap or 0) < 200e9:
@@ -1428,6 +1477,7 @@ class MainWindow(QMainWindow):
         self.avg_volume_label.setText(loading)
         self.market_cap_label.setText(loading)
         self.pe_label.setText(loading)
+        self.forward_pe_label.setText(loading)
 
     def _update_metrics(self, ticker: str, exchange: str) -> None:
         """Update the metrics panel for a stock."""
@@ -1446,23 +1496,22 @@ class MainWindow(QMainWindow):
             period_prices = self.data_manager.get_daily_prices(ticker, exchange, start, end)
 
             if is_intraday_period(period):
-                # For 1D: use EODHD daily prices for prev_close (accurate),
-                # live prices only for current price during market hours
-                market_open = is_market_open(exchange)
+                # Detect phantom today entry: if today's OHLC duplicates a recent
+                # day's OHLC, it's stale pre-market data, not a real close
+                period_prices = _strip_phantom_today(period_prices)
 
                 symbol = f"{ticker}.{exchange}"
-                live_prices = self.data_manager.get_all_live_prices() if market_open else None
-                live_data = live_prices.get(symbol) if live_prices else None
+
+                # Get live prices (provider already filters stale data)
+                live_data = None
+                live_prices = self.data_manager.get_all_live_prices()
+                if live_prices:
+                    live_data = live_prices.get(symbol)
 
                 # Get previous day's close from EODHD daily prices
                 prev_close = None
                 if period_prices is not None and len(period_prices) >= 2:
                     prev_close = period_prices["close"].iloc[-2]
-
-                # Also try to get live price data (for non-US exchanges where
-                # EODHD daily data may not include today yet)
-                if not live_data:
-                    live_data = self.data_manager.get_live_price(ticker, exchange)
 
                 if live_data and live_data.get("price"):
                     # Use live data for current price and day stats
@@ -1597,15 +1646,67 @@ class MainWindow(QMainWindow):
                     if shares:
                         mcap_text = format_large_number(shares * current, decimals=2)
                 self.market_cap_label.setText(mcap_text)
-                # Display P/E ratio
-                if company.pe_ratio is not None:
-                    self.pe_label.setText(f"{company.pe_ratio:.2f}")
+                highlights = fundamentals.get("highlights", {}) if fundamentals else {}
+
+                # Helper: get FX factor to convert EPS from earnings_ccy to USD
+                # (current price is already in USD after the conversion above)
+                earnings_ccy = highlights.get("earnings_currency")
+                eps_to_usd = 1.0
+                if earnings_ccy and earnings_ccy != "USD":
+                    rates = self.data_manager.get_forex_rates(earnings_ccy)
+                    if rates:
+                        latest = max(rates.keys())
+                        eps_to_usd = rates[latest]
+                        logger.debug(f"EPS FX for {ticker}: {earnings_ccy}→USD = {eps_to_usd:.6f}")
+
+                # Display trailing P/E: recompute with FX conversion
+                trailing_eps = highlights.get("eps")
+                if trailing_eps and current is not None and trailing_eps != 0:
+                    eps_usd = trailing_eps * eps_to_usd
+                    pe = current / eps_usd
+                    if pe > 0:
+                        self.pe_label.setText(f"{pe:.2f}")
+                    else:
+                        self.pe_label.setText("--")
+                elif company.pe_ratio is not None and company.pe_ratio > 0:
+                    # Only trust EODHD's pe_ratio for USD stocks (currency mismatch risk)
+                    if not earnings_ccy or earnings_ccy == "USD":
+                        self.pe_label.setText(f"{company.pe_ratio:.2f}")
+                    else:
+                        self.pe_label.setText("--")
                 else:
                     self.pe_label.setText("--")
+
+                # Compute Forward P/E dynamically = current price / forward EPS estimate
+                # Use next year's EPS if today is past the fiscal year end month
+                forward_pe_text = "--"
+                eps_next = highlights.get("eps_estimate_next_year")
+                eps_curr = highlights.get("eps_estimate_current_year")
+                fy_end = highlights.get("fiscal_year_end")  # e.g. "January"
+                eps_est = eps_curr
+                if fy_end and eps_next:
+                    try:
+                        fy_month = datetime.strptime(fy_end, "%B").month
+                        if date.today().month > fy_month:
+                            eps_est = eps_next
+                    except ValueError:
+                        pass
+                if eps_est and current is not None and eps_est != 0:
+                    fwd_pe = current / (eps_est * eps_to_usd)
+                    if fwd_pe > 0:
+                        forward_pe_text = f"{fwd_pe:.2f}"
+                elif highlights.get("forward_pe") is not None and highlights["forward_pe"] > 0:
+                    # Only trust EODHD's forward_pe for USD-denominated stocks;
+                    # non-USD stocks have known currency mismatch issues in EODHD data
+                    earnings_ccy = highlights.get("earnings_currency")
+                    if not earnings_ccy or earnings_ccy == "USD":
+                        forward_pe_text = f"{highlights['forward_pe']:.2f}"
+                self.forward_pe_label.setText(forward_pe_text)
             else:
                 self.metrics_group.setTitle(f"Key Metrics - {ticker}")
                 self.market_cap_label.setText("--")
                 self.pe_label.setText("--")
+                self.forward_pe_label.setText("--")
 
         except Exception as e:
             logger.error(f"Failed to update metrics for {ticker}: {e}")
@@ -1722,11 +1823,32 @@ class MainWindow(QMainWindow):
         intraday_target_start = datetime.combine(today - timedelta(days=30), datetime.min.time())
         intraday_target_end = datetime.combine(today, datetime.max.time())
 
-        # --- Fetch existing coverage from data server in one batch call ---
+        # --- Invalidate fundamentals cache so new fields get re-fetched ---
         symbols = [f"{t}.{e}" for t, e in stocks]
+        data_server_url = os.getenv("DATA_SERVER_URL", "").rstrip("/")
+        if data_server_url:
+            try:
+                http_requests.post(
+                    f"{data_server_url}/api/cache/invalidate",
+                    json={"prefix": "fundamentals:"},
+                    timeout=10,
+                )
+                logger.info("Invalidated fundamentals cache for re-fetch")
+            except Exception as e:
+                logger.warning(f"Could not invalidate fundamentals cache: {e}")
+            try:
+                http_requests.post(
+                    f"{data_server_url}/api/cache/invalidate",
+                    json={"prefix": "eod:"},
+                    timeout=10,
+                )
+                logger.info("Invalidated EOD cache for re-fetch")
+            except Exception as e:
+                logger.warning(f"Could not invalidate EOD cache: {e}")
+
+        # --- Fetch existing coverage from data server in one batch call ---
         daily_coverage: dict = {}
         intraday_coverage: dict = {}
-        data_server_url = os.getenv("DATA_SERVER_URL", "").rstrip("/")
         if data_server_url:
             try:
                 resp = http_requests.post(
@@ -1805,6 +1927,9 @@ class MainWindow(QMainWindow):
                         ticker, exchange, "5m",
                         intraday_start, intraday_target_end,
                     )
+
+                # --- Fundamentals (re-fetch after cache invalidation) ---
+                self.data_manager.get_fundamentals(ticker, exchange)
 
                 if not need_daily and not need_intraday:
                     skipped += 1
@@ -2068,7 +2193,17 @@ class MainWindow(QMainWindow):
 
     def _on_add_stock(self) -> None:
         """Handle add stock action."""
-        dialog = AddStockDialog(self.data_manager, self)
+        # Default category to current treemap filter if it's an industry category
+        default_category = None
+        market_cap_filters = (
+            "All Stocks", "Large Cap (>$200B)", "Mid Cap ($20B-$200B)",
+            "Small Cap ($2B-$20B)", "Tiny Stocks (<$2B)",
+        )
+        selected_filter = self.treemap.get_selected_filter()
+        if selected_filter and selected_filter not in market_cap_filters:
+            default_category = selected_filter
+
+        dialog = AddStockDialog(self.data_manager, self, default_category=default_category)
         dialog.stock_added.connect(self._on_stock_added)
         dialog.exec()
 

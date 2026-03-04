@@ -60,6 +60,17 @@ async def start_scheduler():
         max_instances=1,
     )
 
+    # EOD refresh worker - runs at 4:45 PM ET (21:45 UTC) after US market close
+    # Invalidates daily price caches so next request fetches fresh EOD data
+    scheduler.add_job(
+        refresh_eod_caches,
+        trigger=CronTrigger(hour=21, minute=45),  # 4:45 PM ET = 21:45 UTC
+        id="eod_refresh_worker",
+        name="EOD Refresh Worker",
+        replace_existing=True,
+        max_instances=1,
+    )
+
     # Fundamentals worker - runs once daily at 5:00 AM ET (10:00 UTC) before market open
     # Updates shares_outstanding for accurate market cap calculation
     scheduler.add_job(
@@ -103,6 +114,28 @@ async def daily_cleanup():
         await session.commit()
 
         logger.info(f"Deleted {result.rowcount} old intraday records")
+
+
+async def refresh_eod_caches():
+    """Invalidate all EOD daily price caches after US market close.
+
+    This forces fresh data to be fetched on the next request, ensuring
+    users see today's closing prices instead of stale cached data.
+    """
+    from sqlalchemy import delete
+    from data_server.db.database import async_session_factory
+    from data_server.db.models import CacheMetadata
+
+    logger.info("Invalidating EOD daily price caches after market close...")
+
+    async with async_session_factory() as session:
+        result = await session.execute(
+            delete(CacheMetadata).where(CacheMetadata.cache_key.startswith("eod:"))
+        )
+        deleted = result.rowcount
+        await session.commit()
+
+    logger.info(f"Invalidated {deleted} EOD cache entries")
 
 
 async def update_fundamentals():

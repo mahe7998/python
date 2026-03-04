@@ -213,6 +213,7 @@ class LivePrice(Base):
     volume: Mapped[Optional[int]] = mapped_column(BigInteger)
     market_timestamp: Mapped[Optional[datetime]] = mapped_column(DateTime)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    data_source: Mapped[Optional[str]] = mapped_column(String(30))  # eodhd, yfinance_fast_info, yfinance_eod_batch
 
 
 class QuarterlyFinancial(Base):
@@ -297,6 +298,10 @@ class CompanyHighlight(Base):
     quarterly_revenue_growth_yoy: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 6))
     quarterly_earnings_growth_yoy: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 6))
     eps_estimate_current_year: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    eps_estimate_next_year: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
+    most_recent_quarter: Mapped[Optional[str]] = mapped_column(String(20))
+    fiscal_year_end: Mapped[Optional[str]] = mapped_column(String(20))
+    earnings_currency: Mapped[Optional[str]] = mapped_column(String(10))  # Currency of EPS estimates (e.g. CNY for BABA)
     wall_street_target_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 4))
     # Dividends
     dividend_yield: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 6))

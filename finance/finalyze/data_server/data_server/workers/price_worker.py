@@ -184,8 +184,11 @@ async def update_prices():
         if eodhd_tickers:
             client = await get_eodhd_client()
             try:
-                quotes = await client.get_real_time_batch(list(eodhd_tickers))
-                logger.info(f"EODHD batch response: {len(quotes)} quotes received")
+                eodhd_quotes = await client.get_real_time_batch(list(eodhd_tickers))
+                for q in eodhd_quotes:
+                    q["_data_source"] = "eodhd"
+                quotes.extend(eodhd_quotes)
+                logger.info(f"EODHD batch response: {len(eodhd_quotes)} quotes received")
             except Exception as e:
                 logger.error(f"EODHD batch price fetch failed: {e}")
 
@@ -195,6 +198,8 @@ async def update_prices():
                 from data_server.services.yfinance_client import get_live_prices
                 yf_quotes = await get_live_prices(list(yf_tickers))
                 if yf_quotes:
+                    for q in yf_quotes:
+                        q["_data_source"] = "yfinance_fast_info"
                     quotes.extend(yf_quotes)
                     logger.info(f"yfinance live prices: {len(yf_quotes)} quotes received")
             except Exception as e:
@@ -232,6 +237,7 @@ async def update_prices():
                     continue
 
                 # Update LivePrice (latest price only)
+                source = quote.get("_data_source", "eodhd")
                 stmt = insert(LivePrice).values(
                     ticker=ticker,
                     exchange=exchange,
@@ -245,6 +251,7 @@ async def update_prices():
                     volume=to_int(quote.get("volume")),
                     market_timestamp=market_ts,
                     updated_at=datetime.utcnow(),
+                    data_source=source,
                 ).on_conflict_do_update(
                     index_elements=["ticker"],
                     set_={
@@ -258,6 +265,7 @@ async def update_prices():
                         "volume": to_int(quote.get("volume")),
                         "market_timestamp": market_ts,
                         "updated_at": datetime.utcnow(),
+                        "data_source": source,
                     }
                 )
                 await session.execute(stmt)

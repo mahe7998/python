@@ -49,6 +49,7 @@ class UIConfig(BaseModel):
     treemap_color_scale: TreemapColorConfig = Field(default_factory=TreemapColorConfig)
     fx_from_currency: str = Field(default="EUR")
     fx_to_currency: str = Field(default="USD")
+    financials_by_quarter: bool = Field(default=True)
 
 
 class SentimentConfig(BaseModel):

@@ -587,11 +587,102 @@ def is_realtime_supported_by_eodhd(exchange: str) -> bool:
     return exchange.upper() not in EODHD_REALTIME_UNSUPPORTED_EXCHANGES
 
 
-async def get_live_prices(tickers: list[str]) -> list[dict]:
+async def get_eod_batch(tickers: list[str]) -> list[dict]:
+    """Batch-fetch last few days of daily close prices via yf.download().
+
+    Returns data in EODHD real-time format with regular-session-only prices.
+    Uses a single batch download (fast) instead of per-ticker t.info calls.
+    """
+    def _fetch() -> list[dict]:
+        try:
+            import yfinance as yf
+
+            # Convert EODHD symbols to yfinance symbols
+            eodhd_to_yf = {}
+            for eodhd_symbol in tickers:
+                parts = eodhd_symbol.split(".")
+                ticker = parts[0]
+                exchange = parts[-1] if len(parts) > 1 else "US"
+                yf_symbol = _to_yfinance_symbol(ticker, exchange)
+                eodhd_to_yf[yf_symbol] = eodhd_symbol
+
+            yf_symbols = list(eodhd_to_yf.keys())
+            df = yf.download(yf_symbols, period="5d", interval="1d", progress=False, threads=True)
+
+            if df is None or df.empty:
+                logger.warning("yf.download returned no data for EOD batch")
+                return []
+
+            results = []
+            # Handle single vs multi-ticker DataFrame structure
+            is_multi = isinstance(df.columns, __import__('pandas').MultiIndex)
+
+            for yf_sym, eodhd_sym in eodhd_to_yf.items():
+                try:
+                    if is_multi:
+                        close_series = df[("Close", yf_sym)].dropna()
+                    else:
+                        close_series = df["Close"].dropna()
+
+                    if len(close_series) < 1:
+                        continue
+
+                    last_close = float(close_series.iloc[-1])
+                    prev_close = float(close_series.iloc[-2]) if len(close_series) >= 2 else None
+
+                    # Get OHLCV for the last day
+                    last_idx = close_series.index[-1]
+                    if is_multi:
+                        open_price = float(df[("Open", yf_sym)].loc[last_idx]) if ("Open", yf_sym) in df.columns else None
+                        high_price = float(df[("High", yf_sym)].loc[last_idx]) if ("High", yf_sym) in df.columns else None
+                        low_price = float(df[("Low", yf_sym)].loc[last_idx]) if ("Low", yf_sym) in df.columns else None
+                        volume = int(df[("Volume", yf_sym)].loc[last_idx]) if ("Volume", yf_sym) in df.columns else None
+                    else:
+                        open_price = float(df["Open"].loc[last_idx]) if "Open" in df.columns else None
+                        high_price = float(df["High"].loc[last_idx]) if "High" in df.columns else None
+                        low_price = float(df["Low"].loc[last_idx]) if "Low" in df.columns else None
+                        volume = int(df["Volume"].loc[last_idx]) if "Volume" in df.columns else None
+
+                    change = None
+                    change_p = None
+                    if prev_close and prev_close > 0:
+                        change = round(last_close - prev_close, 4)
+                        change_p = round((change / prev_close) * 100, 4)
+
+                    results.append({
+                        "code": eodhd_sym,
+                        "timestamp": int(datetime.utcnow().timestamp()),
+                        "open": open_price,
+                        "high": high_price,
+                        "low": low_price,
+                        "close": last_close,
+                        "volume": volume,
+                        "previousClose": prev_close,
+                        "change": change,
+                        "change_p": change_p,
+                    })
+                except Exception as e:
+                    logger.debug(f"yf.download EOD parse error for {yf_sym}: {e}")
+
+            logger.info(f"yf.download EOD batch returned {len(results)}/{len(tickers)} prices")
+            _log_yfinance_request("eod_batch", f"batch({len(tickers)})", response_size=len(results))
+            return results
+
+        except Exception as e:
+            logger.error(f"yf.download EOD batch error: {e}")
+            _log_yfinance_request("eod_batch", "batch", error=str(e))
+            return []
+
+    return await asyncio.to_thread(_fetch)
+
+
+async def get_live_prices(tickers: list[str], regular_session_only: bool = False) -> list[dict]:
     """Get live prices from yfinance for a batch of tickers.
 
     Args:
         tickers: List of EODHD-format symbols (e.g., ["005930.KO", "7203.TSE"])
+        regular_session_only: If True, use regularMarketPrice (excludes pre/post-market).
+                              Slower (uses t.info instead of t.fast_info).
 
     Returns:
         List of dicts in EODHD real-time format (code, close, open, high, low, volume, etc.)
@@ -609,18 +700,26 @@ async def get_live_prices(tickers: list[str]) -> list[dict]:
                     yf_symbol = _to_yfinance_symbol(ticker, exchange)
 
                     t = yf.Ticker(yf_symbol)
-                    info = t.fast_info
 
-                    price = getattr(info, "last_price", None)
+                    if regular_session_only:
+                        full_info = t.info
+                        price = full_info.get("regularMarketPrice")
+                        open_price = full_info.get("regularMarketOpen")
+                        day_high = full_info.get("regularMarketDayHigh")
+                        day_low = full_info.get("regularMarketDayLow")
+                        prev_close = full_info.get("regularMarketPreviousClose")
+                        volume = full_info.get("regularMarketVolume")
+                    else:
+                        info = t.fast_info
+                        price = getattr(info, "last_price", None)
+                        open_price = getattr(info, "open", None)
+                        day_high = getattr(info, "day_high", None)
+                        day_low = getattr(info, "day_low", None)
+                        prev_close = getattr(info, "previous_close", None)
+                        volume = getattr(info, "last_volume", None)
+
                     if price is None:
                         continue
-
-                    # Get additional info for open/high/low/prev_close
-                    open_price = getattr(info, "open", None)
-                    day_high = getattr(info, "day_high", None)
-                    day_low = getattr(info, "day_low", None)
-                    prev_close = getattr(info, "previous_close", None)
-                    volume = getattr(info, "last_volume", None)
 
                     change = None
                     change_p = None

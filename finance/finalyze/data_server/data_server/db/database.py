@@ -104,6 +104,21 @@ async def init_db():
         await conn.execute(text(
             "ALTER TABLE company_highlights ADD COLUMN IF NOT EXISTS etf_data TEXT"
         ))
+        await conn.execute(text(
+            "ALTER TABLE company_highlights ADD COLUMN IF NOT EXISTS eps_estimate_next_year NUMERIC(14, 4)"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE company_highlights ADD COLUMN IF NOT EXISTS most_recent_quarter VARCHAR(20)"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE company_highlights ADD COLUMN IF NOT EXISTS fiscal_year_end VARCHAR(20)"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE live_prices ADD COLUMN IF NOT EXISTS data_source VARCHAR(30)"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE company_highlights ADD COLUMN IF NOT EXISTS earnings_currency VARCHAR(10)"
+        ))
     logger.info("Database initialized")
 
 

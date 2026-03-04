@@ -840,6 +840,16 @@ async def store_company_highlights(
     shares_stats = eodhd_data.get("SharesStats", {})
     technicals = eodhd_data.get("Technicals", {})
 
+    # Extract earnings currency: try Earnings.History first, fall back to original CurrencyCode
+    # _OriginalCurrencyCode is set by routes.py before the exchange-based currency override
+    earnings_currency = None
+    earnings_hist = eodhd_data.get("Earnings", {}).get("History", {})
+    if isinstance(earnings_hist, dict) and earnings_hist:
+        latest_key = sorted(earnings_hist.keys(), reverse=True)[0]
+        earnings_currency = earnings_hist[latest_key].get("currency")
+    if not earnings_currency:
+        earnings_currency = general.get("_OriginalCurrencyCode") or general.get("CurrencyCode")
+
     values = {
         "ticker": ticker,
         "name": general.get("Name"),
@@ -869,6 +879,10 @@ async def store_company_highlights(
         "quarterly_revenue_growth_yoy": _safe_num(highlights.get("QuarterlyRevenueGrowthYOY")),
         "quarterly_earnings_growth_yoy": _safe_num(highlights.get("QuarterlyEarningsGrowthYOY")),
         "eps_estimate_current_year": _safe_num(highlights.get("EPSEstimateCurrentYear")),
+        "eps_estimate_next_year": _safe_num(highlights.get("EPSEstimateNextYear")),
+        "most_recent_quarter": highlights.get("MostRecentQuarter"),
+        "fiscal_year_end": general.get("FiscalYearEnd"),
+        "earnings_currency": earnings_currency,
         "wall_street_target_price": _safe_num(highlights.get("WallStreetTargetPrice")),
         "dividend_yield": _safe_num(highlights.get("DividendYield")),
         "dividend_share": _safe_num(highlights.get("DividendShare")),
@@ -945,6 +959,10 @@ async def get_company_highlights(
         "quarterly_revenue_growth_yoy": _f(h.quarterly_revenue_growth_yoy),
         "quarterly_earnings_growth_yoy": _f(h.quarterly_earnings_growth_yoy),
         "eps_estimate_current_year": _f(h.eps_estimate_current_year),
+        "eps_estimate_next_year": _f(h.eps_estimate_next_year),
+        "most_recent_quarter": h.most_recent_quarter,
+        "fiscal_year_end": h.fiscal_year_end,
+        "earnings_currency": h.earnings_currency,
         "wall_street_target_price": _f(h.wall_street_target_price),
         "dividend_yield": _f(h.dividend_yield),
         "dividend_share": _f(h.dividend_share),

@@ -120,11 +120,13 @@ class AddStockDialog(QDialog):
         data_manager: Optional[DataManager] = None,
         parent: Optional[QWidget] = None,
         require_category: bool = True,
+        default_category: Optional[str] = None,
     ):
         super().__init__(parent)
         self.data_manager = data_manager
         self.category_manager = get_category_manager()
         self._require_category = require_category
+        self._default_category = default_category
         self._search_timer = QTimer()
         self._search_timer.setSingleShot(True)
         self._search_timer.timeout.connect(self._perform_search)
@@ -351,6 +353,12 @@ class AddStockDialog(QDialog):
             if category.name != "Uncategorized":
                 self.category_combo.addItem(category.name, category.id)
         self.category_combo.setMinimumWidth(180)
+        # Pre-select default category if provided
+        if self._default_category:
+            for i in range(self.category_combo.count()):
+                if self.category_combo.itemText(i) == self._default_category:
+                    self.category_combo.setCurrentIndex(i)
+                    break
         options_layout.addWidget(self.category_combo)
 
         options_layout.addStretch()
@@ -548,17 +556,8 @@ class AddStockDialog(QDialog):
                 self.stock_added.emit(ticker, exchange)
                 logger.info(f"Emitted stock_added signal for {ticker}.{exchange}")
             else:
-                # Stock already exists in this category
-                category = self.category_manager.get_category(category_id)
-                cat_name = category.name if category else str(category_id)
-                logger.info(f"{ticker}.{exchange} already exists in category '{cat_name}'")
-                from PySide6.QtWidgets import QMessageBox
-                QMessageBox.information(
-                    self,
-                    "Stock Already Added",
-                    f"{ticker}.{exchange} is already in category '{cat_name}'."
-                )
-                return  # Don't close dialog - let user pick different category
+                # Stock already exists in this category — silently continue
+                logger.info(f"{ticker}.{exchange} already in category, skipping")
         else:
             logger.warning("No category available to add stock")
 

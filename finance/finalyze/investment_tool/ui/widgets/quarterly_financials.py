@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QLabel,
     QScrollArea,
+    QCheckBox,
 )
 from PySide6.QtGui import QCursor
 import pyqtgraph as pg
@@ -241,6 +242,15 @@ class QuarterlyFinancialsWidget(QWidget):
         self.metric_combo.currentIndexChanged.connect(self._on_metric_changed)
         header.addWidget(self.metric_combo)
 
+        # "By Quarter" checkbox (grouped Q1-Q4 vs chronological)
+        self.by_quarter_checkbox = QCheckBox("By Quarter")
+        self.by_quarter_checkbox.setStyleSheet("color: #9CA3AF;")
+        # Restore from config
+        from investment_tool.config.settings import get_config
+        self.by_quarter_checkbox.setChecked(get_config().ui.financials_by_quarter)
+        self.by_quarter_checkbox.stateChanged.connect(self._on_by_quarter_changed)
+        header.addWidget(self.by_quarter_checkbox)
+
         return header
 
     def _create_chart(self) -> pg.PlotWidget:
@@ -311,10 +321,13 @@ class QuarterlyFinancialsWidget(QWidget):
                 self._reporting_freq = self._detect_reporting_frequency()
                 if self._reporting_freq == self.FREQ_ANNUAL:
                     self.ticker_label.setText(f"Annual Financials - {self._ticker}")
+                    self.by_quarter_checkbox.setVisible(False)
                 elif self._reporting_freq == self.FREQ_SEMI_ANNUAL:
                     self.ticker_label.setText(f"Semi-Annual Financials - {self._ticker}")
+                    self.by_quarter_checkbox.setVisible(False)
                 else:
                     self.ticker_label.setText(f"Quarterly Financials - {self._ticker}")
+                    self.by_quarter_checkbox.setVisible(True)
 
                 self._update_chart()
             else:
@@ -607,8 +620,10 @@ class QuarterlyFinancialsWidget(QWidget):
             self._render_annual_view(metric)
         elif self._reporting_freq == self.FREQ_SEMI_ANNUAL:
             self._render_semi_annual_view(metric)
-        else:
+        elif self.by_quarter_checkbox.isChecked():
             self._render_grouped_view(metric)
+        else:
+            self._render_chronological_view(metric)
 
     def _render_combined_view(self, metric: FinancialMetric) -> None:
         """Render last 4 quarters in a simple bar chart."""
@@ -857,6 +872,77 @@ class QuarterlyFinancialsWidget(QWidget):
         # Update legend
         self._update_legend(years)
 
+    def _render_chronological_view(self, metric: FinancialMetric) -> None:
+        """Render all quarters chronologically over the last 5 years."""
+        if not self._quarterly_data:
+            return
+
+        num_years = 5
+
+        # Get unique years (most recent first), take last num_years
+        years = sorted(set(q.year for q in self._quarterly_data), reverse=True)[:num_years]
+        years = list(reversed(years))  # Oldest first for display
+
+        if not years:
+            return
+
+        # Build chronological list of (quarter, year) tuples
+        quarters_order = ["Q1", "Q2", "Q3", "Q4"]
+        chrono_entries = []
+        for year in years:
+            for q in quarters_order:
+                # Only include if we have data for this quarter/year
+                value = self._find_quarter_value(q, year, metric)
+                if value is not None:
+                    chrono_entries.append((q, year, value))
+
+        if not chrono_entries:
+            return
+
+        # Map years to colors
+        year_to_color = {}
+        for i, y in enumerate(years):
+            year_to_color[y] = YEAR_COLORS[i % len(YEAR_COLORS)]
+
+        bar_width = 0.7
+        x = np.arange(len(chrono_entries))
+
+        for i, (q, year, value) in enumerate(chrono_entries):
+            color = year_to_color[year]
+            bar = pg.BarGraphItem(
+                x=[i], height=[value], width=bar_width,
+                brush=pg.mkBrush(color), pen=pg.mkPen(color, width=1)
+            )
+            self.chart.addItem(bar)
+            self._bar_regions.append({
+                "x_min": i - bar_width / 2,
+                "x_max": i + bar_width / 2,
+                "quarter": q,
+                "year": year,
+                "value": float(value),
+            })
+
+        # X-axis labels: just quarter name (year is shown via color legend)
+        labels = []
+        for q, year, _ in chrono_entries:
+            labels.append(q)
+
+        x_axis = self.chart.getAxis("bottom")
+        x_axis.setTicks([[(i, labels[i]) for i in range(len(labels))]])
+
+        self.chart.setLabel("left", metric.value)
+        self.chart.setXRange(-0.5, len(chrono_entries) - 0.5, padding=0.05)
+
+        all_vals = [v for _, _, v in chrono_entries]
+        if all_vals:
+            min_val = min(0, min(all_vals))
+            max_val = max(all_vals)
+            if max_val > min_val:
+                padding = (max_val - min_val) * 0.1
+                self.chart.setYRange(min_val - padding, max_val + padding)
+
+        self._update_legend(years)
+
     def _find_quarter_value(self, quarter: str, year: int, metric: FinancialMetric) -> Optional[float]:
         """Find value for a specific quarter and year."""
         for qf in self._quarterly_data:
@@ -1012,6 +1098,16 @@ class QuarterlyFinancialsWidget(QWidget):
             f'</div>'
         )
         return html
+
+    def _on_by_quarter_changed(self, state: int) -> None:
+        """Handle 'By Quarter' checkbox toggle and persist preference."""
+        from investment_tool.config.settings import get_config
+        from pathlib import Path
+
+        config = get_config()
+        config.ui.financials_by_quarter = bool(state)
+        config.save(Path.home() / ".investment_tool" / "settings.yaml")
+        self._update_chart()
 
     def _on_metric_changed(self, index: int) -> None:
         """Handle metric selection change."""
