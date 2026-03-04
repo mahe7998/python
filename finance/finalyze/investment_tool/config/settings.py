@@ -8,7 +8,7 @@ import yaml
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 
 class APIKeysConfig(BaseModel):

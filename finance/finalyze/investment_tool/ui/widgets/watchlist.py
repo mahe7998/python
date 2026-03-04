@@ -338,17 +338,22 @@ class WatchlistWidget(QWidget):
 
         self.tab_widget.addTab(tab, watchlist.name)
 
-        # Load items for this watchlist
-        self._refresh_watchlist(watchlist.id, table)
+        # Don't refresh here — caller (refresh_all / _initialize_data) will
+        # refresh once after all tabs are created, avoiding duplicate work.
 
         return tab
 
     def _refresh_watchlist(
         self, watchlist_id: int, table: Optional[QTableView] = None
     ) -> None:
-        """Refresh data for a watchlist."""
+        """Refresh data for a watchlist using batch API calls only.
+
+        Uses get_all_live_prices() (1 call) + get_batch_daily_changes() (1 call)
+        instead of per-stock API requests.  Company info / fundamentals are
+        deferred until a stock is selected.
+        """
         from loguru import logger
-        from datetime import timezone
+        import time as _time
 
         if not self.data_manager:
             logger.warning("No data manager available for watchlist refresh")
@@ -360,13 +365,37 @@ class WatchlistWidget(QWidget):
                 logger.warning(f"No table found for watchlist {watchlist_id}")
                 return
 
+        t0 = _time.time()
         items = self.data_manager.get_watchlist_items(watchlist_id)
         logger.info(f"Watchlist {watchlist_id} has {len(items)} items, period={self._current_period}")
 
-        # Build data - fetch real prices if data_manager available
+        if not items:
+            model = table.property("model")
+            if model:
+                model.set_data([])
+            return
+
+        # --- Batch calls: live prices + highlights (~15ms total) ---
+        all_live = self.data_manager.get_all_live_prices()
+        symbols = [f"{it.ticker}.{it.exchange or 'US'}" for it in items]
+        all_highlights = self.data_manager.get_batch_highlights(symbols)
+
+        # For non-1D periods, also fetch batch daily changes (1 call)
+        batch_changes: Dict[str, Dict] = {}
+        if not is_intraday_period(self._current_period):
+            from datetime import date, timedelta
+            start, end = get_date_range(self._current_period, min_trading_days=0)
+            batch_changes = self.data_manager.get_batch_daily_changes(
+                symbols,
+                start.date() if hasattr(start, 'date') else start,
+                end.date() if hasattr(end, 'date') else end,
+            )
+
+        # --- Build rows from batch data (no per-stock API calls) ---
         data = []
         for item in items:
             exchange = item.exchange or "US"
+            symbol = f"{item.ticker}.{exchange}"
             row = {
                 "ticker": item.ticker,
                 "exchange": exchange,
@@ -381,259 +410,44 @@ class WatchlistWidget(QWidget):
                 "notes": item.notes,
             }
 
-            # Fetch real data if data_manager is available
-            if self.data_manager:
-                try:
-                    if is_intraday_period(self._current_period):
-                        # For 1D: open=today's open, price=current, change=from prev day close
-                        from datetime import date, timedelta
+            try:
+                live = all_live.get(symbol)
+                hl = all_highlights.get(symbol, {})
+                row["pe_ratio"] = hl.get("pe_ratio")
+                row["market_cap"] = hl.get("market_cap")
 
-                        # Get intraday for current price, open, and volume
-                        market_open, market_close = get_last_trading_day_hours(exchange)
-                        now_utc = datetime.now(timezone.utc)
+                if is_intraday_period(self._current_period):
+                    # 1D: use live price data (price vs previous_close)
+                    if live:
+                        row["price"] = live.get("price")
+                        row["open"] = live.get("open")
+                        row["prev_close"] = live.get("previous_close")
+                        row["volume"] = live.get("volume")
+                        if row["prev_close"] and row["price"]:
+                            row["change"] = row["price"] - row["prev_close"]
+                            row["change_percent"] = row["change"] / row["prev_close"]
+                else:
+                    # 1W/1M/etc: current price from live, change from batch
+                    if live:
+                        row["price"] = live.get("price")
+                        row["volume"] = live.get("volume")
+                    if symbol in batch_changes:
+                        bc = batch_changes[symbol]
+                        row["open"] = bc.get("start_price")
+                        if row["price"] is None:
+                            row["price"] = bc.get("end_price")
+                        row["change_percent"] = bc.get("change")
+                        if row["open"] and row["price"]:
+                            row["change"] = row["price"] - row["open"]
 
-                        # Check if market is currently open
-                        market_is_open = market_open.date() == now_utc.date() and market_open <= now_utc <= market_close
-                        if market_is_open:
-                            end_dt = now_utc
-                        else:
-                            end_dt = market_close
-
-                        # Use cached data - data server handles caching efficiently
-                        # No need for force_refresh when market is closed
-                        # Use 1m interval - EODHD 5m data has gaps/NULLs for some stocks
-                        intraday = self.data_manager.get_intraday_prices(
-                            item.ticker, exchange, "1m", market_open, end_dt,
-                            use_cache=True, force_refresh=False
-                        )
-                        logger.info(f"Got intraday prices for {item.ticker}: {len(intraday) if intraday is not None else 'None'}")
-
-                        # Get daily prices for previous day's close
-                        start = date.today() - timedelta(days=10)
-                        end = date.today()
-                        daily_prices = self.data_manager.get_daily_prices(
-                            item.ticker, exchange, start, end
-                        )
-
-                        if intraday is not None and len(intraday) >= 1:
-                            close_col = "close" if "close" in intraday.columns else "Close"
-
-                            # Data is sorted ascending (oldest first), so iloc[-1] is the latest
-                            valid_close_bars = intraday[intraday[close_col].notna()]
-                            if len(valid_close_bars) > 0:
-                                latest = valid_close_bars.iloc[-1]  # Last row is newest (market close)
-                                row["price"] = latest[close_col]
-
-                            # Intraday volume data is unreliable (mixes cumulative and per-bar)
-                            # Daily EOD volume will be used instead (set below when trading_day found)
-                            row["volume"] = None
-
-                            # Get the trading day from intraday data (use timestamp column)
-                            # Data is sorted ascending, so iloc[-1] is newest
-                            if "timestamp" in intraday.columns:
-                                ts_val = intraday["timestamp"].iloc[-1]
-                                if hasattr(ts_val, 'date'):
-                                    trading_day = ts_val.date()
-                                elif isinstance(ts_val, str):
-                                    # Parse ISO format string (remove timezone suffix if present)
-                                    ts_clean = ts_val.replace('Z', '').split('+')[0]
-                                    trading_day = datetime.fromisoformat(ts_clean).date()
-                                else:
-                                    trading_day = market_open.date()
-                                logger.info(f"{item.ticker}: ts_val={ts_val}, trading_day={trading_day}")
-                            elif hasattr(intraday.index, 'date'):
-                                trading_day = intraday.index[-1].date() if hasattr(intraday.index[-1], 'date') else intraday.index[-1]
-                            else:
-                                trading_day = market_open.date()
-
-                            # Get open and previous close from daily data (more reliable than intraday)
-                            # Daily data may be sorted newest-first
-                            if daily_prices is not None and len(daily_prices) >= 1:
-                                # Find today's open and previous day's close
-                                # Data is sorted ascending (oldest first), so iterate to find trading_day
-                                prev_day_close = None
-                                for i in range(len(daily_prices)):
-                                    idx = daily_prices.index[i]
-                                    # Handle both date objects and string dates
-                                    if hasattr(idx, 'date') and not isinstance(idx, date):
-                                        day_date = idx.date()
-                                    elif isinstance(idx, str):
-                                        day_date = datetime.strptime(idx, "%Y-%m-%d").date()
-                                    else:
-                                        day_date = idx
-
-                                    logger.debug(f"{item.ticker}: loop i={i}, day_date={day_date}, trading_day={trading_day}, match={day_date == trading_day}")
-                                    if day_date == trading_day:
-                                        # Found trading day - get the open
-                                        open_val = daily_prices.iloc[i].get("open") or daily_prices.iloc[i].get("Open")
-                                        logger.info(f"{item.ticker}: FOUND trading_day at i={i}, open={open_val}, prev_day_close={prev_day_close}")
-                                        row["open"] = open_val
-                                        # Use daily EOD volume (most reliable source)
-                                        day_vol = daily_prices.iloc[i].get("volume") or daily_prices.iloc[i].get("Volume")
-                                        if day_vol and day_vol > 0:
-                                            row["volume"] = day_vol
-                                            logger.info(f"{item.ticker}: Using daily EOD volume: {day_vol}")
-                                        # Use prev_day_close from previous iteration
-                                        if prev_day_close is not None:
-                                            row["prev_close"] = prev_day_close
-                                            if row["price"] is not None:
-                                                row["change"] = row["price"] - prev_day_close
-                                                row["change_percent"] = row["change"] / prev_day_close
-                                        break
-                                    else:
-                                        # Remember this day's close as potential prev_close
-                                        prev_day_close = daily_prices.iloc[i].get("close") or daily_prices.iloc[i].get("Close")
-
-                                # If trading_day wasn't found in daily data (e.g., non-US market
-                                # already closed today but daily data not yet updated), prefer
-                                # LivePrice data for open/prev_close (most up-to-date source,
-                                # especially for non-US exchanges using yfinance real-time).
-                                if row["prev_close"] is None:
-                                    live = self.data_manager.get_live_price(item.ticker, exchange)
-                                    if live:
-                                        lp_open = live.get("open")
-                                        lp_prev = live.get("previous_close")
-                                        if lp_open is not None:
-                                            row["open"] = lp_open
-                                        if lp_prev is not None:
-                                            row["prev_close"] = lp_prev
-                                        if row["prev_close"] and row["price"]:
-                                            row["change"] = row["price"] - row["prev_close"]
-                                            row["change_percent"] = row["change"] / row["prev_close"]
-                                    # Fallback to daily data if LivePrice didn't have the data
-                                    if row["prev_close"] is None and prev_day_close is not None:
-                                        row["prev_close"] = prev_day_close
-                                        if row["open"] is None:
-                                            open_col = "open" if "open" in intraday.columns else "Open"
-                                            first_valid = intraday[intraday[open_col].notna()]
-                                            if len(first_valid) > 0:
-                                                row["open"] = first_valid.iloc[0][open_col]
-                                        if row["price"] is not None:
-                                            row["change"] = row["price"] - prev_day_close
-                                            row["change_percent"] = row["change"] / prev_day_close
-
-                            # Use LivePrice previous_close when available — yfinance daily
-                            # data may be auto-adjusted (dividends/splits), so LivePrice
-                            # provides the actual unadjusted previous close for change calc
-                            live = self.data_manager.get_live_price(item.ticker, exchange)
-                            if live:
-                                if row["open"] is None:
-                                    row["open"] = live.get("open")
-                                lp_prev = live.get("previous_close")
-                                if lp_prev is not None:
-                                    row["prev_close"] = lp_prev
-                                    if row["price"] is not None:
-                                        row["change"] = row["price"] - lp_prev
-                                        row["change_percent"] = row["change"] / lp_prev
-                        elif daily_prices is not None and len(daily_prices) >= 2:
-                            # Fallback to daily data
-                            latest = daily_prices.iloc[-1]
-                            prev = daily_prices.iloc[-2]
-                            row["open"] = latest.get("open") or latest.get("Open")
-                            row["price"] = latest.get("close") or latest.get("Close")
-                            row["volume"] = latest.get("volume") or latest.get("Volume")
-                            prev_close = prev.get("close") or prev.get("Close")
-                            row["prev_close"] = prev_close
-                            if prev_close and row["price"]:
-                                row["change"] = row["price"] - prev_close
-                                row["change_percent"] = row["change"] / prev_close
-
-                        # Final fallback to live prices if still missing data
-                        if row["price"] is None or row["open"] is None or row["prev_close"] is None or row["volume"] is None:
-                            live = self.data_manager.get_live_price(item.ticker, exchange)
-                            logger.debug(f"Final live price fallback for {item.ticker}: {live}")
-                            if live:
-                                if row["price"] is None:
-                                    row["price"] = live.get("price")
-                                if row["open"] is None:
-                                    row["open"] = live.get("open")
-                                if row["prev_close"] is None:
-                                    row["prev_close"] = live.get("previous_close")
-                                if row["volume"] is None:
-                                    row["volume"] = live.get("volume")
-                                # Recalculate change if we now have the data
-                                if row["prev_close"] and row["price"] and row["change"] is None:
-                                    row["change"] = row["price"] - row["prev_close"]
-                                    row["change_percent"] = row["change"] / row["prev_close"]
-                    else:
-                        # For other periods (1W, 1M, etc.), use daily data
-                        start, end = get_date_range(self._current_period, min_trading_days=0)
-                        prices = self.data_manager.get_daily_prices(
-                            item.ticker, exchange, start, end
-                        )
-                        logger.info(f"Got daily prices for {item.ticker}: {len(prices) if prices is not None else 'None'}")
-
-                        # Get current price from intraday data (same source as 1D)
-                        # so price and market cap are consistent across all periods
-                        from datetime import date, timedelta
-                        market_open, market_close = get_last_trading_day_hours(exchange)
-                        now_utc = datetime.now(timezone.utc)
-                        end_dt = now_utc if (market_open.date() == now_utc.date() and market_open <= now_utc <= market_close) else market_close
-                        intraday = self.data_manager.get_intraday_prices(
-                            item.ticker, exchange, "1m", market_open, end_dt,
-                            use_cache=True, force_refresh=False
-                        )
-                        if intraday is not None and len(intraday) >= 1:
-                            close_col = "close" if "close" in intraday.columns else "Close"
-                            valid_bars = intraday[intraday[close_col].notna()]
-                            if len(valid_bars) > 0:
-                                row["price"] = valid_bars.iloc[-1][close_col]
-
-                        if prices is not None and len(prices) >= 1:
-                            # Sort by date ascending to ensure correct first/last
-                            prices_sorted = prices.sort_index(ascending=True)
-                            first = prices_sorted.iloc[0]  # Oldest (period start)
-
-                            row["open"] = first.get("open") or first.get("Open")  # Period start open
-                            row["volume"] = prices_sorted["volume"].sum() if "volume" in prices_sorted.columns else (prices_sorted["Volume"].sum() if "Volume" in prices_sorted.columns else None)
-
-                            # Fallback price from daily data if intraday unavailable
-                            if row["price"] is None:
-                                latest = prices_sorted.iloc[-1]
-                                row["price"] = latest.get("close") or latest.get("Close")
-
-                            # Change is from period's open to current price
-                            period_open = row["open"]
-                            if period_open and row["price"]:
-                                row["change"] = row["price"] - period_open
-                                row["change_percent"] = row["change"] / period_open
-                        elif row["price"] is None:
-                            # No data at all, try live price
-                            live = self.data_manager.get_live_price(item.ticker, exchange)
-                            if live:
-                                row["price"] = live.get("price")
-                                row["open"] = live.get("open")
-                                row["prev_close"] = live.get("previous_close")
-                                row["volume"] = live.get("volume")
-
-                    # Get P/E ratio and market cap from company info
-                    company = self.data_manager.get_company_info(item.ticker, exchange)
-                    if company:
-                        if company.pe_ratio:
-                            row["pe_ratio"] = company.pe_ratio
-
-                        # Convert non-USD prices to USD for display
-                        fx = company.fx_rate_to_usd
-                        if fx and company.currency and company.currency != "USD":
-                            for key in ("price", "open", "prev_close", "change"):
-                                if row.get(key) is not None:
-                                    row[key] = row[key] * fx
-
-                        # Compute market cap = shares_outstanding × displayed price (USD)
-                        fundamentals = self.data_manager.get_fundamentals(item.ticker, exchange)
-                        if fundamentals and row.get("price"):
-                            shares = fundamentals.get("highlights", {}).get("shares_outstanding")
-                            if shares:
-                                row["market_cap"] = int(shares * row["price"])
-
-                    # Log final row values for debugging
-                    logger.info(f"{item.ticker} row: price={row.get('price')}, open={row.get('open')}, prev_close={row.get('prev_close')}, volume={row.get('volume')}, change={row.get('change')}")
-                except Exception as e:
-                    logger.error(f"Error fetching prices for {item.ticker}: {e}")
-                    import traceback
-                    logger.error(traceback.format_exc())
+                logger.debug(f"{item.ticker} row: price={row.get('price')}, change={row.get('change')}")
+            except Exception as e:
+                logger.error(f"Error building row for {item.ticker}: {e}")
 
             data.append(row)
+
+        elapsed = (_time.time() - t0) * 1000
+        logger.info(f"Watchlist {watchlist_id} refreshed {len(data)} items in {elapsed:.0f}ms (batch)")
 
         model = table.property("model")
         if model:

@@ -50,11 +50,10 @@ class DataManager:
         return None
 
     def _setup_providers(self) -> None:
-        """Initialize configured data providers."""
-        if self.config.api_keys.eodhd:
-            self.providers["eodhd"] = EODHDProvider(self.config.api_keys.eodhd)
-            self.provider_priority.append("eodhd")
-            logger.info("EODHD provider initialized")
+        """Initialize data providers (data server handles authentication)."""
+        self.providers["eodhd"] = EODHDProvider()
+        self.provider_priority.append("eodhd")
+        logger.info("EODHD provider initialized (via data server)")
 
     def get_provider(self, name: str) -> Optional[DataProviderBase]:
         """Get a specific provider by name."""
@@ -343,6 +342,20 @@ class DataManager:
                 logger.warning(f"Failed to get live prices: {e}")
         return {}
 
+    def get_batch_highlights(self, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Get company highlights for multiple symbols in one batch call.
+
+        Returns dict mapping symbol to {name, pe_ratio, eps, market_cap,
+        shares_outstanding, currency, fx_rate_to_usd, ...}.
+        """
+        eodhd = self.providers.get("eodhd")
+        if eodhd and isinstance(eodhd, EODHDProvider):
+            try:
+                return eodhd.get_batch_highlights(symbols)
+            except Exception as e:
+                logger.warning(f"Failed to get batch highlights: {e}")
+        return {}
+
     def get_forex_rates(
         self, currency: str, from_date: str = None, to_date: str = None,
     ) -> Dict[str, float]:
@@ -353,19 +366,17 @@ class DataManager:
         eodhd = self.providers.get("eodhd")
         if eodhd and isinstance(eodhd, EODHDProvider):
             try:
-                import os
                 import requests as http_requests
-                url = os.getenv("DATA_SERVER_URL", "").rstrip("/")
-                if url:
-                    params = {"from_date": from_date, "to_date": to_date}
-                    params = {k: v for k, v in params.items() if v}
-                    resp = http_requests.get(
-                        f"{url}/api/forex/rates/{currency}",
-                        params=params,
-                        timeout=10,
-                    )
-                    if resp.status_code == 200:
-                        return resp.json().get("rates", {})
+                params = {"from_date": from_date, "to_date": to_date}
+                params = {k: v for k, v in params.items() if v}
+                base = eodhd.BASE_URL.rsplit("/api", 1)[0]
+                resp = http_requests.get(
+                    f"{base}/api/forex/rates/{currency}",
+                    params=params,
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    return resp.json().get("rates", {})
             except Exception as e:
                 logger.warning(f"Failed to get forex rates for {currency}: {e}")
         return {}

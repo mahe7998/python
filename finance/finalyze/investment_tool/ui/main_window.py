@@ -723,9 +723,14 @@ class MainWindow(QMainWindow):
             symbols = list(stock_refs_by_symbol.keys())
 
             # For 1D, use live prices which have today's price vs previous close
-            # Provider already filters stale live prices (market_timestamp not today)
+            # Filter to today's timestamps for treemap (stale data = wrong daily change)
             if selected_period == "1D":
-                live_prices = self.data_manager.get_all_live_prices()
+                all_live = self.data_manager.get_all_live_prices()
+                today_str = date.today().isoformat()
+                live_prices = {
+                    k: v for k, v in all_live.items()
+                    if str(v.get("market_timestamp", "")).startswith(today_str)
+                }
                 if live_prices:
                     for symbol in symbols:
                         if symbol in live_prices:
@@ -754,6 +759,9 @@ class MainWindow(QMainWindow):
                 batch_changes.update(fallback)
                 logger.info(f"Batch API returned {len(fallback)}/{len(missing_symbols)} price changes for period={selected_period}")
 
+        # Batch fetch company highlights for all symbols (1 call instead of N)
+        all_highlights = self.data_manager.get_batch_highlights(list(stock_refs_by_symbol.keys()))
+
         # Second pass: build treemap items using batch results
         for ticker_key, (stock_ref, category) in stock_refs_by_symbol.items():
             try:
@@ -764,54 +772,22 @@ class MainWindow(QMainWindow):
                     if current is None:
                         continue
                 else:
-                    # Fallback: fetch individually (shouldn't happen often)
-                    prices = self.data_manager.get_daily_prices(
-                        stock_ref.ticker, stock_ref.exchange, start, end
-                    )
-                    if prices is None or len(prices) < 1:
-                        continue
-                    current = prices["close"].iloc[-1]
-                    if len(prices) >= 2:
-                        prev = prices["close"].iloc[0]
-                        change = (current - prev) / prev if prev != 0 else 0
-                    else:
-                        change = 0
+                    continue  # No price data, skip
 
-                # Get company info for market cap and P/E
-                company = self.data_manager.get_company_info(
-                    stock_ref.ticker, stock_ref.exchange
-                )
+                hl = all_highlights.get(ticker_key, {})
 
                 # Convert price to USD for non-USD stocks
                 price_usd = current
-                if company and company.fx_rate_to_usd and company.currency and company.currency != "USD":
-                    price_usd = current * company.fx_rate_to_usd
+                fx = hl.get("fx_rate_to_usd")
+                ccy = hl.get("currency")
+                if fx and ccy and ccy != "USD":
+                    price_usd = current * fx
 
-                # Compute market cap dynamically = shares × price_usd
-                market_cap = 1e9  # fallback
-                fundamentals = self.data_manager.get_fundamentals(
-                    stock_ref.ticker, stock_ref.exchange
-                )
-                if fundamentals:
-                    shares = fundamentals.get("highlights", {}).get("shares_outstanding")
-                    if shares and price_usd:
-                        market_cap = shares * price_usd
+                # Market cap from batch highlights (already computed server-side)
+                market_cap = hl.get("market_cap") or 1e9
 
-                # Recompute P/E with FX conversion (price_usd is in USD, EPS may not be)
-                pe_ratio = company.pe_ratio if company else None
-                if fundamentals and price_usd:
-                    highlights = fundamentals.get("highlights", {})
-                    eps = highlights.get("eps")
-                    earnings_ccy = highlights.get("earnings_currency")
-                    if eps and eps != 0:
-                        eps_usd_rate = 1.0
-                        if earnings_ccy and earnings_ccy != "USD":
-                            rates = self.data_manager.get_forex_rates(earnings_ccy)
-                            if rates:
-                                eps_usd_rate = rates[max(rates.keys())]
-                        computed_pe = price_usd / (eps * eps_usd_rate)
-                        if computed_pe > 0:
-                            pe_ratio = computed_pe
+                # P/E from batch highlights
+                pe_ratio = hl.get("pe_ratio")
 
                 # Apply market cap filter
                 if selected_filter == "Large Cap (>$200B)" and (market_cap or 0) < 200e9:
@@ -825,7 +801,7 @@ class MainWindow(QMainWindow):
 
                 items.append(TreemapItem(
                     ticker=stock_ref.ticker,
-                    name=company.name if company else stock_ref.ticker,
+                    name=hl.get("name") or stock_ref.ticker,
                     exchange=stock_ref.exchange,
                     value=market_cap or 1e9,
                     change_percent=change,

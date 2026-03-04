@@ -22,72 +22,108 @@ logger = logging.getLogger(__name__)
 
 
 async def _refresh_stale_live_prices():
-    """Refresh stale LivePrice entries from yfinance on startup."""
-    from datetime import date as date_type
+    """Sync LivePrice table with daily_prices on startup. No external API calls.
+
+    1. Update LivePrice rows where daily_prices has a newer/different close.
+    2. Delete any LivePrice entries that are still stale (no daily data available).
+       They will be repopulated by the price worker when markets open.
+    """
+    from datetime import datetime, date as date_type
+    from decimal import Decimal
     from data_server.db.database import async_session_factory
-    from data_server.db.models import LivePrice
-    from data_server.api.routes import is_exchange_market_open
-    from sqlalchemy import select
+    from data_server.db.models import LivePrice, DailyPrice
+    from sqlalchemy import select, delete, func, and_
 
     async with async_session_factory() as session:
         result = await session.execute(select(LivePrice))
         prices = result.scalars().all()
+        if not prices:
+            return
 
-        stale_open = []
-        stale_closed = []
+        live_by_ticker = {p.ticker: p for p in prices}
+
+        # Get the latest daily close for each tracked ticker in one query
+        latest_dates_subq = (
+            select(
+                DailyPrice.ticker,
+                func.max(DailyPrice.date).label("max_date"),
+            )
+            .where(DailyPrice.ticker.in_(list(live_by_ticker.keys())))
+            .group_by(DailyPrice.ticker)
+            .subquery()
+        )
+        latest_daily = await session.execute(
+            select(DailyPrice).join(
+                latest_dates_subq,
+                and_(
+                    DailyPrice.ticker == latest_dates_subq.c.ticker,
+                    DailyPrice.date == latest_dates_subq.c.max_date,
+                ),
+            )
+        )
+
+        updated_count = 0
+        updated_tickers = set()
+        for dp in latest_daily.scalars().all():
+            lp = live_by_ticker.get(dp.ticker)
+            if not lp or dp.close is None:
+                continue
+
+            lp_date = lp.market_timestamp.date() if lp.market_timestamp else date_type.min
+            dp_date = dp.date if isinstance(dp.date, date_type) else dp.date.date()
+            prices_differ = (
+                lp.price is not None
+                and abs(float(dp.close) - float(lp.price)) > 0.01
+            )
+
+            if dp_date > lp_date or prices_differ:
+                prev_result = await session.execute(
+                    select(DailyPrice.close)
+                    .where(DailyPrice.ticker == dp.ticker, DailyPrice.date < dp.date)
+                    .order_by(DailyPrice.date.desc())
+                    .limit(1)
+                )
+                prev_close = prev_result.scalar()
+
+                lp.price = dp.close
+                lp.open = dp.open
+                lp.high = dp.high
+                lp.low = dp.low
+                if prev_close is not None:
+                    lp.previous_close = prev_close
+                    lp.change = dp.close - prev_close
+                    if prev_close != 0:
+                        lp.change_percent = Decimal(str(
+                            float((dp.close - prev_close) / prev_close) * 100
+                        ))
+                lp.volume = dp.volume
+                lp.market_timestamp = datetime.combine(dp_date, datetime.min.time())
+                lp.updated_at = datetime.utcnow()
+                lp.data_source = "daily_prices_db"
+                updated_count += 1
+                updated_tickers.add(dp.ticker)
+
+        # Delete LivePrice entries that are still stale (no daily data to fix them)
+        stale_tickers = []
         for p in prices:
+            if p.ticker in updated_tickers:
+                continue
             if p.market_timestamp:
                 age_days = (date_type.today() - p.market_timestamp.date()).days
                 if age_days > 2:
-                    exchange_code = p.exchange or (p.ticker.split(".")[-1] if "." in p.ticker else "US")
-                    if is_exchange_market_open(exchange_code):
-                        stale_open.append(p.ticker)
-                    else:
-                        stale_closed.append(p.ticker)
+                    stale_tickers.append(p.ticker)
 
-        if not stale_open and not stale_closed:
-            logger.info("No stale LivePrice entries found")
-            return
+        if stale_tickers:
+            await session.execute(
+                delete(LivePrice).where(LivePrice.ticker.in_(stale_tickers))
+            )
+            logger.info(f"Startup: deleted {len(stale_tickers)} stale LivePrice entries with no daily data")
 
-        yf_data = {}    # code -> (quote, source_label)
-        if stale_open:
-            logger.info(f"Refreshing {len(stale_open)} stale prices (market open) from yfinance fast_info")
-            from data_server.services.yfinance_client import get_live_prices as yf_live
-            yf_results = await yf_live(stale_open)
-            for quote in yf_results:
-                code = quote.get("code")
-                if code:
-                    yf_data[code] = (quote, "yfinance_fast_info")
-
-        if stale_closed:
-            logger.info(f"Refreshing {len(stale_closed)} stale prices (market closed) from yf.download EOD batch")
-            from data_server.services.yfinance_client import get_eod_batch
-            eod_results = await get_eod_batch(stale_closed)
-            for quote in eod_results:
-                code = quote.get("code")
-                if code:
-                    yf_data[code] = (quote, "yfinance_eod_batch")
-
-        if yf_data:
-            from datetime import datetime
-            from decimal import Decimal
-            for p in prices:
-                if p.ticker in yf_data:
-                    q, source = yf_data[p.ticker]
-                    if q.get("close") is not None:
-                        p.price = Decimal(str(q["close"]))
-                        p.open = Decimal(str(q["open"])) if q.get("open") is not None else p.open
-                        p.high = Decimal(str(q["high"])) if q.get("high") is not None else p.high
-                        p.low = Decimal(str(q["low"])) if q.get("low") is not None else p.low
-                        p.previous_close = Decimal(str(q["previousClose"])) if q.get("previousClose") is not None else p.previous_close
-                        p.change = Decimal(str(q["change"])) if q.get("change") is not None else p.change
-                        p.change_percent = Decimal(str(q["change_p"])) if q.get("change_p") is not None else p.change_percent
-                        p.volume = q.get("volume") or p.volume
-                        p.market_timestamp = datetime.utcnow()
-                        p.updated_at = datetime.utcnow()
-                        p.data_source = source
-            await session.commit()
-            logger.info(f"Startup: persisted {len(yf_data)} refreshed prices to LivePrice table")
+        await session.commit()
+        if updated_count:
+            logger.info(f"Startup: updated {updated_count} LivePrice entries from daily_prices (no API calls)")
+        else:
+            logger.info("Startup: all LivePrice entries already up to date")
 
 
 async def _invalidate_stale_eod_caches():
@@ -131,7 +167,7 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting data server...")
     await init_db()
-    await _refresh_stale_live_prices()
+    await _refresh_stale_live_prices()  # Fast: DB-only, no API calls
     await _invalidate_stale_eod_caches()
     await start_scheduler()
     logger.info("Data server started successfully")

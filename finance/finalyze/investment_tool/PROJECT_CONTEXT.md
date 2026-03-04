@@ -6,9 +6,10 @@ A desktop application for tracking and analyzing stock investments, built with P
 ## Tech Stack
 - **UI Framework**: PySide6 (Qt6)
 - **Charting**: pyqtgraph
-- **Data Server**: FastAPI + PostgreSQL (caching proxy, runs in Docker)
+- **Data Server**: FastAPI + PostgreSQL + SQLAlchemy async (caching proxy, runs in Docker)
 - **Data Providers**: EODHD API (primary), yfinance (fallback/validation), SEC EDGAR (shares outstanding)
 - **Package Manager**: uv
+- **Key Design Principle**: Frontend NEVER calls EODHD/yfinance directly — all requests go through data server for caching
 
 ## Running the Application
 
@@ -25,9 +26,8 @@ docker compose logs -f data-server     # Should show "Uvicorn running on http://
 
 ### Step 2: Start the Investment Tool App
 ```bash
-cd /Users/jmahe/projects/python/finance/finalyze/investment_tool
-source .venv/bin/activate
-python main.py
+cd /Users/jmahe/projects/python/finance/finalyze
+investment_tool/.venv/bin/python -m investment_tool.main
 ```
 
 ### Stop Data Server
@@ -53,11 +53,18 @@ docker compose down
 ```
 
 ### Data Flow
-1. App requests data from `DataManager`
-2. DataManager requests from data server (port 8000)
+1. App requests data from `DataManager` using **batch endpoints** (never per-stock loops)
+2. DataManager routes through `EODHDProvider` to data server (port 8000)
 3. Data server checks PostgreSQL cache
 4. If not cached, fetches from EODHD API (with yfinance/SEC fallbacks)
 5. Response cached in PostgreSQL
+6. LivePrice table kept in sync with daily closes via scheduled worker (21:45 UTC) and startup DB refresh
+
+### Performance Architecture
+- **Startup (<1s)**: Only loads treemap prices + watchlist data using batch endpoints
+- **Lazy loading**: News, financials, fundamentals fetched on-demand when a stock is selected
+- **Batch endpoints**: `/live-prices` (all cached prices), `/batch/daily-changes` (period changes), `/batch/highlights` (company data for treemap/watchlist)
+- **No external API calls at startup**: LivePrice synced from daily_prices DB table
 
 ## Project Structure
 
@@ -136,7 +143,7 @@ finalyze/
 | Market Treemap | Left panel | Stocks sized by market cap, colored by change % |
 | Stock Chart | Right panel | Candlestick/line chart with measure tool, volume hover |
 | Key Metrics | Right panel | Price, Change, Prev Close, Day OHLC, 52W High/Low, Market Cap, P/E, Avg Volume |
-| Watchlist | Bottom tab | Multi-tab with auto-refresh (60s), tab reorder/rename, period-aware |
+| Watchlist | Bottom tab | Multi-tab with auto-refresh (60s), tab reorder/rename, period-aware, batch-only data fetching |
 | Quarterly Financials | Bottom tab | Grouped bar charts, metric selector, earnings date, yfinance cross-validation |
 | Fundamentals Overview | Bottom tab | Balance sheet, income statement, cash flow grids |
 | ETF Overview | Bottom tab (ETFs) | Fund info, performance, top 10 holdings, sector/geographic allocation charts |
@@ -168,8 +175,12 @@ All views sync to treemap's period: 1D, 1W, 1M, 3M, 6M, YTD, 1Y, 2Y, 5Y
 | Intraday caching | Dynamic TTL (24h historical, 60s today) |
 | Historical prefetch | Auto-fetches 5Y daily data when stock added to tracking |
 | Earnings calendar | EODHD + yfinance fallback for next/last earnings |
-| Live prices | Batch endpoint, 15s refresh via background worker |
+| Live prices | `/live-prices` batch endpoint, 15s refresh via background worker |
+| Batch daily changes | `/batch/daily-changes` — period price changes for multiple symbols |
+| Batch highlights | `/batch/highlights` — company data (P/E, market cap, sector) for multiple symbols in one DB query |
+| LivePrice sync | Scheduled worker (21:45 UTC) syncs LivePrice with daily closes after market close; startup refreshes from DB (no API calls) |
 | Server status | `/server-status` returns EODHD API call count |
+| FX conversion | `/forex/rates/{currency}` with server-side market cap conversion |
 
 ## Important Implementation Notes
 
@@ -200,11 +211,13 @@ format_percent(0.05)  # Returns "+5.00%"
 market_cap = shares_outstanding * current_price_usd
 ```
 
-### Watchlist Volume
+### Watchlist Data (Batch-Only)
 ```python
-# Intraday volume from EODHD is unreliable (mixes cumulative and per-bar)
-# Always use daily EOD volume for watchlist display
-row["volume"] = daily_prices.iloc[trading_day_index].get("volume")
+# Watchlist uses ONLY batch calls — zero per-stock API requests
+all_live = data_manager.get_all_live_prices()       # 1 call for all prices
+all_highlights = data_manager.get_batch_highlights(symbols)  # 1 call for P/E, market cap
+batch_changes = data_manager.get_batch_daily_changes(symbols, start, end)  # 1 call for period changes
+# Volume comes from live prices (no separate fetch)
 ```
 
 ### QThread Safety
@@ -227,6 +240,14 @@ QTimer.singleShot(200, lambda: self._do_period_update(period))
 - App logs: `~/.investment_tool/logs/app.log`
 - Data server logs: `docker compose logs data-server`
 - PostgreSQL data: Docker volume `data_server_postgres_data`
+
+## Performance Optimizations (Completed)
+- **Sub-second startup**: Treemap + watchlists load in <1s using batch endpoints (down from ~90s with per-stock API calls)
+- **Batch-only watchlist**: Uses `get_all_live_prices()` + `get_batch_highlights()` + `get_batch_daily_changes()` — zero per-stock calls
+- **Batch treemap**: Single `get_batch_highlights()` call replaces N×`get_company_info()` + N×`get_fundamentals()` loops
+- **Lazy loading**: News, financials, fundamentals only fetched when a stock is selected (not at startup)
+- **No direct EODHD/yfinance calls**: Frontend routes everything through data server; `.env` loading fixed to always find `DATA_SERVER_URL`
+- **LivePrice never stale**: Synced with daily_prices DB on startup (no API calls) and via scheduled worker after market close
 
 ## Known Issues
 - PXD ticker returns "Data not found" (delisted stock)

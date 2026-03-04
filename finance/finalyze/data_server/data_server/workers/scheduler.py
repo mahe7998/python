@@ -117,25 +117,99 @@ async def daily_cleanup():
 
 
 async def refresh_eod_caches():
-    """Invalidate all EOD daily price caches after US market close.
+    """Invalidate EOD caches and sync LivePrice with latest daily closes.
 
-    This forces fresh data to be fetched on the next request, ensuring
-    users see today's closing prices instead of stale cached data.
+    Runs after US market close. Two steps:
+    1. Invalidate daily price cache metadata so next request fetches fresh EOD data.
+    2. Update LivePrice table from daily_prices so live data reflects final closes
+       (not stale intraday snapshots from during the trading day).
     """
-    from sqlalchemy import delete
+    from datetime import datetime, date as date_type
+    from decimal import Decimal
+    from sqlalchemy import delete, select, func, and_
     from data_server.db.database import async_session_factory
-    from data_server.db.models import CacheMetadata
+    from data_server.db.models import CacheMetadata, LivePrice, DailyPrice
 
-    logger.info("Invalidating EOD daily price caches after market close...")
+    logger.info("EOD refresh: invalidating caches and syncing LivePrice...")
 
     async with async_session_factory() as session:
+        # Step 1: Invalidate EOD cache metadata
         result = await session.execute(
             delete(CacheMetadata).where(CacheMetadata.cache_key.startswith("eod:"))
         )
         deleted = result.rowcount
-        await session.commit()
+        logger.info(f"Invalidated {deleted} EOD cache entries")
 
-    logger.info(f"Invalidated {deleted} EOD cache entries")
+        # Step 2: Update LivePrice from latest daily_prices
+        result = await session.execute(select(LivePrice))
+        prices = result.scalars().all()
+        if not prices:
+            await session.commit()
+            return
+
+        live_by_ticker = {p.ticker: p for p in prices}
+
+        latest_dates_subq = (
+            select(
+                DailyPrice.ticker,
+                func.max(DailyPrice.date).label("max_date"),
+            )
+            .where(DailyPrice.ticker.in_(list(live_by_ticker.keys())))
+            .group_by(DailyPrice.ticker)
+            .subquery()
+        )
+        latest_daily = await session.execute(
+            select(DailyPrice).join(
+                latest_dates_subq,
+                and_(
+                    DailyPrice.ticker == latest_dates_subq.c.ticker,
+                    DailyPrice.date == latest_dates_subq.c.max_date,
+                ),
+            )
+        )
+
+        updated_count = 0
+        for dp in latest_daily.scalars().all():
+            lp = live_by_ticker.get(dp.ticker)
+            if not lp or dp.close is None:
+                continue
+
+            lp_date = lp.market_timestamp.date() if lp.market_timestamp else date_type.min
+            dp_date = dp.date if isinstance(dp.date, date_type) else dp.date.date()
+            prices_differ = (
+                lp.price is not None
+                and abs(float(dp.close) - float(lp.price)) > 0.01
+            )
+
+            if dp_date > lp_date or prices_differ:
+                prev_result = await session.execute(
+                    select(DailyPrice.close)
+                    .where(DailyPrice.ticker == dp.ticker, DailyPrice.date < dp.date)
+                    .order_by(DailyPrice.date.desc())
+                    .limit(1)
+                )
+                prev_close = prev_result.scalar()
+
+                lp.price = dp.close
+                lp.open = dp.open
+                lp.high = dp.high
+                lp.low = dp.low
+                if prev_close is not None:
+                    lp.previous_close = prev_close
+                    lp.change = dp.close - prev_close
+                    if prev_close != 0:
+                        lp.change_percent = Decimal(str(
+                            float((dp.close - prev_close) / prev_close) * 100
+                        ))
+                lp.volume = dp.volume
+                lp.market_timestamp = datetime.combine(dp_date, datetime.min.time())
+                lp.updated_at = datetime.utcnow()
+                lp.data_source = "daily_prices_db"
+                updated_count += 1
+
+        await session.commit()
+        if updated_count:
+            logger.info(f"EOD refresh: synced {updated_count} LivePrice entries with daily closes")
 
 
 async def update_fundamentals():

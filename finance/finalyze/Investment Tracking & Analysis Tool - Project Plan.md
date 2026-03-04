@@ -20,7 +20,7 @@ Build a local-only (non-web) Python desktop application for comprehensive invest
 ```
 GUI:            PySide6 (Qt6) - LGPL license, official Qt binding
 Visualization:  pyqtgraph (real-time), matplotlib (static), mplfinance (candlesticks)
-Database:       DuckDB (columnar, fast analytics)
+Database:       PostgreSQL (via data server Docker) + SQLAlchemy async
 ```
 
 ### Data & Analysis
@@ -1305,10 +1305,11 @@ For the RL backtesting, start with simple strategies before jumping to neural ne
   - Multiple watchlists (tabs), drag-to-reorder tabs, rename via context menu
   - Columns: Ticker | Open | Price | Change | Change % | P/E | Mkt Cap | Volume
   - **Auto-refresh**: 60-second timer when market is open
-  - **Period-aware data fetching**:
-    - 1D: Intraday data for current price, daily EOD volume, prev day close for change
-    - 1W+: Daily data, intraday price (consistent across periods), change from period open
-  - **Dynamic market cap**: Always computed as shares_outstanding × current_price (USD)
+  - **Batch-only data fetching** (zero per-stock API calls, ~10ms refresh):
+    - Uses `get_all_live_prices()` + `get_batch_highlights()` + `get_batch_daily_changes()`
+    - 1D: Price/change from live prices, P/E/market cap from batch highlights
+    - 1W+: Change from batch daily changes, current price from live prices
+  - **Dynamic market cap**: Computed server-side in batch highlights (shares × price × fx_rate)
   - Add stocks via search dialog or treemap context menu
   - Remove via context menu, sortable columns
 
@@ -1389,12 +1390,15 @@ investment_tool → data_server (FastAPI) → EODHD API
 
 #### Data Server Features
 - **Transparent caching**: All API calls cached in PostgreSQL with dynamic TTL
-- **Background workers**: Price updates (15s), news updates (15min) via APScheduler
+- **Background workers**: Price updates (15s), news updates (15min), EOD sync (21:45 UTC) via APScheduler
 - **Multi-source data**: EODHD primary, yfinance fallback for financials/earnings/search, SEC EDGAR for shares
+- **Batch endpoints**: `/live-prices`, `/batch/daily-changes`, `/batch/highlights` — frontend never loops per-stock
+- **LivePrice sync**: After market close, scheduled worker syncs LivePrice with daily closes; startup refreshes from DB only (zero API calls)
 - **Earnings calendar**: `/calendar/earnings/{symbol}` with EODHD + yfinance fallback
 - **Data quality**: yfinance cross-validation for quarterly financials, override endpoint
 - **Server status**: `/server-status` with EODHD API call statistics
 - **Stock tracking**: Auto-prefetches 5Y daily data when stock added
+- **FX conversion**: Server-side forex rates for non-USD market cap computation
 - **DB migrations**: Auto ALTER TABLE at startup for new columns
 
 ### Running the Application
@@ -1407,9 +1411,8 @@ docker compose up -d
 
 #### Step 2: Start the Investment Tool App
 ```bash
-cd /Users/jmahe/projects/python/finance/finalyze/investment_tool
-source .venv/bin/activate
-python main.py
+cd /Users/jmahe/projects/python/finance/finalyze
+investment_tool/.venv/bin/python -m investment_tool.main
 ```
 
 #### Stop Data Server
@@ -1420,14 +1423,14 @@ docker compose down
 
 ### Key Implementation Details
 
-#### Watchlist Data Modes
-- **1D mode**: Uses intraday data, change = current price - prev day close
-- **1W+ modes**:
-  - Fetches period's daily data
-  - Open = period's first day open price
-  - Price = today's intraday price (consistent across all periods)
-  - Change = current price - period open (true period performance)
-  - Volume = daily EOD volume (EODHD intraday volume is unreliable)
+#### Watchlist Data Modes (Batch-Only)
+All watchlist data comes from batch endpoints — zero per-stock API calls (~10ms total refresh):
+- `get_all_live_prices()` — current price, open, prev close, volume
+- `get_batch_highlights()` — P/E, market cap, sector
+- `get_batch_daily_changes()` — period start/end prices for 1W+ modes
+
+- **1D mode**: Price/change from live prices (price vs previous_close)
+- **1W+ modes**: Current price from live, change from batch daily changes
 
 #### Market Cap (Critical)
 - **NEVER use `company.market_cap`** — stale value from fundamentals
@@ -1458,6 +1461,28 @@ Status bar shows: `Data Server: Connected | EODHD Calls: X`
 - Uses `QTimer.singleShot(200ms)` to defer heavy work
 - macOS Cocoa combo box needs ~200ms to fully render before blocking the UI thread
 - Metrics show "•••" loading dots, chart clears, wait cursor during switch
+
+### Performance Optimizations ✅
+
+#### Startup (<1s, down from ~90s)
+- **Root cause fixed**: `.env` loading path-independent (`DATA_SERVER_URL` always found)
+- **Data server mandatory**: `EODHDProvider` raises `RuntimeError` if `DATA_SERVER_URL` not set (fail-fast)
+- **Batch-only startup**: Treemap uses `/live-prices` + `/batch/daily-changes` + `/batch/highlights` (3 calls total for 97 stocks)
+- **Watchlist batch**: Uses same 3 batch endpoints (~10ms per watchlist)
+- **Lazy loading**: News, financials, fundamentals deferred until stock selected
+- **No duplicate refreshes**: Removed redundant watchlist refresh during tab creation
+
+#### LivePrice Data Integrity
+- **Never stale**: `refresh_eod_caches` scheduler (21:45 UTC) syncs LivePrice with final daily closes after market close
+- **Startup DB-only**: `_refresh_stale_live_prices` updates from `daily_prices` table (zero API calls), deletes entries with no daily data
+- **Price worker**: Updates LivePrice every 15s during market hours via EODHD batch API
+
+#### Data Server Batch Endpoints
+| Endpoint | Purpose | Performance |
+|----------|---------|-------------|
+| `GET /live-prices` | All cached live prices | ~5ms (single DB query) |
+| `POST /batch/daily-changes` | Period price changes for N symbols | ~10ms (single DB query) |
+| `POST /batch/highlights` | Company data (P/E, market cap, sector) for N symbols | ~15ms (3 DB queries) |
 
 ### File Locations
 - Config: `~/.investment_tool/settings.yaml`

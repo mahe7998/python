@@ -2035,6 +2035,109 @@ async def update_forex_rates(
     return {"status": "ok", "results": results}
 
 
+@router.post("/batch/highlights")
+async def get_batch_highlights(
+    request: dict,
+    session: AsyncSession = Depends(get_session),
+):
+    """Get company highlights for multiple symbols in a single DB query.
+
+    Request body: {"symbols": ["AAPL.US", "GOOG.US", ...]}
+    Returns: {"AAPL.US": {name, pe_ratio, eps, market_cap, shares_outstanding, currency, fx_rate_to_usd, ...}, ...}
+
+    Uses a single SELECT ... WHERE ticker IN (...) query plus batch LivePrice lookup.
+    No EODHD/yfinance API calls — all data from cache.
+    """
+    start_time = time.time()
+    symbols = request.get("symbols", [])
+    if not symbols:
+        return {}
+
+    from data_server.db.models import CompanyHighlight, LivePrice, SharesHistory
+    import json
+    from decimal import Decimal
+
+    def _f(val):
+        return float(val) if val is not None else None
+
+    # Build bare ticker list for company_highlights (uses bare tickers like "AAPL")
+    bare_tickers = [s.split(".")[0] for s in symbols]
+
+    # Single batch query for all highlights (bare ticker keys)
+    result = await session.execute(
+        select(CompanyHighlight).where(CompanyHighlight.ticker.in_(bare_tickers))
+    )
+    highlights_by_bare = {h.ticker: h for h in result.scalars().all()}
+
+    # Single batch query for all live prices (full symbol keys like "AAPL.US")
+    result = await session.execute(
+        select(LivePrice).where(LivePrice.ticker.in_(symbols))
+    )
+    live_prices = {lp.ticker: lp for lp in result.scalars().all()}
+
+    # Single batch query for latest shares outstanding (bare ticker keys)
+    result = await session.execute(
+        select(SharesHistory).where(
+            SharesHistory.ticker.in_(bare_tickers)
+        ).order_by(SharesHistory.report_date.desc())
+    )
+    # Keep only the latest per ticker
+    shares_by_ticker: Dict[str, int] = {}
+    for sh in result.scalars().all():
+        if sh.ticker not in shares_by_ticker and sh.shares_outstanding:
+            shares_by_ticker[sh.ticker] = sh.shares_outstanding
+
+    output = {}
+    for symbol in symbols:
+        ticker = symbol.split(".")[0]
+        exchange_code = symbol.split(".")[-1] if "." in symbol else "US"
+
+        h = highlights_by_bare.get(ticker)
+        if not h:
+            continue
+
+        # Fix currency from exchange mapping
+        expected_cur = _EXCHANGE_TO_CURRENCY.get(exchange_code)
+        currency = expected_cur if expected_cur else (h.currency or "USD")
+
+        # Best shares: SEC/yfinance > EODHD
+        shares = shares_by_ticker.get(ticker) or h.shares_outstanding
+
+        # Compute market cap from shares × live price
+        lp = live_prices.get(symbol)
+        price = float(lp.price) if lp and lp.price else None
+        market_cap = h.market_cap  # fallback
+        fx_rate = None
+
+        if currency and currency != "USD":
+            from data_server.services.eodhd_client import get_forex_rate_to_usd
+            fx_rate = await get_forex_rate_to_usd(currency)
+
+        if shares and price:
+            mc = int(shares * price)
+            market_cap = int(mc * fx_rate) if fx_rate else mc
+
+        info = {
+            "name": h.name,
+            "sector": h.sector,
+            "industry": h.industry,
+            "exchange": exchange_code,
+            "currency": currency,
+            "pe_ratio": _f(h.pe_ratio),
+            "eps": _f(h.eps),
+            "earnings_currency": h.earnings_currency,
+            "shares_outstanding": shares,
+            "market_cap": market_cap,
+            "fx_rate_to_usd": fx_rate,
+            "asset_type": h.asset_type,
+        }
+        output[symbol] = info
+
+    elapsed = (time.time() - start_time) * 1000
+    logger.info(f"Batch highlights: {len(output)}/{len(symbols)} symbols in {elapsed:.1f}ms")
+    return output
+
+
 @router.get("/server-status")
 async def get_server_status():
     """Get data server status including EODHD API call statistics."""

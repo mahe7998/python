@@ -31,22 +31,20 @@ class EODHDProvider(DataProviderBase):
     Connects to DATA_SERVER_URL which provides caching and rate limiting.
     """
 
-    # Use data server URL from environment, with fallback to direct EODHD
-    # DATA_SERVER_URL should be the base URL (e.g., http://localhost:8000)
-    # We append /api to get the API endpoint
     _data_server_url = os.getenv("DATA_SERVER_URL", "").rstrip("/")
-    if _data_server_url:
-        # Data server URL provided - append /api
-        BASE_URL = f"{_data_server_url}/api"
-    else:
-        # Fallback to direct EODHD API
-        BASE_URL = "https://eodhd.com/api"
+    if not _data_server_url:
+        raise RuntimeError(
+            "DATA_SERVER_URL environment variable is not set. "
+            "The investment tool requires the data server. "
+            "Set DATA_SERVER_URL=http://localhost:8000 in investment_tool/.env"
+        )
+    BASE_URL = f"{_data_server_url}/api"
     RATE_LIMIT_DELAY = 0.1  # Reduced since data server handles rate limiting
 
     # TTL for cached fundamentals/shares data (seconds)
     _CACHE_TTL = 300  # 5 minutes
 
-    def __init__(self, api_key: str, cache: Optional[Any] = None):
+    def __init__(self, api_key: str = "", cache: Optional[Any] = None):
         super().__init__(api_key, cache)
         self._last_request_time = 0.0
         self.api_call_count = 0
@@ -56,11 +54,18 @@ class EODHDProvider(DataProviderBase):
         self._fundamentals_cache: Dict[str, Tuple[float, Any]] = {}
         self._shares_cache: Dict[str, Tuple[float, Any]] = {}
 
-        # Log which server we're using
-        if "eodhd.com" in self.BASE_URL:
-            logger.warning("DATA_SERVER_URL not set, using direct EODHD API")
-        else:
-            logger.info(f"Using data server at: {self.BASE_URL}")
+        logger.info(f"Using data server at: {self.BASE_URL}")
+
+        # Health check: warn if data server is unreachable
+        try:
+            import requests as _req
+            _req.get(f"{self.BASE_URL}/server-status", timeout=3)
+        except Exception:
+            logger.warning(f"Data server at {self.BASE_URL} is not reachable")
+
+    def is_available(self) -> bool:
+        """Always available — data server handles authentication."""
+        return True
 
     def _rate_limit(self) -> None:
         """Enforce rate limiting between requests."""
@@ -88,7 +93,6 @@ class EODHDProvider(DataProviderBase):
 
         if params is None:
             params = {}
-        params["api_token"] = self.api_key
         params["fmt"] = "json"
 
         url = f"{self.BASE_URL}/{endpoint}"
@@ -116,10 +120,10 @@ class EODHDProvider(DataProviderBase):
             return result
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"EODHD request failed: {e}")
+            logger.error(f"Data server request failed: {e}")
             raise ProviderError(self.name, str(e))
         except Exception as e:
-            logger.error(f"EODHD unexpected error: {e}")
+            logger.error(f"Data server unexpected error: {e}")
             raise ProviderError(self.name, str(e))
 
     def format_symbol(self, ticker: str, exchange: str) -> str:
@@ -451,10 +455,6 @@ class EODHDProvider(DataProviderBase):
 
         empty_result = {"ticker": ticker, "shares_history": [], "latest_shares_outstanding": None}
 
-        if "eodhd.com" in self.BASE_URL:
-            self._shares_cache[key] = (now, empty_result)
-            return empty_result
-
         symbol = self.format_symbol(ticker, exchange)
         data = self._request(f"shares-history/{symbol}")
         if not data:
@@ -485,11 +485,6 @@ class EODHDProvider(DataProviderBase):
         Returns:
             Dict mapping symbol to {"start_price": float, "end_price": float, "change": float}
         """
-        # This endpoint only works with the data server
-        if "eodhd.com" in self.BASE_URL:
-            logger.warning("Batch daily changes not available with direct EODHD API")
-            return {}
-
         url = f"{self.BASE_URL}/batch/daily-changes"
 
         try:
@@ -521,11 +516,6 @@ class EODHDProvider(DataProviderBase):
         Returns:
             Dict mapping "TICKER.EXCHANGE" to price data
         """
-        # This endpoint only works with the data server
-        if "eodhd.com" in self.BASE_URL:
-            logger.debug("Live prices not available with direct EODHD API")
-            return {}
-
         url = f"{self.BASE_URL}/live-prices"
 
         try:
@@ -544,14 +534,8 @@ class EODHDProvider(DataProviderBase):
                     symbol = ticker
                 else:
                     symbol = f"{ticker}.{exchange}"
-                # Skip stale live prices: if market_timestamp is not from
-                # today, data is outdated and would show wrong values
-                ts = str(item.get("market_timestamp", ""))
-                from datetime import date as _date_type
-                today_str = _date_type.today().isoformat()
-                if ts and not ts.startswith(today_str):
-                    continue
 
+                ts = str(item.get("market_timestamp", ""))
                 result[symbol] = {
                     "price": item.get("price"),
                     "change": item.get("change"),
@@ -717,10 +701,6 @@ class EODHDProvider(DataProviderBase):
         Returns:
             Response dict with count and updated quarterly_financials
         """
-        if "eodhd.com" in self.BASE_URL:
-            logger.warning("Override not available with direct EODHD API")
-            return {"count": 0, "quarterly_financials": []}
-
         symbol = self.format_symbol(ticker, exchange)
         url = f"{self.BASE_URL}/fundamentals/{symbol}/override-quarterly"
 
@@ -745,6 +725,24 @@ class EODHDProvider(DataProviderBase):
         except Exception as e:
             logger.error(f"Override unexpected error: {e}")
             return {"count": 0, "quarterly_financials": []}
+
+    def get_batch_highlights(self, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Get company highlights for multiple symbols in a single call.
+
+        Returns dict mapping symbol to {name, pe_ratio, eps, market_cap,
+        shares_outstanding, currency, fx_rate_to_usd, ...}.
+        """
+        url = f"{self.BASE_URL}/batch/highlights"
+        try:
+            self.api_call_count += 1
+            response = requests.post(
+                url, json={"symbols": symbols}, timeout=30,
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Batch highlights request failed: {e}")
+            return {}
 
     def get_server_status(self) -> Optional[Dict[str, Any]]:
         """Get data server status including EODHD API call statistics.
