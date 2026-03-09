@@ -1783,12 +1783,17 @@ async def get_batch_daily_changes(
                     start_price = prices[0].get("adjusted_close") or prices[0].get("close")
                     end_price = prices[-1].get("close")
 
+                # Compute average daily volume over the period
+                volumes = [p.get("volume") for p in prices if p.get("volume") is not None]
+                avg_volume = int(sum(volumes) / len(volumes)) if volumes else None
+
                 if start_price is not None and end_price is not None and start_price != 0:
                     change = (end_price - start_price) / start_price
                     results[symbol] = {
                         "start_price": float(start_price),
                         "end_price": float(end_price),
-                        "change": float(change)
+                        "change": float(change),
+                        "avg_volume": avg_volume,
                     }
                 else:
                     # Have data but missing prices, try to fetch fresh
@@ -1820,18 +1825,23 @@ async def get_batch_daily_changes(
                         start_price = data[0].get("adjusted_close") or data[0].get("close")
                         end_price = data[-1].get("close")
 
+                    volumes = [d.get("volume") for d in data if d.get("volume") is not None]
+                    avg_volume = int(sum(volumes) / len(volumes)) if volumes else None
+
                     if start_price is not None and end_price is not None and start_price != 0:
                         change = (end_price - start_price) / start_price
                         return symbol, {
                             "start_price": float(start_price),
                             "end_price": float(end_price),
-                            "change": float(change)
+                            "change": float(change),
+                            "avg_volume": avg_volume,
                         }
                     elif end_price is not None:
                         return symbol, {
                             "start_price": None,
                             "end_price": float(end_price),
-                            "change": 0
+                            "change": 0,
+                            "avg_volume": avg_volume,
                         }
                 return symbol, None
             except Exception as e:
@@ -2087,6 +2097,21 @@ async def get_batch_highlights(
         if sh.ticker not in shares_by_ticker and sh.shares_outstanding:
             shares_by_ticker[sh.ticker] = sh.shares_outstanding
 
+    # Batch query for average daily volume (last 60 trading days) per symbol
+    from data_server.db.models import DailyPrice
+    from datetime import timedelta
+    cutoff_date = (datetime.utcnow() - timedelta(days=90)).date()
+    vol_result = await session.execute(
+        select(
+            DailyPrice.ticker,
+            func.avg(DailyPrice.volume).label("avg_vol"),
+        )
+        .where(DailyPrice.ticker.in_(symbols), DailyPrice.date >= cutoff_date)
+        .where(DailyPrice.volume.isnot(None), DailyPrice.volume > 0)
+        .group_by(DailyPrice.ticker)
+    )
+    avg_vol_by_symbol = {row.ticker: int(row.avg_vol) for row in vol_result.all()}
+
     output = {}
     for symbol in symbols:
         ticker = symbol.split(".")[0]
@@ -2147,6 +2172,7 @@ async def get_batch_highlights(
             "earnings_currency": h.earnings_currency,
             "shares_outstanding": shares,
             "market_cap": market_cap,
+            "avg_volume": avg_vol_by_symbol.get(symbol),
             "fx_rate_to_usd": fx_rate,
             "asset_type": h.asset_type,
         }

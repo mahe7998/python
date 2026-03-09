@@ -341,15 +341,18 @@ class MainWindow(QMainWindow):
         col1_layout.addRow("Change:", self.change_label)
         metrics_main_layout.addLayout(col1_layout)
 
-        # Column 2: 52W High, Low, Avg Volume
+        # Column 2: 52W High, Low, Day Vol, Avg Volume
         col2_layout = QFormLayout()
         col2_layout.setSpacing(4)
         self.week52_high_label = QLabel("--")
         col2_layout.addRow("52W High:", self.week52_high_label)
         self.week52_low_label = QLabel("--")
         col2_layout.addRow("52W Low:", self.week52_low_label)
+        self.day_vol_label = QLabel("--")
+        col2_layout.addRow("Day Vol:", self.day_vol_label)
         self.avg_volume_label = QLabel("--")
-        col2_layout.addRow("Avg Volume:", self.avg_volume_label)
+        self.avg_volume_row_label = QLabel("1D Avg Vol:")
+        col2_layout.addRow(self.avg_volume_row_label, self.avg_volume_label)
         metrics_main_layout.addLayout(col2_layout)
 
         # Column 3: Market Cap & P/E
@@ -1454,6 +1457,7 @@ class MainWindow(QMainWindow):
         self.day_low_label.setText(loading)
         self.week52_high_label.setText(loading)
         self.week52_low_label.setText(loading)
+        self.day_vol_label.setText(loading)
         self.avg_volume_label.setText(loading)
         self.market_cap_label.setText(loading)
         self.pe_label.setText(loading)
@@ -1606,11 +1610,19 @@ class MainWindow(QMainWindow):
                 self.week52_high_label.setText("--")
                 self.week52_low_label.setText("--")
 
-            # Calculate average volume - reuse period_prices from above
+            # Day Vol = last day's volume; {period} Avg Vol = period average
+            self.avg_volume_row_label.setText(f"{period} Avg Vol:")
             if period_prices is not None and len(period_prices) >= 1:
-                avg_volume = period_prices["volume"].mean()
+                day_volume = period_prices["volume"].iloc[-1]
+                self.day_vol_label.setText(format_large_number(day_volume))
+                if is_intraday_period(period):
+                    # 1D Avg Vol = Day Vol (1-day average is just that day)
+                    avg_volume = day_volume
+                else:
+                    avg_volume = period_prices["volume"].mean()
                 self.avg_volume_label.setText(format_large_number(avg_volume))
             else:
+                self.day_vol_label.setText("--")
                 self.avg_volume_label.setText("--")
 
             if company:

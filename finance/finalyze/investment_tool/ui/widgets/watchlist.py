@@ -35,11 +35,19 @@ from investment_tool.config.categories import get_category_manager
 class WatchlistTableModel(QAbstractTableModel):
     """Table model for watchlist data."""
 
-    COLUMNS = ["Ticker", "Prev Close", "Open", "Price", "Change", "Change %", "P/E", "Volume", "Mkt Cap"]
+    COLUMNS = ["Ticker", "Prev Close", "Open", "Price", "Change", "Change %", "P/E", "Day Vol", "Avg Vol", "Mkt Cap"]
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._data: List[Dict[str, Any]] = []
+        self._period: str = "1D"
+
+    def set_period(self, period: str) -> None:
+        """Update the period (used for dynamic column header)."""
+        if period != self._period:
+            self._period = period
+            # Notify views that column 8 header changed
+            self.headerDataChanged.emit(Qt.Horizontal, 8, 8)
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return len(self._data)
@@ -51,6 +59,8 @@ class WatchlistTableModel(QAbstractTableModel):
         self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole
     ) -> Any:
         if role == Qt.DisplayRole and orientation == Qt.Horizontal:
+            if section == 8:
+                return f"{self._period} Avg Vol"
             return self.COLUMNS[section]
         return None
 
@@ -90,7 +100,10 @@ class WatchlistTableModel(QAbstractTableModel):
             elif col == 7:  # Volume
                 volume = row_data.get("volume")
                 return format_large_number(volume) if volume else "--"
-            elif col == 8:  # Market Cap
+            elif col == 8:  # Avg Vol
+                avg_vol = row_data.get("avg_volume")
+                return format_large_number(avg_vol) if avg_vol else "--"
+            elif col == 9:  # Market Cap
                 market_cap = row_data.get("market_cap")
                 return format_large_number(market_cap, decimals=2) if market_cap else "--"
 
@@ -129,7 +142,9 @@ class WatchlistTableModel(QAbstractTableModel):
                 return row_data.get("pe_ratio") or 0
             elif col == 7:  # Volume
                 return row_data.get("volume") or 0
-            elif col == 8:  # Market Cap
+            elif col == 8:  # Avg Vol
+                return row_data.get("avg_volume") or 0
+            elif col == 9:  # Market Cap
                 return row_data.get("market_cap") or 0
 
         return None
@@ -261,6 +276,14 @@ class WatchlistWidget(QWidget):
     def set_period(self, period: str) -> None:
         """Set the current period for data fetching."""
         self._current_period = period
+        # Update all table models so column header reflects the period
+        for i in range(self.tab_widget.count()):
+            tab = self.tab_widget.widget(i)
+            table = tab.findChild(QTableView)
+            if table:
+                model = table.property("model")
+                if model:
+                    model.set_period(period)
 
     def _load_watchlists(self) -> None:
         """Load watchlists from data manager."""
@@ -375,21 +398,19 @@ class WatchlistWidget(QWidget):
                 model.set_data([])
             return
 
-        # --- Batch calls: live prices + highlights (~15ms total) ---
+        # --- Batch calls: live prices + highlights + daily changes (~15ms total) ---
         all_live = self.data_manager.get_all_live_prices()
         symbols = [f"{it.ticker}.{it.exchange or 'US'}" for it in items]
         all_highlights = self.data_manager.get_batch_highlights(symbols)
 
-        # For non-1D periods, also fetch batch daily changes (1 call)
-        batch_changes: Dict[str, Dict] = {}
-        if not is_intraday_period(self._current_period):
-            from datetime import date, timedelta
-            start, end = get_date_range(self._current_period, min_trading_days=0)
-            batch_changes = self.data_manager.get_batch_daily_changes(
-                symbols,
-                start.date() if hasattr(start, 'date') else start,
-                end.date() if hasattr(end, 'date') else end,
-            )
+        # Always fetch batch daily changes — needed for avg_volume (all periods)
+        # and for price change (>1D periods). Uses same date range as Key Metrics.
+        start, end = get_date_range(self._current_period, min_trading_days=0)
+        batch_changes: Dict[str, Dict] = self.data_manager.get_batch_daily_changes(
+            symbols,
+            start.date() if hasattr(start, 'date') else start,
+            end.date() if hasattr(end, 'date') else end,
+        )
 
         # --- Build rows from batch data (no per-stock API calls) ---
         data = []
@@ -406,6 +427,7 @@ class WatchlistWidget(QWidget):
                 "change_percent": None,
                 "pe_ratio": None,
                 "volume": None,
+                "avg_volume": None,
                 "market_cap": None,
                 "notes": item.notes,
             }
@@ -415,6 +437,8 @@ class WatchlistWidget(QWidget):
                 hl = all_highlights.get(symbol, {})
                 row["pe_ratio"] = hl.get("pe_ratio")
                 row["market_cap"] = hl.get("market_cap")
+                # Avg Vol from batch_changes (period average, matches Key Metrics)
+                row["avg_volume"] = batch_changes.get(symbol, {}).get("avg_volume")
 
                 if is_intraday_period(self._current_period):
                     # 1D: use live price data (price vs previous_close)
@@ -426,11 +450,13 @@ class WatchlistWidget(QWidget):
                         if row["prev_close"] and row["price"]:
                             row["change"] = row["price"] - row["prev_close"]
                             row["change_percent"] = row["change"] / row["prev_close"]
+                    # 1D Avg Vol = Day Vol (1-day average is just that day)
+                    row["avg_volume"] = row["volume"]
                 else:
                     # 1W/1M/etc: current price from live, change from batch
                     if live:
                         row["price"] = live.get("price")
-                        row["volume"] = live.get("volume")
+                        row["volume"] = live.get("volume")  # Day Vol = last day's volume
                     if symbol in batch_changes:
                         bc = batch_changes[symbol]
                         row["open"] = bc.get("start_price")
