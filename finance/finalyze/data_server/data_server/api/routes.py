@@ -2116,6 +2116,25 @@ async def get_batch_highlights(
         if shares and price:
             mc = int(shares * price)
             market_cap = int(mc * fx_rate) if fx_rate else mc
+        elif shares and not price:
+            # No LivePrice — fall back to latest daily close
+            from data_server.db.models import DailyPrice
+            dp_result = await session.execute(
+                select(DailyPrice.close)
+                .where(DailyPrice.ticker == symbol)
+                .order_by(DailyPrice.date.desc())
+                .limit(1)
+            )
+            last_close = dp_result.scalar()
+            if last_close:
+                mc = int(shares * float(last_close))
+                market_cap = int(mc * fx_rate) if fx_rate else mc
+            elif fx_rate and market_cap:
+                # Raw EODHD market cap in local currency — convert to USD
+                market_cap = int(market_cap * fx_rate)
+        elif fx_rate and market_cap:
+            # No shares data, raw EODHD market cap — convert to USD
+            market_cap = int(market_cap * fx_rate)
 
         info = {
             "name": h.name,

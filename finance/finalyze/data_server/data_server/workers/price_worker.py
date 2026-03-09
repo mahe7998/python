@@ -28,6 +28,109 @@ _minute_bars: dict[str, dict] = {}
 # Structure: {ticker: last_cumulative_volume}
 _prev_cumulative_volume: dict[str, int] = {}
 
+# Flag to avoid running stale-sync every 15 seconds when markets are closed
+_stale_sync_done = False
+
+
+async def _sync_stale_live_prices_from_daily(session, tickers: set[str]):
+    """One-time sync of stale LivePrice entries from daily_prices DB.
+
+    Called when markets are closed and LivePrice has outdated data
+    (e.g., EOD refresh job was missed). Runs once per session, not every 15s.
+    """
+    global _stale_sync_done
+    if _stale_sync_done:
+        return
+
+    from decimal import Decimal
+    from datetime import date as date_type
+    from sqlalchemy import select, func, and_
+    from data_server.db.models import LivePrice, DailyPrice
+
+    # Check if any LivePrice is stale (more than 1 day old)
+    result = await session.execute(select(LivePrice).where(LivePrice.ticker.in_(tickers)))
+    prices = result.scalars().all()
+    if not prices:
+        _stale_sync_done = True
+        return
+
+    now = datetime.utcnow()
+    stale_count = 0
+    for lp in prices:
+        if lp.market_timestamp:
+            age_days = (now - lp.market_timestamp).days
+            if age_days > 1:
+                stale_count += 1
+
+    if stale_count == 0:
+        _stale_sync_done = True
+        return
+
+    logger.info(f"Found {stale_count} stale LivePrice entries, syncing from daily_prices...")
+
+    live_by_ticker = {p.ticker: p for p in prices}
+
+    # Get latest daily close per ticker
+    latest_dates_subq = (
+        select(
+            DailyPrice.ticker,
+            func.max(DailyPrice.date).label("max_date"),
+        )
+        .where(DailyPrice.ticker.in_(list(live_by_ticker.keys())))
+        .group_by(DailyPrice.ticker)
+        .subquery()
+    )
+    latest_daily = await session.execute(
+        select(DailyPrice).join(
+            latest_dates_subq,
+            and_(
+                DailyPrice.ticker == latest_dates_subq.c.ticker,
+                DailyPrice.date == latest_dates_subq.c.max_date,
+            ),
+        )
+    )
+
+    updated_count = 0
+    for dp in latest_daily.scalars().all():
+        lp = live_by_ticker.get(dp.ticker)
+        if not lp or dp.close is None:
+            continue
+
+        lp_date = lp.market_timestamp.date() if lp.market_timestamp else date_type.min
+        dp_date = dp.date if isinstance(dp.date, date_type) else dp.date.date()
+
+        if dp_date > lp_date:
+            prev_result = await session.execute(
+                select(DailyPrice.close)
+                .where(DailyPrice.ticker == dp.ticker, DailyPrice.date < dp.date)
+                .order_by(DailyPrice.date.desc())
+                .limit(1)
+            )
+            prev_close = prev_result.scalar()
+
+            lp.price = dp.close
+            lp.open = dp.open
+            lp.high = dp.high
+            lp.low = dp.low
+            if prev_close is not None:
+                lp.previous_close = prev_close
+                lp.change = dp.close - prev_close
+                if prev_close != 0:
+                    lp.change_percent = Decimal(str(
+                        float((dp.close - prev_close) / prev_close) * 100
+                    ))
+            lp.volume = dp.volume
+            lp.market_timestamp = datetime.combine(dp_date, datetime.min.time())
+            lp.updated_at = datetime.utcnow()
+            lp.data_source = "daily_prices_db"
+            updated_count += 1
+
+    if updated_count:
+        await session.commit()
+        logger.info(f"Synced {updated_count} stale LivePrice entries from daily_prices")
+
+    _stale_sync_done = True
+
 
 def is_any_market_open(tickers: set[str]) -> bool:
     """Check if any tracked exchange is currently open.
@@ -152,8 +255,9 @@ async def update_prices():
             return
 
         # Skip updates when no tracked exchange is open
+        # But first check if LivePrice has stale data that can be synced from daily_prices
         if not is_any_market_open(tickers):
-            logger.debug("All markets closed, skipping price updates")
+            await _sync_stale_live_prices_from_daily(session, tickers)
             return
 
         # Filter to only tickers whose exchange is currently open

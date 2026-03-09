@@ -21,6 +21,9 @@ EODHD_LOG_FILE = "/tmp/logs/eodhd_requests.log"
 _eodhd_call_count = 0
 _server_start_time = datetime.utcnow()
 
+# Tickers that returned 404 on individual real-time requests (skip in future batches)
+_bad_realtime_tickers: set[str] = set()
+
 
 def get_eodhd_stats() -> dict:
     """Get EODHD API statistics."""
@@ -137,32 +140,63 @@ class EODHDClient:
         data = await self._request("real-time/" + symbol, {})
         return data if isinstance(data, dict) else {}
 
-    async def get_real_time_batch(self, symbols: list[str]) -> list[dict]:
-        """Get real-time quotes for multiple symbols in one request.
+    async def get_real_time_batch(self, symbols: list[str], chunk_size: int = 25) -> list[dict]:
+        """Get real-time quotes for multiple symbols in chunked batch requests.
 
         EODHD batch endpoint: /real-time/{first_symbol}?s=sym1,sym2,sym3
-        Returns a list of quotes, one per symbol.
+        Sends symbols in chunks to avoid URL length limits and isolate
+        failures from bad/delisted tickers. Failed chunks fall back to
+        individual requests; tickers that 404 individually are cached to
+        avoid retrying every 15 seconds.
         """
+        global _bad_realtime_tickers
+
         if not symbols:
             return []
 
-        if len(symbols) == 1:
-            # Single symbol - use regular endpoint
-            quote = await self.get_real_time(symbols[0])
+        # Filter out known-bad tickers
+        good_symbols = [s for s in symbols if s not in _bad_realtime_tickers]
+        if not good_symbols:
+            return []
+
+        if len(good_symbols) == 1:
+            quote = await self.get_real_time(good_symbols[0])
             return [quote] if quote else []
 
-        # Batch request - use first symbol in path, all symbols in 's' param
-        first_symbol = symbols[0]
-        params = {"s": ",".join(symbols)}
-        data = await self._request(f"real-time/{first_symbol}", params)
+        # Split into chunks to avoid URL length limits and isolate bad tickers
+        all_quotes = []
+        failed_symbols = []
+        for i in range(0, len(good_symbols), chunk_size):
+            chunk = good_symbols[i:i + chunk_size]
+            try:
+                first_symbol = chunk[0]
+                params = {"s": ",".join(chunk)}
+                data = await self._request(f"real-time/{first_symbol}", params)
 
-        # EODHD returns a list for batch requests
-        if isinstance(data, list):
-            return data
-        elif isinstance(data, dict):
-            # Single result returned as dict
-            return [data]
-        return []
+                if isinstance(data, list):
+                    all_quotes.extend(data)
+                elif isinstance(data, dict):
+                    all_quotes.append(data)
+            except Exception as e:
+                logger.warning(f"Batch chunk failed ({len(chunk)} symbols), falling back to individual")
+                failed_symbols.extend(chunk)
+
+        # Retry failed symbols individually so valid tickers still get updates
+        if failed_symbols:
+            recovered = 0
+            for sym in failed_symbols:
+                try:
+                    quote = await self.get_real_time(sym)
+                    if quote:
+                        all_quotes.append(quote)
+                        recovered += 1
+                except Exception:
+                    _bad_realtime_tickers.add(sym)
+                    logger.info(f"Marked {sym} as bad for real-time (will skip in future batches)")
+            logger.info(f"Recovered {recovered}/{len(failed_symbols)} quotes via individual fallback "
+                       f"({len(_bad_realtime_tickers)} total bad tickers cached)")
+
+        return all_quotes
 
     # Fundamentals
     async def get_fundamentals(self, symbol: str) -> dict:

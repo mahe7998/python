@@ -58,10 +58,12 @@ async def start_scheduler():
         name="Daily Cleanup Worker",
         replace_existing=True,
         max_instances=1,
+        misfire_grace_time=3600,
     )
 
     # EOD refresh worker - runs at 4:45 PM ET (21:45 UTC) after US market close
     # Invalidates daily price caches so next request fetches fresh EOD data
+    # misfire_grace_time=3600: allow up to 1 hour late execution (APScheduler default is 1s)
     scheduler.add_job(
         refresh_eod_caches,
         trigger=CronTrigger(hour=21, minute=45),  # 4:45 PM ET = 21:45 UTC
@@ -69,6 +71,7 @@ async def start_scheduler():
         name="EOD Refresh Worker",
         replace_existing=True,
         max_instances=1,
+        misfire_grace_time=3600,
     )
 
     # Fundamentals worker - runs once daily at 5:00 AM ET (10:00 UTC) before market open
@@ -80,6 +83,7 @@ async def start_scheduler():
         name="Daily Fundamentals Worker",
         replace_existing=True,
         max_instances=1,
+        misfire_grace_time=3600,
     )
 
     scheduler.start()
@@ -117,30 +121,37 @@ async def daily_cleanup():
 
 
 async def refresh_eod_caches():
-    """Invalidate EOD caches and sync LivePrice with latest daily closes.
+    """Fetch fresh daily prices, invalidate caches, and sync LivePrice.
 
-    Runs after US market close. Two steps:
-    1. Invalidate daily price cache metadata so next request fetches fresh EOD data.
-    2. Update LivePrice table from daily_prices so live data reflects final closes
-       (not stale intraday snapshots from during the trading day).
+    Runs after US market close. Three steps:
+    1. Fetch fresh EOD daily prices for all tracked stocks from EODHD API.
+    2. Invalidate daily price cache metadata so next request fetches fresh data.
+    3. Update LivePrice table from daily_prices so live data reflects final closes.
     """
     from datetime import datetime, date as date_type
     from decimal import Decimal
     from sqlalchemy import delete, select, func, and_
     from data_server.db.database import async_session_factory
     from data_server.db.models import CacheMetadata, LivePrice, DailyPrice
+    from data_server.workers.price_worker import update_daily_prices
 
-    logger.info("EOD refresh: invalidating caches and syncing LivePrice...")
+    logger.info("EOD refresh: fetching daily prices, invalidating caches, syncing LivePrice...")
+
+    # Step 1: Fetch fresh daily prices for all tracked stocks
+    try:
+        await update_daily_prices()
+    except Exception as e:
+        logger.error(f"EOD refresh: daily price fetch failed: {e}")
 
     async with async_session_factory() as session:
-        # Step 1: Invalidate EOD cache metadata
+        # Step 2: Invalidate EOD cache metadata
         result = await session.execute(
             delete(CacheMetadata).where(CacheMetadata.cache_key.startswith("eod:"))
         )
         deleted = result.rowcount
         logger.info(f"Invalidated {deleted} EOD cache entries")
 
-        # Step 2: Update LivePrice from latest daily_prices
+        # Step 3: Update LivePrice from latest daily_prices
         result = await session.execute(select(LivePrice))
         prices = result.scalars().all()
         if not prices:

@@ -522,33 +522,37 @@ class MainWindow(QMainWindow):
             logger.warning(f"Error checking EODHD availability: {e}")
 
     def _refresh_live_prices(self) -> None:
-        """Refresh live prices if 1D period is selected and market is open."""
+        """Refresh live prices from data server.
+
+        During market hours: full refresh every 15s (treemap + chart + metrics).
+        Outside market hours: treemap-only refresh every 15s (picks up data server changes).
+        All data comes from the local data server — no direct API calls.
+        """
         from investment_tool.utils.exchange_hours import is_market_open
 
         if not self.data_manager:
             return
 
-        # Check if 1D period is selected
         period = self.treemap.get_selected_period()
-        if period != "1D":
-            return
+        market_open = is_market_open("US")
 
-        # Skip refresh when market is closed to avoid unnecessary API calls
-        if not is_market_open("US"):
-            logger.info("Market closed, skipping live price refresh")
-            return
+        if market_open and period == "1D":
+            # Full refresh during market hours for 1D view
+            self._load_treemap_data()
+            now = datetime.now().strftime("%H:%M:%S")
+            self.status_bar.showMessage(f"Live prices updated at {now}", 10000)
 
-        logger.info("Auto-refreshing live prices (every 15s)")
-        # Reload treemap with live prices
-        self._load_treemap_data()
-        # Show last update time in status bar
-        now = datetime.now().strftime("%H:%M:%S")
-        self.status_bar.showMessage(f"Live prices updated at {now}", 10000)
-
-        # Also refresh the selected stock's chart and metrics if one is selected
-        if self._selected_ticker and self._selected_exchange:
-            self._load_stock_chart(self._selected_ticker, self._selected_exchange)
-            self._update_metrics(self._selected_ticker, self._selected_exchange)
+            if self._selected_ticker and self._selected_exchange:
+                self._load_stock_chart(self._selected_ticker, self._selected_exchange)
+                self._update_metrics(self._selected_ticker, self._selected_exchange)
+        elif period == "1D":
+            # Outside market hours with 1D view: refresh treemap at reduced rate
+            # (every 4th tick = ~60s instead of 15s, since data changes infrequently)
+            if not hasattr(self, '_offhours_tick'):
+                self._offhours_tick = 0
+            self._offhours_tick += 1
+            if self._offhours_tick % 4 == 0:
+                self._load_treemap_data()
 
     def _initialize_data(self) -> None:
         """Initialize data manager and load initial data."""

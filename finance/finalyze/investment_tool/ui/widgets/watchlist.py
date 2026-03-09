@@ -470,13 +470,7 @@ class WatchlistWidget(QWidget):
         return None
 
     def _auto_refresh(self) -> None:
-        """Auto-refresh watchlist if market is open."""
-        try:
-            from investment_tool.utils.exchange_hours import is_market_open
-            if not is_market_open("US"):
-                return
-        except ImportError:
-            pass
+        """Auto-refresh watchlist. Data comes from local data server (fast, cached)."""
         self._refresh_current()
 
     def _refresh_current(self) -> None:
