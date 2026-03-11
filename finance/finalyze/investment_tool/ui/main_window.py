@@ -777,9 +777,29 @@ class MainWindow(QMainWindow):
                     current = price_data.get("end_price")
                     change = price_data.get("change", 0)
                     if current is None:
+                        # No price — show placeholder in category views
+                        if selected_filter not in market_cap_filters:
+                            items.append(TreemapItem(
+                                ticker=stock_ref.ticker,
+                                name=stock_ref.ticker,
+                                exchange=stock_ref.exchange,
+                                value=1e9,
+                                change_percent=0,
+                                sector=category.name,
+                            ))
                         continue
                 else:
-                    continue  # No price data, skip
+                    # No price data — show placeholder in category views
+                    if selected_filter not in market_cap_filters:
+                        items.append(TreemapItem(
+                            ticker=stock_ref.ticker,
+                            name=stock_ref.ticker,
+                            exchange=stock_ref.exchange,
+                            value=1e9,
+                            change_percent=0,
+                            sector=category.name,
+                        ))
+                    continue
 
                 hl = all_highlights.get(ticker_key, {})
 
@@ -834,8 +854,7 @@ class MainWindow(QMainWindow):
                 ))
 
         logger.info(f"Treemap loaded {len(items)} items for period={selected_period}, filter={selected_filter}")
-        if items:
-            self.treemap.set_items(items)
+        self.treemap.set_items(items)
 
     def _configure_tabs_for_asset_type(self, asset_type: str) -> None:
         """Reconfigure chart_tabs based on whether this is an ETF or stock.
@@ -2201,6 +2220,9 @@ class MainWindow(QMainWindow):
 
     def _on_stock_added(self, ticker: str, exchange: str) -> None:
         """Handle stock added event."""
+        # Sync to data server so it starts tracking the new stock
+        self._sync_stocks_to_server()
+
         # Reload treemap to show the new stock
         self._load_treemap_data()
 
@@ -2224,6 +2246,9 @@ class MainWindow(QMainWindow):
             for stock_ref in cat.stocks:
                 all_exchanges.add(stock_ref.exchange)
         self.treemap.set_exchanges(list(all_exchanges))
+
+        # Sync newly added stocks to data server so it can fetch their prices
+        self._sync_stocks_to_server()
 
         # Reload treemap
         self._load_treemap_data()

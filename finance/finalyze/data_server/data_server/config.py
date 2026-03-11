@@ -36,8 +36,8 @@ class Settings(BaseSettings):
     sec_edgar_rate_limit: float = 0.15  # seconds between requests
 
     # Worker intervals (seconds)
-    worker_price_interval: int = 15
-    worker_news_interval: int = 900  # 15 minutes
+    worker_price_interval: int = 30
+    worker_news_interval: int = 3600  # 1 hour
     worker_daily_time: str = "16:30"  # 4:30 PM ET
 
     class Config:

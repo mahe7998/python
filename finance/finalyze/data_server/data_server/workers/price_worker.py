@@ -270,6 +270,12 @@ async def update_prices():
         if not open_tickers:
             return
 
+        # Sync stale LivePrice for tickers whose markets are currently closed
+        # (e.g., US stocks while Asian markets are open)
+        closed_tickers = set(tickers) - open_tickers
+        if closed_tickers:
+            await _sync_stale_live_prices_from_daily(session, closed_tickers)
+
         # Split tickers: EODHD-supported vs yfinance-needed (unreliable EODHD real-time)
         eodhd_tickers = set()
         yf_tickers = set()

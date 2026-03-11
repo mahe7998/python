@@ -187,12 +187,10 @@ async def refresh_eod_caches():
 
             lp_date = lp.market_timestamp.date() if lp.market_timestamp else date_type.min
             dp_date = dp.date if isinstance(dp.date, date_type) else dp.date.date()
-            prices_differ = (
-                lp.price is not None
-                and abs(float(dp.close) - float(lp.price)) > 0.01
-            )
-
-            if dp_date > lp_date or prices_differ:
+            # Only update when daily data is newer or same-day with price correction
+            # Never roll back newer live data with older daily data
+            if dp_date > lp_date or (dp_date == lp_date and lp.price is not None
+                                     and abs(float(dp.close) - float(lp.price)) > 0.01):
                 prev_result = await session.execute(
                     select(DailyPrice.close)
                     .where(DailyPrice.ticker == dp.ticker, DailyPrice.date < dp.date)

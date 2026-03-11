@@ -285,6 +285,9 @@ class CategoryDialog(QDialog):
             self.category_list.addItem(item)
             self.category_list.setCurrentItem(item)
 
+            # Save and notify so treemap filter updates immediately
+            self._auto_save()
+
     def _on_remove_category(self) -> None:
         """Remove the selected category."""
         current_item = self.category_list.currentItem()
@@ -308,6 +311,9 @@ class CategoryDialog(QDialog):
             self.category_manager.delete_category(category_id)
             row = self.category_list.row(current_item)
             self.category_list.takeItem(row)
+
+            # Save and notify so treemap filter updates immediately
+            self._auto_save()
 
     def _on_add_stock(self) -> None:
         """Add a stock to the current category using the search dialog."""

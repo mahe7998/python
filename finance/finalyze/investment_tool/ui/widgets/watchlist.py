@@ -450,6 +450,15 @@ class WatchlistWidget(QWidget):
                         if row["prev_close"] and row["price"]:
                             row["change"] = row["price"] - row["prev_close"]
                             row["change_percent"] = row["change"] / row["prev_close"]
+                    # Fallback to batch_changes when no live data (e.g. futures, new stocks)
+                    if row["price"] is None and symbol in batch_changes:
+                        bc = batch_changes[symbol]
+                        row["price"] = bc.get("end_price")
+                        row["open"] = bc.get("start_price")
+                        row["change_percent"] = bc.get("change")
+                        row["volume"] = bc.get("avg_volume")
+                        if row["open"] and row["price"]:
+                            row["change"] = row["price"] - row["open"]
                     # 1D Avg Vol = Day Vol (1-day average is just that day)
                     row["avg_volume"] = row["volume"]
                 else:
@@ -465,6 +474,9 @@ class WatchlistWidget(QWidget):
                         row["change_percent"] = bc.get("change")
                         if row["open"] and row["price"]:
                             row["change"] = row["price"] - row["open"]
+                        # Fallback volume from batch when no live data
+                        if row["volume"] is None:
+                            row["volume"] = bc.get("avg_volume")
 
                 logger.debug(f"{item.ticker} row: price={row.get('price')}, change={row.get('change')}")
             except Exception as e:

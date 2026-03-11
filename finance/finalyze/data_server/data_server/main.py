@@ -22,16 +22,18 @@ logger = logging.getLogger(__name__)
 
 
 async def _refresh_stale_live_prices():
-    """Sync LivePrice table with daily_prices on startup. No external API calls.
+    """Sync LivePrice table with daily_prices on startup.
 
-    1. Create missing LivePrice entries from daily_prices for tracked stocks.
-    2. Update existing LivePrice rows where daily_prices has a newer/different close.
+    1. Check if LivePrice data is stale (>1 day old).
+    2. If stale, fetch last 5 days of daily prices from EODHD (lightweight).
+    3. Sync LivePrice from daily_prices (create missing, update stale).
     """
-    from datetime import datetime, date as date_type
+    from datetime import datetime, date as date_type, timedelta
     from decimal import Decimal
     from data_server.db.database import async_session_factory
     from data_server.db.models import LivePrice, DailyPrice
     from data_server.api.tracking import get_tracked_tickers
+    from data_server.db import cache
     from sqlalchemy import select, func, and_
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -42,6 +44,34 @@ async def _refresh_stale_live_prices():
         result = await session.execute(select(LivePrice))
         prices = result.scalars().all()
         live_by_ticker = {p.ticker: p for p in prices}
+
+        # Check if any LivePrice is stale (>1 day old)
+        now = datetime.utcnow()
+        stale_count = sum(
+            1 for lp in prices
+            if lp.market_timestamp and (now - lp.market_timestamp).days > 1
+        )
+
+        # If stale, fetch last 5 days of daily prices from EODHD (cheap: ~148 calls)
+        if stale_count > 0:
+            logger.info(f"Startup: {stale_count} stale LivePrice entries, fetching recent daily prices...")
+            from_date = (now - timedelta(days=5)).strftime("%Y-%m-%d")
+            try:
+                from data_server.services.eodhd_client import get_eodhd_client
+                client = await get_eodhd_client()
+                fetched = 0
+                for symbol in tracked:
+                    try:
+                        data = await client.get_eod(symbol, from_date=from_date)
+                        if data:
+                            await cache.store_daily_prices(session, symbol, data)
+                            fetched += 1
+                    except Exception as e:
+                        logger.debug(f"Startup fetch failed for {symbol}: {e}")
+                await session.commit()
+                logger.info(f"Startup: fetched recent daily prices for {fetched}/{len(tracked)} stocks")
+            except Exception as e:
+                logger.error(f"Startup: daily price fetch failed: {e}")
 
         # Find tracked tickers missing from LivePrice
         missing_tickers = [t for t in tracked if t not in live_by_ticker]
@@ -94,13 +124,9 @@ async def _refresh_stale_live_prices():
 
             lp = live_by_ticker.get(dp.ticker)
             if lp:
-                # Update existing entry if daily data is newer
+                # Only update when daily data is newer or same-day price correction
                 lp_date = lp.market_timestamp.date() if lp.market_timestamp else date_type.min
-                prices_differ = (
-                    lp.price is not None
-                    and abs(float(dp.close) - float(lp.price)) > 0.01
-                )
-                if dp_date > lp_date or prices_differ:
+                if dp_date >= lp_date:
                     lp.price = dp.close
                     lp.open = dp.open
                     lp.high = dp.high
@@ -135,7 +161,7 @@ async def _refresh_stale_live_prices():
                 created_count += 1
 
         await session.commit()
-        logger.info(f"Startup: LivePrice sync — updated {updated_count}, created {created_count} from daily_prices (no API calls)")
+        logger.info(f"Startup: LivePrice sync — updated {updated_count}, created {created_count} from daily_prices")
 
 
 async def _invalidate_stale_eod_caches():

@@ -9,26 +9,49 @@ from datetime import datetime, timedelta, timezone
 from datetime import time as dt_time
 from typing import Optional, Tuple
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # Python < 3.9
+
+# IANA timezone names for exchanges that observe DST
+# Used by is_market_open() for accurate UTC offset calculation
+EXCHANGE_TIMEZONES = {
+    "US": "America/New_York",
+    "TO": "America/Toronto",
+    "LSE": "Europe/London",
+    "AS": "Europe/Amsterdam",
+    "PA": "Europe/Paris",
+    "F": "Europe/Berlin",
+    "XETRA": "Europe/Berlin",
+    "SW": "Europe/Zurich",
+    "AU": "Australia/Sydney",
+    "SN": "America/Santiago",
+}
+
 # (utc_offset_hours, open_hour, open_min, close_hour, close_min)
+# NOTE: utc_offset is the standard (non-DST) offset, used as fallback
+# and for get_utc_offset(). is_market_open() uses EXCHANGE_TIMEZONES
+# for DST-aware calculations when available.
 EXCHANGE_MARKET_HOURS = {
-    "US": (-5, 9, 30, 16, 0),      # EST
-    "KO": (9, 9, 0, 15, 30),       # KST (Korea)
-    "AS": (1, 9, 0, 17, 30),       # CET (Amsterdam/Euronext)
-    "PA": (1, 9, 0, 17, 30),       # CET (Paris/Euronext)
-    "F": (1, 9, 0, 17, 30),        # CET (Frankfurt)
-    "XETRA": (1, 9, 0, 17, 30),   # CET (Frankfurt/XETRA)
-    "SW": (1, 9, 0, 17, 30),       # CET (Swiss)
-    "LSE": (0, 8, 0, 16, 30),      # GMT (London)
-    "HK": (8, 9, 30, 16, 0),       # HKT (Hong Kong)
-    "TSE": (9, 9, 0, 15, 0),       # JST (Tokyo)
-    "SHG": (8, 9, 30, 15, 0),      # CST (Shanghai)
-    "SHE": (8, 9, 30, 15, 0),      # CST (Shenzhen)
-    "NSE": (5.5, 9, 15, 15, 30),   # IST (India NSE)
-    "BSE": (5.5, 9, 15, 15, 30),   # IST (India BSE)
-    "AU": (11, 10, 0, 16, 0),      # AEDT (Australia)
-    "TO": (-5, 9, 30, 16, 0),      # EST (Toronto)
-    "SA": (-3, 10, 0, 17, 0),      # BRT (Sao Paulo)
-    "SN": (-4, 9, 30, 16, 0),      # CLT (Santiago)
+    "US": (-5, 9, 30, 16, 0),      # EST (DST via zoneinfo)
+    "KO": (9, 9, 0, 15, 30),       # KST (Korea, no DST)
+    "AS": (1, 9, 0, 17, 30),       # CET (DST via zoneinfo)
+    "PA": (1, 9, 0, 17, 30),       # CET (DST via zoneinfo)
+    "F": (1, 9, 0, 17, 30),        # CET (DST via zoneinfo)
+    "XETRA": (1, 9, 0, 17, 30),   # CET (DST via zoneinfo)
+    "SW": (1, 9, 0, 17, 30),       # CET (DST via zoneinfo)
+    "LSE": (0, 8, 0, 16, 30),      # GMT (DST via zoneinfo)
+    "HK": (8, 9, 30, 16, 0),       # HKT (no DST)
+    "TSE": (9, 9, 0, 15, 0),       # JST (no DST)
+    "SHG": (8, 9, 30, 15, 0),      # CST (no DST)
+    "SHE": (8, 9, 30, 15, 0),      # CST (no DST)
+    "NSE": (5.5, 9, 15, 15, 30),   # IST (no DST)
+    "BSE": (5.5, 9, 15, 15, 30),   # IST (no DST)
+    "AU": (11, 10, 0, 16, 0),      # AEDT (DST via zoneinfo)
+    "TO": (-5, 9, 30, 16, 0),      # EST (DST via zoneinfo)
+    "SA": (-3, 10, 0, 17, 0),      # BRT (no DST since 2019)
+    "SN": (-4, 9, 30, 16, 0),      # CLT (DST via zoneinfo)
 }
 
 # Lunch breaks in LOCAL time: (start_h, start_m, end_h, end_m)
@@ -46,7 +69,11 @@ def get_market_hours(exchange: str) -> Tuple[float, int, int, int, int]:
 
 
 def get_utc_offset(exchange: str) -> timedelta:
-    """Get UTC offset as a timedelta for an exchange."""
+    """Get current UTC offset as a timedelta for an exchange (DST-aware)."""
+    tz_name = EXCHANGE_TIMEZONES.get(exchange)
+    if tz_name:
+        now = datetime.now(ZoneInfo(tz_name))
+        return now.utcoffset()
     hours = EXCHANGE_MARKET_HOURS.get(exchange, EXCHANGE_MARKET_HOURS["US"])[0]
     return timedelta(hours=hours)
 
@@ -58,10 +85,20 @@ def get_local_market_hours(exchange: str) -> Tuple[int, int, int, int]:
 
 
 def is_market_open(exchange: str = "US") -> bool:
-    """Check if a stock exchange is currently open (weekday + within hours)."""
-    utc_offset, open_h, open_m, close_h, close_m = get_market_hours(exchange)
-    now_utc = datetime.utcnow()
-    now_local = now_utc + timedelta(hours=utc_offset)
+    """Check if a stock exchange is currently open (weekday + within hours).
+
+    Uses zoneinfo for DST-aware timezone calculation when available,
+    falls back to hardcoded UTC offsets for exchanges without DST.
+    """
+    _, open_h, open_m, close_h, close_m = get_market_hours(exchange)
+
+    tz_name = EXCHANGE_TIMEZONES.get(exchange)
+    if tz_name:
+        now_local = datetime.now(ZoneInfo(tz_name))
+    else:
+        utc_offset = EXCHANGE_MARKET_HOURS.get(exchange, EXCHANGE_MARKET_HOURS["US"])[0]
+        now_local = datetime.utcnow() + timedelta(hours=utc_offset)
+
     if now_local.weekday() >= 5:
         return False
     return dt_time(open_h, open_m) <= now_local.time() <= dt_time(close_h, close_m)

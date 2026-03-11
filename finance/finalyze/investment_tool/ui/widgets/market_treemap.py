@@ -239,6 +239,8 @@ class MarketTreemap(QWidget):
     def set_categories(self, categories: List[str]) -> None:
         """Set available category filters."""
         current = self.filter_combo.currentText()
+        # Block signals during rebuild to prevent spurious filter_changed emissions
+        self.filter_combo.blockSignals(True)
         self.filter_combo.clear()
         # Add built-in market cap filters
         self.filter_combo.addItem("All Stocks")
@@ -255,6 +257,7 @@ class MarketTreemap(QWidget):
         idx = self.filter_combo.findText(current)
         if idx >= 0:
             self.filter_combo.setCurrentIndex(idx)
+        self.filter_combo.blockSignals(False)
 
     def get_selected_period(self) -> str:
         """Get the currently selected time period."""
