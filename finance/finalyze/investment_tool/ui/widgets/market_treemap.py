@@ -4,46 +4,6 @@ from dataclasses import dataclass
 from typing import Optional, List, Dict, Callable, Any
 import math
 
-# Exchange code → display name mapping
-EXCHANGE_DISPLAY_NAMES = {
-    "US": "US",
-    "PA": "France",
-    "XETRA": "Germany",
-    "LSE": "UK",
-    "AS": "Netherlands",
-    "MI": "Italy",
-    "MC": "Spain",
-    "SW": "Switzerland",
-    "BR": "Belgium",
-    "VIE": "Austria",
-    "HE": "Finland",
-    "IR": "Ireland",
-    "LU": "Luxembourg",
-    "OL": "Norway",
-    "ST": "Sweden",
-    "CO": "Denmark",
-    "WAR": "Poland",
-    "TSE": "Japan",
-    "HK": "Hong Kong",
-    "SHG": "China (Shanghai)",
-    "SHE": "China (Shenzhen)",
-    "KO": "South Korea",
-    "TW": "Taiwan",
-    "BSE": "India (BSE)",
-    "NSE": "India (NSE)",
-    "AU": "Australia",
-    "SG": "Singapore",
-    "KL": "Malaysia",
-    "BK": "Thailand",
-    "JK": "Indonesia",
-    "TO": "Canada (TSX)",
-    "V": "Canada (TSXV)",
-    "SA": "Brazil",
-    "MX": "Mexico",
-    "TA": "Israel",
-    "JSE": "South Africa",
-}
-
 from PySide6.QtCore import Qt, Signal, QRectF, QPointF, QTimer
 from PySide6.QtGui import (
     QPainter,
@@ -111,10 +71,6 @@ class MarketTreemap(QWidget):
     stock_remove_requested = Signal(str, str, str)  # ticker, exchange, category_id (empty for all)
     stock_add_to_watchlist = Signal(str, str)  # ticker, exchange
     filter_changed = Signal(str)  # category name or "All Stocks"
-    exchange_filter_changed = Signal(str)  # exchange code or "All Markets"
-    period_changed = Signal(str)  # period like "1D", "1W", etc.
-
-    PERIODS = ["1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "2Y", "5Y"]
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -155,16 +111,6 @@ class MarketTreemap(QWidget):
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
 
-        # Period selector
-        period_label = QLabel("Period:")
-        toolbar.addWidget(period_label)
-
-        self.period_combo = QComboBox()
-        self.period_combo.addItems(self.PERIODS)
-        self.period_combo.setCurrentText("1D")
-        self.period_combo.currentTextChanged.connect(self._on_period_changed)
-        toolbar.addWidget(self.period_combo)
-
         # Category filter
         filter_label = QLabel("Filter:")
         toolbar.addWidget(filter_label)
@@ -177,15 +123,6 @@ class MarketTreemap(QWidget):
         self.filter_combo.addItem("Tiny Stocks (<$2B)")
         self.filter_combo.currentTextChanged.connect(self._on_filter_changed)
         toolbar.addWidget(self.filter_combo)
-
-        # Exchange/market filter
-        market_label = QLabel("Market:")
-        toolbar.addWidget(market_label)
-
-        self.exchange_combo = QComboBox()
-        self.exchange_combo.addItem("All Markets")
-        self.exchange_combo.currentTextChanged.connect(self._on_exchange_filter_changed)
-        toolbar.addWidget(self.exchange_combo)
 
         toolbar.addStretch()
 
@@ -229,6 +166,20 @@ class MarketTreemap(QWidget):
             """)
             layout.addWidget(color_label)
 
+    def showEvent(self, event) -> None:
+        """Recompute layout when becoming visible (e.g. returning from advanced mode)."""
+        super().showEvent(event)
+        if self._items:
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, self._recompute_and_update)
+
+    def _recompute_and_update(self) -> None:
+        """Recompute layout and update canvas (deferred so geometry is valid)."""
+        if self._items:
+            self._compute_layout()
+            self.canvas.set_items(self._items)
+            self.canvas.update()
+
     def set_items(self, items: List[TreemapItem]) -> None:
         """Set the items to display in the treemap."""
         self._items = items
@@ -259,13 +210,13 @@ class MarketTreemap(QWidget):
             self.filter_combo.setCurrentIndex(idx)
         self.filter_combo.blockSignals(False)
 
-    def get_selected_period(self) -> str:
-        """Get the currently selected time period."""
-        return self.period_combo.currentText()
-
     def get_selected_filter(self) -> str:
         """Get the currently selected filter."""
         return self.filter_combo.currentText()
+
+    def set_loading(self, loading: bool) -> None:
+        """Show loading indicator on the treemap canvas."""
+        self.canvas.set_loading(loading)
 
     def set_current_category_id(self, category_id: Optional[str]) -> None:
         """Set the current category ID for removal operations."""
@@ -318,46 +269,9 @@ class MarketTreemap(QWidget):
             item.width = rect["dx"]
             item.height = rect["dy"]
 
-    def _on_period_changed(self, period: str) -> None:
-        """Handle period selection change."""
-        self.period_changed.emit(period)
-
     def _on_filter_changed(self, filter_text: str) -> None:
         """Handle filter selection change."""
         self.filter_changed.emit(filter_text)
-
-    def _on_exchange_filter_changed(self, exchange: str) -> None:
-        """Handle exchange/market filter change."""
-        self.exchange_filter_changed.emit(exchange)
-
-    def get_selected_exchange_filter(self) -> str:
-        """Get the currently selected exchange code (or 'All Markets')."""
-        text = self.exchange_combo.currentText()
-        if text == "All Markets":
-            return text
-        # Map display name back to exchange code
-        return self._exchange_name_to_code.get(text, text)
-
-    def set_exchanges(self, exchanges: List[str]) -> None:
-        """Set available exchange filters from discovered exchanges."""
-        current = self.exchange_combo.currentText()
-        self.exchange_combo.blockSignals(True)
-        self.exchange_combo.clear()
-        self.exchange_combo.addItem("All Markets")
-        # Build display name → code mapping
-        self._exchange_name_to_code = {}
-        display_items = []
-        for ex in exchanges:
-            name = EXCHANGE_DISPLAY_NAMES.get(ex, ex)
-            display_name = f"{name} ({ex})" if name != ex else ex
-            self._exchange_name_to_code[display_name] = ex
-            display_items.append(display_name)
-        for item in sorted(display_items):
-            self.exchange_combo.addItem(item)
-        idx = self.exchange_combo.findText(current)
-        if idx >= 0:
-            self.exchange_combo.setCurrentIndex(idx)
-        self.exchange_combo.blockSignals(False)
 
     def _on_item_clicked(self, index: int) -> None:
         """Handle item click."""
@@ -461,6 +375,7 @@ class TreemapCanvas(QWidget):
         self._items: List[TreemapItem] = []
         self._selected_index: int = -1
         self._hovered_index: int = -1
+        self._loading: bool = False
 
         config = get_config()
         color_config = config.ui.treemap_color_scale
@@ -474,9 +389,15 @@ class TreemapCanvas(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMouseTracking(True)
 
+    def set_loading(self, loading: bool) -> None:
+        """Set loading state — shows spinner text when no items yet."""
+        self._loading = loading
+        self.update()
+
     def set_items(self, items: List[TreemapItem]) -> None:
         """Set items to render."""
         self._items = items
+        self._loading = False
         self._selected_index = -1
         self._hovered_index = -1
         self.update()
@@ -498,11 +419,18 @@ class TreemapCanvas(QWidget):
             # Draw placeholder text
             painter.setPen(QColor("#6B7280"))
             painter.setFont(QFont("Segoe UI", 14))
-            painter.drawText(
-                self.rect(),
-                Qt.AlignCenter,
-                "No data to display\nAdd stocks or refresh data"
-            )
+            if self._loading:
+                painter.drawText(
+                    self.rect(),
+                    Qt.AlignCenter,
+                    "Loading market data..."
+                )
+            else:
+                painter.drawText(
+                    self.rect(),
+                    Qt.AlignCenter,
+                    "No data to display\nAdd stocks or refresh data"
+                )
             return
 
         # Draw items

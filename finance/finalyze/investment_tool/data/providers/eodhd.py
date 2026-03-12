@@ -339,6 +339,7 @@ class EODHDProvider(DataProviderBase):
         offset: int = 0,
         from_date: Optional[date] = None,
         to_date: Optional[date] = None,
+        refresh: bool = False,
     ) -> List[NewsArticle]:
         """Fetch news with sentiment from EODHD."""
         params = {
@@ -350,6 +351,8 @@ class EODHDProvider(DataProviderBase):
             params["from"] = from_date.isoformat()
         if to_date:
             params["to"] = to_date.isoformat()
+        if refresh:
+            params["refresh"] = "true"
 
         data = self._request(f"news", params=params)
 

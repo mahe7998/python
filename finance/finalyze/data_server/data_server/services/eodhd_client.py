@@ -1,4 +1,17 @@
-"""EODHD API client for making actual API calls."""
+"""EODHD API client for making actual API calls.
+
+EODHD API Call Cost Reference (https://eodhd.com/pricing):
+    Daily limit: 100,000 weighted API calls per day (paid plans).
+
+    Cost per request:
+    - 1 call:   EOD prices, Search, Exchange lists, Live/real-time (per symbol)
+    - 5 calls:  Technical API, Intraday API, News API
+    - 10 calls: Fundamentals API, Options API, Bond Fundamentals API
+    - 100 calls: Bulk API (entire exchange)
+    - 100+N:    Bulk API with 'symbols' parameter (N = number of symbols)
+
+    Live API batch: 1 call per symbol in the request.
+"""
 
 import logging
 import time
@@ -17,18 +30,80 @@ settings = get_settings()
 # Mounted volume: ./logs:/tmp/logs in docker-compose.yml
 EODHD_LOG_FILE = "/tmp/logs/eodhd_requests.log"
 
-# Global counter for EODHD API calls (since server startup)
-_eodhd_call_count = 0
+# EODHD API call cost weights (weighted calls consumed per request)
+API_COST = {
+    "eod":           1,    # EOD daily prices — 1 per symbol
+    "real-time":     1,    # Live quote — 1 per symbol in request
+    "search":        1,    # Ticker search
+    "exchanges-list": 1,
+    "exchange-symbol-list": 1,
+    "intraday":      5,    # Intraday prices
+    "news":          5,    # News articles
+    "technical":     5,    # Technical indicators
+    "fundamentals":  10,   # Company fundamentals
+    "options":       10,
+    "calendar":      1,
+    "bulk":          100,  # Bulk (entire exchange); +N if symbols param
+}
+DAILY_LIMIT = 100_000
+
+# Global counters (since server startup)
+_eodhd_call_count = 0          # raw HTTP requests
+_eodhd_weighted_calls = 0      # weighted API call cost
+_daily_weighted_calls = 0       # weighted calls today (resets at midnight UTC)
+_daily_reset_date = datetime.utcnow().date()
 _server_start_time = datetime.utcnow()
 
 # Tickers that returned 404 on individual real-time requests (skip in future batches)
 _bad_realtime_tickers: set[str] = set()
 
 
+def _get_endpoint_cost(endpoint: str, params: dict = None) -> int:
+    """Calculate the weighted API call cost for a request."""
+    params = params or {}
+
+    # Match endpoint prefix to cost table
+    for prefix, cost in API_COST.items():
+        if endpoint.startswith(prefix):
+            # Live/real-time: 1 per symbol
+            if prefix == "real-time" and "s" in params:
+                symbols = params["s"].split(",")
+                return len(symbols)
+
+            # Bulk with symbols param: 100 + N
+            if prefix == "bulk" and "symbols" in params:
+                symbols = params["symbols"].split(",")
+                return 100 + len(symbols)
+
+            return cost
+
+    return 1  # default
+
+
+def _track_cost(endpoint: str, params: dict = None):
+    """Track weighted API call cost."""
+    global _eodhd_call_count, _eodhd_weighted_calls
+    global _daily_weighted_calls, _daily_reset_date
+
+    today = datetime.utcnow().date()
+    if today != _daily_reset_date:
+        _daily_weighted_calls = 0
+        _daily_reset_date = today
+
+    cost = _get_endpoint_cost(endpoint, params)
+    _eodhd_call_count += 1
+    _eodhd_weighted_calls += cost
+    _daily_weighted_calls += cost
+
+
 def get_eodhd_stats() -> dict:
     """Get EODHD API statistics."""
     return {
         "api_calls": _eodhd_call_count,
+        "weighted_calls": _eodhd_weighted_calls,
+        "daily_weighted_calls": _daily_weighted_calls,
+        "daily_limit": DAILY_LIMIT,
+        "daily_remaining": max(0, DAILY_LIMIT - _daily_weighted_calls),
         "server_start_time": _server_start_time.isoformat(),
         "uptime_seconds": (datetime.utcnow() - _server_start_time).total_seconds(),
     }
@@ -39,10 +114,12 @@ def _log_eodhd_request(endpoint: str, params: dict, response_size: int = 0, erro
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     # Mask API key in params
     safe_params = {k: v for k, v in params.items() if k != "api_token"}
+    cost = _get_endpoint_cost(endpoint, params)
     if error:
-        line = f"[{timestamp}] ERROR {endpoint} params={safe_params} error={error}\n"
+        line = f"[{timestamp}] ERROR {endpoint} cost={cost} params={safe_params} error={error}\n"
     else:
-        line = f"[{timestamp}] OK {endpoint} params={safe_params} response_size={response_size}\n"
+        line = f"[{timestamp}] OK {endpoint} cost={cost} params={safe_params} response_size={response_size}\n"
+    line += f"  daily_total={_daily_weighted_calls}/{DAILY_LIMIT}\n"
     try:
         with open(EODHD_LOG_FILE, "a") as f:
             f.write(line)
@@ -79,9 +156,9 @@ class EODHDClient:
 
         logger.debug(f"EODHD request: {endpoint} with params {params}")
 
+        _track_cost(endpoint, params)
+
         try:
-            global _eodhd_call_count
-            _eodhd_call_count += 1
             response = await self.client.get(url, params=params)
             response.raise_for_status()
             data = response.json()

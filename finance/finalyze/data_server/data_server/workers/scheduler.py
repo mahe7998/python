@@ -2,10 +2,20 @@
 
 import logging
 from datetime import datetime
+from typing import Optional
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
+
+from sqlalchemy import select
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
+
+ET_TZ = ZoneInfo("America/New_York")
 
 from data_server.config import get_settings
 from data_server.workers.price_worker import update_prices
@@ -37,23 +47,38 @@ async def start_scheduler():
     # NOTE: Delayed intraday worker removed - EODHD doesn't provide intraday data
     # during market hours. We now use OHLC aggregation from live prices instead.
 
-    # News worker - runs every 15 minutes, starting immediately on startup
-    scheduler.add_job(
-        update_news,
-        trigger=IntervalTrigger(seconds=settings.worker_news_interval),
-        id="news_worker",
-        name="News Update Worker",
-        replace_existing=True,
-        max_instances=1,
-        next_run_time=datetime.utcnow(),  # Run immediately on startup
+    # News worker - runs once daily at 6:00 AM ET (DST-aware)
+    # Individual stock news is fetched on-demand when viewing news tab
+    # On startup, check if today's sweep already ran; if not, run immediately
+    news_run_time = None
+    try:
+        news_run_time = await _get_last_news_sweep_time()
+    except Exception as e:
+        logger.warning(f"Could not check last news sweep: {e}")
+
+    today = datetime.utcnow().date()
+    needs_startup_run = (
+        news_run_time is None or news_run_time.date() < today
     )
 
-    # Daily worker - runs at 4:30 PM ET (21:30 UTC)
-    # Parse time from settings
+    scheduler.add_job(
+        update_news,
+        trigger=CronTrigger(hour=6, minute=0, timezone=ET_TZ),
+        id="news_worker",
+        name="Daily News Worker",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+        next_run_time=datetime.utcnow() if needs_startup_run else None,
+    )
+    if needs_startup_run:
+        logger.info("News sweep not yet done today — scheduling immediate run")
+
+    # Daily worker - runs at configured ET time (default 4:30 PM ET, DST-aware)
     hour, minute = map(int, settings.worker_daily_time.split(":"))
     scheduler.add_job(
         daily_cleanup,
-        trigger=CronTrigger(hour=hour + 5, minute=minute),  # Convert ET to UTC
+        trigger=CronTrigger(hour=hour, minute=minute, timezone=ET_TZ),
         id="daily_worker",
         name="Daily Cleanup Worker",
         replace_existing=True,
@@ -61,12 +86,12 @@ async def start_scheduler():
         misfire_grace_time=3600,
     )
 
-    # EOD refresh worker - runs at 4:45 PM ET (21:45 UTC) after US market close
+    # EOD refresh worker - runs at 4:45 PM ET after US market close (DST-aware)
     # Invalidates daily price caches so next request fetches fresh EOD data
     # misfire_grace_time=3600: allow up to 1 hour late execution (APScheduler default is 1s)
     scheduler.add_job(
         refresh_eod_caches,
-        trigger=CronTrigger(hour=21, minute=45),  # 4:45 PM ET = 21:45 UTC
+        trigger=CronTrigger(hour=16, minute=45, timezone=ET_TZ),
         id="eod_refresh_worker",
         name="EOD Refresh Worker",
         replace_existing=True,
@@ -74,11 +99,11 @@ async def start_scheduler():
         misfire_grace_time=3600,
     )
 
-    # Fundamentals worker - runs once daily at 5:00 AM ET (10:00 UTC) before market open
+    # Fundamentals worker - runs once daily at 5:00 AM ET before market open (DST-aware)
     # Updates shares_outstanding for accurate market cap calculation
     scheduler.add_job(
         update_fundamentals,
-        trigger=CronTrigger(hour=10, minute=0),  # 5:00 AM ET = 10:00 UTC
+        trigger=CronTrigger(hour=5, minute=0, timezone=ET_TZ),
         id="fundamentals_worker",
         name="Daily Fundamentals Worker",
         replace_existing=True,
@@ -88,6 +113,19 @@ async def start_scheduler():
 
     scheduler.start()
     logger.info("Background scheduler started")
+
+
+async def _get_last_news_sweep_time() -> Optional[datetime]:
+    """Check the most recent last_news_update across all tracked stocks."""
+    from sqlalchemy import func
+    from data_server.db.database import async_session_factory
+    from data_server.db.models import TrackedStock
+
+    async with async_session_factory() as session:
+        result = await session.execute(
+            select(func.max(TrackedStock.last_news_update))
+        )
+        return result.scalar()
 
 
 async def stop_scheduler():

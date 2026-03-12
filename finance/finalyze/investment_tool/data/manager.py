@@ -150,8 +150,13 @@ class DataManager:
         use_cache: bool = True,
         from_date: Optional[date] = None,
         to_date: Optional[date] = None,
+        refresh: bool = False,
     ) -> List[NewsArticle]:
-        """Get news articles from data server."""
+        """Get news articles from data server.
+
+        Args:
+            refresh: If True, server fetches fresh news when cache is stale (>1h).
+        """
         articles = self._fetch_from_providers(
             "get_news",
             ticker=ticker,
@@ -159,6 +164,7 @@ class DataManager:
             offset=offset,
             from_date=from_date,
             to_date=to_date,
+            refresh=refresh,
         )
         return articles or []
 
@@ -380,6 +386,42 @@ class DataManager:
             except Exception as e:
                 logger.warning(f"Failed to get forex rates for {currency}: {e}")
         return {}
+
+    def get_cpi_data(self, start: str, end: str, series: str = "CPIAUCSL") -> Optional[pd.DataFrame]:
+        """Get CPI data from data server for inflation adjustment.
+
+        Args:
+            start: Start date (YYYY-MM-DD)
+            end: End date (YYYY-MM-DD)
+            series: FRED series ID (CPIAUCSL, CPILFESL, PCEPI)
+
+        Returns:
+            DataFrame with 'date' and 'value' columns, or None.
+        """
+        import os
+        import requests
+
+        data_server_url = os.getenv("DATA_SERVER_URL", "").rstrip("/")
+        if not data_server_url:
+            return None
+
+        try:
+            resp = requests.get(
+                f"{data_server_url}/api/cpi/series",
+                params={"start": start, "end": end, "series": series},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                observations = resp.json().get("observations", [])
+                if observations:
+                    df = pd.DataFrame(observations)
+                    df["date"] = pd.to_datetime(df["date"])
+                    df["value"] = df["value"].astype(float)
+                    return df
+        except Exception as e:
+            logger.warning(f"Failed to fetch CPI data: {e}")
+
+        return None
 
     def _fetch_from_providers(
         self,

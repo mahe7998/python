@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QToolButton,
+    QComboBox,
     QMenu,
     QProgressDialog,
     QMessageBox,
@@ -43,6 +44,7 @@ from investment_tool.ui.widgets.news_feed import NewsFeedWidget
 from investment_tool.ui.widgets.quarterly_financials import QuarterlyFinancialsWidget
 from investment_tool.ui.widgets.sentiment_gauge import SentimentGaugeWidget
 from investment_tool.ui.widgets.stock_chart import StockChart
+from investment_tool.ui.widgets.advanced_chart import AdvancedChartWidget
 from investment_tool.ui.control_server import ControlServer
 from investment_tool.ui.widgets.watchlist import WatchlistWidget
 from investment_tool.utils.helpers import (
@@ -54,6 +56,7 @@ from investment_tool.utils.helpers import (
 )
 from investment_tool.utils.exchange_hours import (
     get_market_hours as _get_market_hours,
+    get_utc_offset as _get_utc_offset,
     is_market_open,
     clear_lunch_break as _clear_lunch_break,
 )
@@ -237,6 +240,30 @@ class MainWindow(QMainWindow):
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
 
+        # Advanced mode toggle
+        self.advanced_btn = QPushButton("Advanced")
+        self.advanced_btn.setCheckable(True)
+        self.advanced_btn.setStyleSheet("""
+            QPushButton {
+                padding: 4px 12px;
+            }
+            QPushButton:checked {
+                background-color: #3B82F6;
+                color: white;
+            }
+        """)
+        self.advanced_btn.toggled.connect(self._toggle_advanced_mode)
+        toolbar.addWidget(self.advanced_btn)
+
+        # Period selector (moved from treemap toolbar)
+        self.period_combo = QComboBox()
+        self.period_combo.addItems(["1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "2Y", "5Y"])
+        self.period_combo.setCurrentText("1D")
+        self.period_combo.currentTextChanged.connect(self._on_period_changed)
+        toolbar.addWidget(self.period_combo)
+
+        toolbar.addSeparator()
+
         refresh_btn = QToolButton()
         refresh_btn.setText("Refresh")
         refresh_menu = QMenu(refresh_btn)
@@ -273,13 +300,17 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
 
-        main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(8, 8, 8, 8)
-        main_layout.setSpacing(8)
+        self.main_layout = QVBoxLayout(central)
+        self.main_layout.setContentsMargins(8, 8, 8, 8)
+        self.main_layout.setSpacing(8)
+
+        # Advanced chart widget (hidden by default, shown full-width in advanced mode)
+        self.advanced_chart = AdvancedChartWidget()
+        self.advanced_chart.hide()
 
         # Main content splitter
-        main_splitter = QSplitter(Qt.Horizontal)
-        main_layout.addWidget(main_splitter, stretch=1)
+        self.main_splitter = QSplitter(Qt.Horizontal)
+        self.main_layout.addWidget(self.main_splitter, stretch=1)
 
         # Left panel - Market Treemap
         left_panel = QWidget()
@@ -290,13 +321,11 @@ class MainWindow(QMainWindow):
         self.treemap.stock_selected.connect(self._on_stock_selected)
         self.treemap.stock_double_clicked.connect(self._on_stock_double_clicked)
         self.treemap.filter_changed.connect(self._on_treemap_filter_changed)
-        self.treemap.exchange_filter_changed.connect(self._on_treemap_exchange_filter_changed)
-        self.treemap.period_changed.connect(self._on_treemap_period_changed)
         self.treemap.stock_remove_requested.connect(self._on_stock_remove_requested)
         self.treemap.stock_add_to_watchlist.connect(self._on_stock_add_to_watchlist)
         left_layout.addWidget(self.treemap)
 
-        main_splitter.addWidget(left_panel)
+        self.main_splitter.addWidget(left_panel)
 
         # Right panel - Chart and details
         right_panel = QWidget()
@@ -386,14 +415,14 @@ class MainWindow(QMainWindow):
         self.sentiment_gauge = SentimentGaugeWidget()
         right_layout.addWidget(self.sentiment_gauge)
 
-        main_splitter.addWidget(right_panel)
+        self.main_splitter.addWidget(right_panel)
 
         # Set splitter sizes
-        main_splitter.setSizes([700, 400])
+        self.main_splitter.setSizes([700, 400])
 
         # Bottom tabs
         self.bottom_tabs = QTabWidget()
-        main_layout.addWidget(self.bottom_tabs)
+        self.main_layout.addWidget(self.bottom_tabs)
 
         # Watchlist tab (first tab)
         self.watchlist_widget = WatchlistWidget()
@@ -480,7 +509,7 @@ class MainWindow(QMainWindow):
 
         # Get expected trading date (today if after market open, else previous trading day)
         now_utc = datetime.utcnow()
-        now_et = now_utc - timedelta(hours=5)
+        now_et = now_utc + _get_utc_offset("US")
         current_date_et = now_et.date()
 
         from datetime import time as dt_time
@@ -528,7 +557,8 @@ class MainWindow(QMainWindow):
         """Refresh live prices from data server.
 
         During market hours: full refresh every 15s (treemap + chart + metrics).
-        Outside market hours: treemap-only refresh every 15s (picks up data server changes).
+        Outside market hours: reduced rate refresh (~60s).
+        Treemap data is always refreshed regardless of period selection.
         All data comes from the local data server — no direct API calls.
         """
         from investment_tool.utils.exchange_hours import is_market_open
@@ -536,8 +566,11 @@ class MainWindow(QMainWindow):
         if not self.data_manager:
             return
 
-        period = self.treemap.get_selected_period()
+        period = self.period_combo.currentText()
         market_open = is_market_open("US")
+
+        if not hasattr(self, '_offhours_tick'):
+            self._offhours_tick = 0
 
         if market_open and period == "1D":
             # Full refresh during market hours for 1D view
@@ -546,13 +579,14 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(f"Live prices updated at {now}", 10000)
 
             if self._selected_ticker and self._selected_exchange:
-                self._load_stock_chart(self._selected_ticker, self._selected_exchange)
+                if self.advanced_btn.isChecked():
+                    self._load_advanced_chart()
+                else:
+                    self._load_stock_chart(self._selected_ticker, self._selected_exchange)
                 self._update_metrics(self._selected_ticker, self._selected_exchange)
-        elif period == "1D":
-            # Outside market hours with 1D view: refresh treemap at reduced rate
-            # (every 4th tick = ~60s instead of 15s, since data changes infrequently)
-            if not hasattr(self, '_offhours_tick'):
-                self._offhours_tick = 0
+        else:
+            # Non-1D period or outside market hours: refresh treemap at reduced rate
+            # (every 4th tick = ~60s instead of 15s)
             self._offhours_tick += 1
             if self._offhours_tick % 4 == 0:
                 self._load_treemap_data()
@@ -571,6 +605,7 @@ class MainWindow(QMainWindow):
             self.fundamentals_overview.set_data_manager(self.data_manager)
             self.etf_overview.set_data_manager(self.data_manager)
             self.fx_converter.set_data_manager(self.data_manager)
+            self.advanced_chart.set_data_manager(self.data_manager)
 
             if self.data_manager.is_connected():
                 # Get server status for EODHD API call count
@@ -585,11 +620,14 @@ class MainWindow(QMainWindow):
                 # Sync all stocks to data server for live price tracking
                 self._sync_stocks_to_server()
 
+                # Show loading state while data server may still be warming up
+                self.treemap.set_loading(True)
+
                 # Load treemap with default category
                 self._load_treemap_data()
 
                 # Set period and refresh watchlist with current data
-                period = self.treemap.get_selected_period()
+                period = self.period_combo.currentText()
                 self.watchlist_widget.set_period(period)
                 self.watchlist_widget.refresh_all()
 
@@ -601,13 +639,6 @@ class MainWindow(QMainWindow):
             # Update category filter in treemap
             categories = [c.name for c in self.category_manager.get_all_categories()]
             self.treemap.set_categories(categories)
-
-            # Populate exchange filter from all stocks in categories
-            all_exchanges = set()
-            for cat in self.category_manager.get_all_categories():
-                for stock_ref in cat.stocks:
-                    all_exchanges.add(stock_ref.exchange)
-            self.treemap.set_exchanges(list(all_exchanges))
 
         except Exception as e:
             logger.error(f"Failed to initialize data: {e}")
@@ -663,7 +694,7 @@ class MainWindow(QMainWindow):
 
         # Get selected filter and period
         selected_filter = self.treemap.get_selected_filter()
-        selected_period = self.treemap.get_selected_period()
+        selected_period = self.period_combo.currentText()
 
         # Set current category ID for removal operations
         market_cap_filters = ("All Stocks", "Large Cap (>$200B)", "Mid Cap ($20B-$200B)", "Small Cap ($2B-$20B)", "Tiny Stocks (<$2B)")
@@ -686,9 +717,6 @@ class MainWindow(QMainWindow):
         all_categories = self.category_manager.get_all_categories()
         logger.info(f"Found {len(all_categories)} categories")
 
-        # Get exchange filter
-        selected_exchange = self.treemap.get_selected_exchange_filter()
-
         # First pass: collect all symbols and their metadata
         stock_refs_by_symbol: Dict[str, tuple] = {}  # symbol -> (stock_ref, category)
         # Track tickers seen across exchanges to deduplicate (prefer US listing)
@@ -697,9 +725,6 @@ class MainWindow(QMainWindow):
             if selected_filter not in market_cap_filters and category.name != selected_filter:
                 continue
             for stock_ref in category.stocks[:30]:
-                # Apply exchange filter
-                if selected_exchange != "All Markets" and stock_ref.exchange != selected_exchange:
-                    continue
                 ticker_key = f"{stock_ref.ticker}.{stock_ref.exchange}"
                 if selected_filter in market_cap_filters:
                     if ticker_key in seen_tickers:
@@ -854,7 +879,11 @@ class MainWindow(QMainWindow):
                 ))
 
         logger.info(f"Treemap loaded {len(items)} items for period={selected_period}, filter={selected_filter}")
-        self.treemap.set_items(items)
+        if items:
+            self.treemap.set_items(items)
+        else:
+            # Keep loading state if no items yet (data server may still be warming up)
+            self.treemap.set_loading(True)
 
     def _configure_tabs_for_asset_type(self, asset_type: str) -> None:
         """Reconfigure chart_tabs based on whether this is an ETF or stock.
@@ -922,7 +951,8 @@ class MainWindow(QMainWindow):
                     t0 = time.perf_counter()
                     # Fetch only 100 initially for fast loading - more loaded on demand
                     result = self.data_manager.get_news(
-                        ticker, limit=100, from_date=start_date, to_date=end_date
+                        ticker, limit=100, from_date=start_date, to_date=end_date,
+                        refresh=True,
                     )
                     logger.info(f"[TIMING] News fetch: {(time.perf_counter() - t0)*1000:.0f}ms ({len(result) if result else 0} articles)")
                     return result
@@ -933,7 +963,10 @@ class MainWindow(QMainWindow):
 
                     # Load chart and metrics on main thread (they update UI)
                     t1 = time.perf_counter()
-                    self._load_stock_chart(ticker, exchange)
+                    if self.advanced_btn.isChecked():
+                        self._load_advanced_chart()
+                    else:
+                        self._load_stock_chart(ticker, exchange)
                     logger.info(f"[TIMING] Chart load: {(time.perf_counter() - t1)*1000:.0f}ms")
 
                     t2 = time.perf_counter()
@@ -995,18 +1028,66 @@ class MainWindow(QMainWindow):
         # For now, just select and show in main view
         self._on_stock_selected(ticker, exchange)
 
+    def _toggle_advanced_mode(self, enabled: bool) -> None:
+        """Toggle between normal and advanced chart mode."""
+        if enabled:
+            # Default to 5Y if current period is too short for advanced analysis
+            short_periods = {"1D", "1W", "1M", "3M"}
+            if self.period_combo.currentText() in short_periods:
+                self.period_combo.setCurrentText("5Y")
+            self.main_splitter.hide()
+            self.main_layout.insertWidget(0, self.advanced_chart, stretch=1)
+            self.advanced_chart.show()
+            # Load advanced chart for current stock
+            if self._selected_ticker and self._selected_exchange:
+                self._load_advanced_chart()
+        else:
+            self.main_layout.removeWidget(self.advanced_chart)
+            self.advanced_chart.hide()
+            self.main_splitter.show()
+            # Refresh treemap with latest data (may have been stale while hidden)
+            self._load_treemap_data()
+            # Reload normal chart
+            if self._selected_ticker and self._selected_exchange:
+                self._load_stock_chart(self._selected_ticker, self._selected_exchange)
+
+    def _load_advanced_chart(self) -> None:
+        """Load data into the advanced chart for the current stock."""
+        if not self.data_manager or not self._selected_ticker:
+            return
+
+        ticker = self._selected_ticker
+        exchange = self._selected_exchange
+        period = self.period_combo.currentText()
+
+        try:
+            start, end = get_date_range(period, min_trading_days=0)
+
+            # Fetch 120 extra days so MA lines start from day 1 of the visible range
+            if period != "5Y":
+                extended_start = start - timedelta(days=170)  # ~120 trading days
+            else:
+                extended_start = start
+
+            prices = self.data_manager.get_daily_prices(ticker, exchange, extended_start, end)
+            if prices is not None and not prices.empty:
+                prices = _strip_phantom_today(prices)
+                self.advanced_chart.set_period(period)
+                self.advanced_chart.set_data(prices, ticker, exchange, visible_start=start)
+            else:
+                self.advanced_chart.clear()
+                self.status_bar.showMessage(f"No data for {ticker}", 3000)
+        except Exception as e:
+            logger.error(f"Failed to load advanced chart for {ticker}: {e}")
+            self.advanced_chart.clear()
+
     def _on_treemap_filter_changed(self, filter_text: str) -> None:
         """Handle treemap category filter change."""
         logger.info(f"Treemap filter changed: {filter_text}")
         self._load_treemap_data()
 
-    def _on_treemap_exchange_filter_changed(self, exchange: str) -> None:
-        """Handle treemap exchange/market filter change."""
-        logger.info(f"Exchange filter changed: {exchange}")
-        self._load_treemap_data()
-
-    def _on_treemap_period_changed(self, period: str) -> None:
-        """Handle treemap period change - updates all views.
+    def _on_period_changed(self, period: str) -> None:
+        """Handle period change - updates all views.
 
         Sets loading state and returns immediately so the event loop can
         repaint the combo box and loading indicators. Heavy data fetching
@@ -1016,6 +1097,7 @@ class MainWindow(QMainWindow):
 
         # Lightweight state updates only
         self.stock_chart.set_period(period)
+        self.advanced_chart.set_period(period)
         self.setCursor(Qt.WaitCursor)
         self.status_bar.showMessage(f"Loading {period} data...")
         if self._selected_ticker:
@@ -1029,12 +1111,15 @@ class MainWindow(QMainWindow):
     def _do_period_update(self, period: str) -> None:
         """Execute the heavy data reload (called after UI has repainted)."""
         try:
-            # Reload treemap data
+            # Reload treemap data (even in advanced mode, keeps data fresh)
             self._load_treemap_data()
 
-            # Reload stock chart and metrics if a stock is selected
+            # Reload chart and metrics if a stock is selected
             if self._selected_ticker and self._selected_exchange:
-                self._load_stock_chart(self._selected_ticker, self._selected_exchange)
+                if self.advanced_btn.isChecked():
+                    self._load_advanced_chart()
+                else:
+                    self._load_stock_chart(self._selected_ticker, self._selected_exchange)
                 self._update_metrics(self._selected_ticker, self._selected_exchange)
 
             # Update quarterly financials period
@@ -1105,11 +1190,13 @@ class MainWindow(QMainWindow):
                 now_utc = datetime.utcnow()
                 from datetime import time as dt_time
 
-                # Get market hours for this exchange
-                utc_offset, open_h, open_m, close_h, close_m = _get_market_hours(exchange)
+                # Get market hours for this exchange (DST-aware offset)
+                _, open_h, open_m, close_h, close_m = _get_market_hours(exchange)
+                utc_offset_td = _get_utc_offset(exchange)  # timedelta, DST-aware
+                utc_offset = utc_offset_td.total_seconds() / 3600  # float hours
 
                 # Convert UTC to exchange local time
-                now_local = now_utc + timedelta(hours=utc_offset)
+                now_local = now_utc + utc_offset_td
                 current_time_local = now_local.time()
                 current_date_local = now_local.date()
 
@@ -1330,10 +1417,12 @@ class MainWindow(QMainWindow):
                 # This gives ~130 data points (5 days * 26 fifteen-min periods)
                 all_prices = []
 
-                # Use exchange-aware local date
+                # Use exchange-aware local date (DST-aware)
                 now_utc = datetime.utcnow()
-                utc_off, oh, om, ch, cm = _get_market_hours(exchange)
-                now_local_1w = now_utc + timedelta(hours=utc_off)
+                _, oh, om, ch, cm = _get_market_hours(exchange)
+                utc_off_td = _get_utc_offset(exchange)
+                utc_off = utc_off_td.total_seconds() / 3600
+                now_local_1w = now_utc + utc_off_td
                 today_local = now_local_1w.date()
 
                 # Get last 7 calendar days, fetch each trading day
@@ -1752,7 +1841,10 @@ class MainWindow(QMainWindow):
         self._load_treemap_data()
 
         if self._selected_ticker and self._selected_exchange:
-            self._load_stock_chart(self._selected_ticker, self._selected_exchange)
+            if self.advanced_btn.isChecked():
+                self._load_advanced_chart()
+            else:
+                self._load_stock_chart(self._selected_ticker, self._selected_exchange)
             self._update_metrics(self._selected_ticker, self._selected_exchange)
 
         self._update_status()
@@ -2241,12 +2333,6 @@ class MainWindow(QMainWindow):
         categories = [c.name for c in all_cats]
         self.treemap.set_categories(categories)
 
-        all_exchanges = set()
-        for cat in all_cats:
-            for stock_ref in cat.stocks:
-                all_exchanges.add(stock_ref.exchange)
-        self.treemap.set_exchanges(list(all_exchanges))
-
         # Sync newly added stocks to data server so it can fetch their prices
         self._sync_stocks_to_server()
 
@@ -2324,7 +2410,7 @@ class MainWindow(QMainWindow):
         state = {
             "ticker": self._selected_ticker,
             "exchange": self._selected_exchange,
-            "period": self.treemap.get_selected_period(),
+            "period": self.period_combo.currentText(),
             "filter": self.treemap.get_selected_filter(),
         }
         self._control_server.provide_result(state)
@@ -2342,8 +2428,8 @@ class MainWindow(QMainWindow):
     def _on_control_set_period(self, period: str):
         """Handle period change from control server."""
         logger.info(f"Control API: setting period to {period}")
-        # Setting currentText triggers currentTextChanged → _on_treemap_period_changed
-        self.treemap.period_combo.setCurrentText(period)
+        # Setting currentText triggers currentTextChanged → _on_period_changed
+        self.period_combo.setCurrentText(period)
         self._control_server.provide_result({
             "status": "ok",
             "period": period,

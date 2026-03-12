@@ -73,6 +73,7 @@ class AnalysisConfig(BaseModel):
     """Analysis settings configuration."""
     sentiment: SentimentConfig = Field(default_factory=SentimentConfig)
     indicators: IndicatorsConfig = Field(default_factory=IndicatorsConfig)
+    cpi_series: str = Field(default="CPIAUCSL")
 
 
 class BacktestingConfig(BaseModel):

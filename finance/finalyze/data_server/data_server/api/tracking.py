@@ -279,6 +279,17 @@ async def update_news_timestamp(session: AsyncSession, ticker: str):
     await session.execute(stmt)
 
 
+async def get_news_last_updated(session: AsyncSession, ticker: str) -> Optional[datetime]:
+    """Get the last news update timestamp for a ticker."""
+    clean_ticker = ticker.split(".")[0] if "." in ticker else ticker
+    result = await session.execute(
+        select(TrackedStock.last_news_update).where(
+            TrackedStock.ticker == clean_ticker,
+        )
+    )
+    return result.scalar()
+
+
 class BulkSyncRequest(BaseModel):
     """Request to bulk sync stocks to tracking."""
     stocks: list[dict]  # List of {"ticker": "AAPL", "exchange": "US"}

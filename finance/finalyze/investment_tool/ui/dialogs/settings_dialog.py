@@ -162,6 +162,17 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(sentiment_group)
 
+        inflation_group = QGroupBox("Inflation Adjustment")
+        inflation_layout = QFormLayout(inflation_group)
+
+        self.cpi_series_combo = QComboBox()
+        self.cpi_series_combo.addItem("All Items — housing, food, energy (CPIAUCSL)", "CPIAUCSL")
+        self.cpi_series_combo.addItem("Core — excludes food & energy (CPILFESL)", "CPILFESL")
+        self.cpi_series_combo.addItem("PCE Price Index — Fed's preferred (PCEPI)", "PCEPI")
+        inflation_layout.addRow("CPI Series:", self.cpi_series_combo)
+
+        layout.addWidget(inflation_group)
+
         backtest_group = QGroupBox("Backtesting")
         backtest_layout = QFormLayout(backtest_group)
 
@@ -190,6 +201,10 @@ class SettingsDialog(QDialog):
         self.use_finbert.setChecked(self.config.analysis.sentiment.use_finbert)
         self.initial_capital.setValue(int(self.config.backtesting.default_initial_capital))
 
+        idx = self.cpi_series_combo.findData(self.config.analysis.cpi_series)
+        if idx >= 0:
+            self.cpi_series_combo.setCurrentIndex(idx)
+
     def _save_settings(self) -> None:
         """Save settings from dialog."""
         self.config.api_keys.eodhd = self.eodhd_key.text() or None
@@ -202,6 +217,7 @@ class SettingsDialog(QDialog):
         self.config.ui.default_timeframe = self.timeframe_combo.currentText()
 
         self.config.analysis.sentiment.use_finbert = self.use_finbert.isChecked()
+        self.config.analysis.cpi_series = self.cpi_series_combo.currentData()
         self.config.backtesting.default_initial_capital = float(self.initial_capital.value())
 
         try:

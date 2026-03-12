@@ -52,26 +52,45 @@ async def _refresh_stale_live_prices():
             if lp.market_timestamp and (now - lp.market_timestamp).days > 1
         )
 
-        # If stale, fetch last 5 days of daily prices from EODHD (cheap: ~148 calls)
+        # Only fetch from EODHD if daily_prices DB is also stale.
+        # The EOD refresh worker stores daily prices after market close, so on a
+        # normal restart we already have recent data and can skip ~148 API calls.
         if stale_count > 0:
-            logger.info(f"Startup: {stale_count} stale LivePrice entries, fetching recent daily prices...")
-            from_date = (now - timedelta(days=5)).strftime("%Y-%m-%d")
-            try:
-                from data_server.services.eodhd_client import get_eodhd_client
-                client = await get_eodhd_client()
-                fetched = 0
-                for symbol in tracked:
-                    try:
-                        data = await client.get_eod(symbol, from_date=from_date)
-                        if data:
-                            await cache.store_daily_prices(session, symbol, data)
-                            fetched += 1
-                    except Exception as e:
-                        logger.debug(f"Startup fetch failed for {symbol}: {e}")
-                await session.commit()
-                logger.info(f"Startup: fetched recent daily prices for {fetched}/{len(tracked)} stocks")
-            except Exception as e:
-                logger.error(f"Startup: daily price fetch failed: {e}")
+            # Check if we already have recent daily prices in the DB
+            cutoff_date = (now - timedelta(days=5)).date()
+            db_recent = await session.execute(
+                select(func.count(func.distinct(DailyPrice.ticker)))
+                .where(DailyPrice.date >= cutoff_date)
+            )
+            recent_count = db_recent.scalar() or 0
+
+            if recent_count >= len(tracked) * 0.5:
+                # DB already has recent daily prices for most stocks — skip EODHD fetch
+                logger.info(
+                    f"Startup: {stale_count} stale LivePrice entries, but DB has "
+                    f"recent daily prices for {recent_count}/{len(tracked)} stocks — "
+                    f"syncing from DB (no API calls)"
+                )
+            else:
+                # DB is also stale — fetch from EODHD
+                logger.info(f"Startup: {stale_count} stale LivePrice + only {recent_count} recent in DB, fetching from EODHD...")
+                from_date = (now - timedelta(days=5)).strftime("%Y-%m-%d")
+                try:
+                    from data_server.services.eodhd_client import get_eodhd_client
+                    client = await get_eodhd_client()
+                    fetched = 0
+                    for symbol in tracked:
+                        try:
+                            data = await client.get_eod(symbol, from_date=from_date)
+                            if data:
+                                await cache.store_daily_prices(session, symbol, data)
+                                fetched += 1
+                        except Exception as e:
+                            logger.debug(f"Startup fetch failed for {symbol}: {e}")
+                    await session.commit()
+                    logger.info(f"Startup: fetched recent daily prices for {fetched}/{len(tracked)} stocks")
+                except Exception as e:
+                    logger.error(f"Startup: daily price fetch failed: {e}")
 
         # Find tracked tickers missing from LivePrice
         missing_tickers = [t for t in tracked if t not in live_by_ticker]
@@ -171,10 +190,16 @@ async def _invalidate_stale_eod_caches():
     from data_server.db.database import async_session_factory
     from data_server.db.models import CacheMetadata
 
-    # Only invalidate if US market has closed today (after 4:30 PM ET = 21:30 UTC)
+    # Only invalidate if US market has closed today (after 4:30 PM ET)
     now_utc = datetime.utcnow()
-    # ET is UTC-5 (ignoring DST for simplicity)
-    now_et = now_utc - timedelta(hours=5)
+    # DST-aware ET offset via zoneinfo
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo
+    et_tz = ZoneInfo("America/New_York")
+    now_et = datetime.now(et_tz).replace(tzinfo=None)
+    et_offset = datetime.now(et_tz).utcoffset()
     market_close_today = now_et.replace(hour=16, minute=30, second=0, microsecond=0)
 
     if now_et < market_close_today:
@@ -183,7 +208,7 @@ async def _invalidate_stale_eod_caches():
 
     async with async_session_factory() as session:
         # Delete EOD caches fetched before today's market close
-        cutoff = market_close_today + timedelta(hours=5)  # Convert back to UTC
+        cutoff = market_close_today - et_offset  # Convert back to UTC
         result = await session.execute(
             delete(CacheMetadata).where(
                 CacheMetadata.cache_key.startswith("eod:"),

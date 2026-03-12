@@ -1345,23 +1345,46 @@ async def get_news(
     to: Optional[str] = Query(None, description="End date"),
     limit: int = Query(50, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    refresh: bool = Query(False, description="Fetch fresh news if cache is stale"),
     fmt: str = Query("json"),
     session: AsyncSession = Depends(get_session),
 ):
-    """Get news articles from cache only.
+    """Get news articles, fetching fresh data on-demand if stale.
 
-    News is populated by the background news worker every 15 minutes.
-    This endpoint only returns cached data - it never fetches from EODHD directly.
+    The daily news worker refreshes all stocks once per day.
+    When refresh=True and cached news is older than 1 hour, a fresh
+    fetch is triggered for this specific ticker before returning results.
     """
     start_time = time.time()
     ticker = s.split(".")[0] if s else None
     endpoint = f"GET /news?s={s}&limit={limit}"
 
     if not ticker:
-        # General news not supported in cache-only mode
         return []
 
-    # Return cached news only
+    # On-demand refresh: fetch fresh news if cache is stale (>1 hour)
+    if refresh and s:
+        from data_server.api.tracking import get_news_last_updated
+        last_updated = await get_news_last_updated(session, ticker)
+        stale = True
+        if last_updated:
+            from datetime import datetime, timezone, timedelta
+            age = datetime.now(timezone.utc) - last_updated.replace(tzinfo=timezone.utc)
+            stale = age > timedelta(hours=1)
+
+        if stale:
+            try:
+                from data_server.workers.news_worker import fetch_news_for_single_ticker
+                from datetime import datetime, timezone, timedelta
+                today = datetime.now(timezone.utc).date()
+                from_date = (today - timedelta(days=7)).isoformat()
+                to_date = today.isoformat()
+                await fetch_news_for_single_ticker(s, from_date, to_date)
+                logger.info(f"[NEWS] On-demand refresh for {s}")
+            except Exception as e:
+                logger.warning(f"[NEWS] On-demand refresh failed for {s}: {e}")
+
+    # Return cached news
     fetch_start = time.time()
     cached_data = await cache.get_news_for_ticker(session, ticker, limit, offset)
     fetch_time = (time.time() - fetch_start) * 1000
@@ -2183,6 +2206,19 @@ async def get_batch_highlights(
     return output
 
 
+@router.get("/cpi/series")
+async def get_cpi_series(start: str, end: str, series: str = "CPIAUCSL"):
+    """Get CPI (Consumer Price Index) data from FRED for inflation adjustment."""
+    from data_server.services.fred_client import get_cpi_series as fetch_cpi
+
+    allowed = {"CPIAUCSL", "CPILFESL", "PCEPI"}
+    if series not in allowed:
+        series = "CPIAUCSL"
+
+    data = await fetch_cpi(start, end, series_id=series)
+    return {"observations": data}
+
+
 @router.get("/server-status")
 async def get_server_status():
     """Get data server status including EODHD API call statistics."""
@@ -2194,6 +2230,10 @@ async def get_server_status():
     return {
         "status": "connected",
         "eodhd_api_calls": eodhd_stats["api_calls"],
+        "eodhd_weighted_calls": eodhd_stats["weighted_calls"],
+        "eodhd_daily_weighted": eodhd_stats["daily_weighted_calls"],
+        "eodhd_daily_limit": eodhd_stats["daily_limit"],
+        "eodhd_daily_remaining": eodhd_stats["daily_remaining"],
         "server_start_time": eodhd_stats["server_start_time"],
         "uptime_seconds": eodhd_stats["uptime_seconds"],
         "scheduler": scheduler_status,
